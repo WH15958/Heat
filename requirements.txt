@@ -1,0 +1,5 @@
+pyserial>=3.5
+PyPDF2>=3.0.0
+pefile>=2023.2.7
+matplotlib>=3.5.0
+PyYAML>=6.0

@@ -1,0 +1,47 @@
+name: "自动化控制系统"
+version: "1.0.0"
+
+heaters:
+  - device_id: "heater1"
+    name: "主加热器"
+    connection:
+      port: "COM3"
+      baudrate: 9600
+      address: 1
+      parity: "N"
+      timeout: 2.0
+    decimal_places: 1
+    temperature_unit: "C"
+    max_temperature: 400.0
+    min_temperature: 0.0
+    safety_limit: 450.0
+    poll_interval: 1.0
+    retry_count: 3
+    retry_delay: 0.5
+    enabled: true
+
+monitor:
+  enabled: true
+  log_interval: 1.0
+  data_retention_hours: 24
+  alarm_check_interval: 0.5
+  enable_csv_logging: true
+  enable_database: false
+  database_path: "data/monitor.db"
+
+report:
+  output_dir: "reports"
+  default_format: "html"
+  include_charts: true
+  include_statistics: true
+  auto_generate: false
+  template_dir: "templates"
+
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  max_file_size_mb: 10
+  backup_count: 5
+  console_output: true
+  file_output: true
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
