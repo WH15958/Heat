@@ -25,16 +25,17 @@ layout: default
 **编程与协议**
 - 三、Python串口编程
 - 四、AIBUS协议详解
+- 五、MODBUS-RTU协议详解 ⭐新增
 
 </div>
 <div>
 
 **项目实现**
-- 五、项目架构设计
-- 六、核心代码实现
+- 六、项目架构设计
+- 七、核心代码实现
 
 **演示与展望**
-- 七、演示与总结
+- 八、演示与总结
 
 </div>
 </div>
@@ -466,16 +467,16 @@ frame = struct.pack('<HHB', 0x8080, 0x52, 0x00)
 │  (控制脚本、业务逻辑、数据处理)                               │
 ├─────────────────────────────────────────────────────────────┤
 │                    设备抽象层                                │
-│  (BaseDevice, AIHeaterDevice - 统一接口)                    │
+│  (BaseDevice, HeaterDevice, PumpDevice - 统一接口)          │
 ├─────────────────────────────────────────────────────────────┤
 │                    协议层                                    │
-│  (AIBUS协议 - 数据打包/解包、校验和计算)                      │
+│  (AIBUS/MODBUS协议 - 数据打包/解包、校验计算)                │
 ├─────────────────────────────────────────────────────────────┤
 │                    通信层                                    │
 │  (pyserial - 串口打开/关闭、数据发送/接收)                   │
 ├─────────────────────────────────────────────────────────────┤
 │                    硬件层                                    │
-│  (USB转串口、RS485/TTL、加热器设备)                          │
+│  (USB转串口、RS485/TTL、加热器/蠕动泵设备)                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -487,7 +488,7 @@ frame = struct.pack('<HHB', 0x8080, 0x52, 0x00)
 |------|------|----------|
 | 应用层 | 用户交互、业务逻辑 | Python脚本、配置文件 |
 | 设备层 | 设备操作封装 | 面向对象、继承 |
-| 协议层 | 数据格式转换 | struct、校验和 |
+| 协议层 | 数据格式转换 | struct、校验和/CRC |
 | 通信层 | 数据传输 | pyserial |
 | 硬件层 | 物理连接 | 串口、电平转换 |
 
@@ -561,6 +562,14 @@ class HeaterDevice(BaseDevice):
 
     def set_temperature(self, temp):
         self._protocol.write_parameter('SV', temp)
+
+class PumpDevice(BaseDevice):
+    def connect(self):
+        self._protocol = ModbusRTUProtocol(self.config)
+        self._protocol.open()
+
+    def set_flow_rate(self, channel, rate):
+        self._protocol.write_float(channel, rate)
 ```
 
 > **核心概念**：抽象、封装、继承
@@ -627,7 +636,7 @@ def control_loop(heater, target_temp, duration):
 
 | 技术 | 作用 | 本项目应用 |
 |------|------|------------|
-| **pyserial** | 串口通信 | 与加热器通信 |
+| **pyserial** | 串口通信 | 与加热器/蠕动泵通信 |
 | **struct** | 二进制数据处理 | 打包/解包协议帧 |
 | **threading** | 多线程 | 多设备并行控制 |
 | **dataclass** | 数据结构 | 设备数据、配置 |
@@ -730,356 +739,6 @@ def calc_response_checksum(pv, sv, status_mv, param_val):
 | 26 | MV | 输出值 | 0~100 |
 | 74 | PV | 测量值 | 只读 |
 | 100 | MODEL | 型号特征字 | 只读 |
-
----
-
-# 五、项目架构设计
-
----
-
-## 5.1 设计目标
-
-| 目标 | 说明 |
-|------|------|
-| 模块化 | 设备独立，易于扩展 |
-| 可配置 | 参数可调，无需改代码 |
-| 可监控 | 实时数据采集与报警 |
-| 可追溯 | 完整日志与报告 |
-
----
-
-## 5.2 系统架构图
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                     主程序 (main.py)                     │
-│              统一调度、设备管理、流程控制                  │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐      │
-│  │ devices │ │protocols│ │ monitor │ │ reports │      │
-│  │ 设备驱动 │ │通信协议  │ │数据监控  │ │报告生成  │      │
-│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘      │
-├───────┴───────────┴───────────┴───────────┴────────────┤
-│                     utils (工具层)                       │
-│              配置管理、日志记录、通用工具                  │
-├─────────────────────────────────────────────────────────┤
-│                     硬件设备层                           │
-│     ┌─────────┐ ┌─────────┐ ┌─────────┐               │
-│     │ 加热器1 │ │ 加热器2 │ │  泵/阀  │  ...          │
-│     └─────────┘ └─────────┘ └─────────┘               │
-└─────────────────────────────────────────────────────────┘
-```
-
----
-
-## 5.3 目录结构
-
-```
-d:\AI\Heat\
-├── config/
-│   └── system_config.yaml    # 系统配置
-├── src/
-│   ├── devices/              # 设备驱动
-│   │   ├── base_device.py    # 设备基类
-│   │   └── heater.py         # 加热器驱动
-│   ├── protocols/            # 通信协议
-│   │   ├── aibus.py          # AIBUS协议
-│   │   └── parameters.py     # 参数定义
-│   ├── monitor/              # 数据监控
-│   ├── reports/              # 报告生成
-│   └── main.py               # 主程序
-├── scripts/                  # 控制脚本
-└── tests/                    # 测试脚本
-```
-
----
-
-# 六、核心代码实现
-
----
-
-## 6.1 设备抽象基类
-
-设计模式：**模板方法模式**
-
-```python
-class BaseDevice(ABC):
-    """设备抽象基类 - 所有设备必须继承此类"""
-    
-    @abstractmethod
-    def connect(self) -> bool:
-        """连接设备"""
-        pass
-    
-    @abstractmethod
-    def disconnect(self) -> bool:
-        """断开连接"""
-        pass
-    
-    @abstractmethod
-    def read_data(self) -> DeviceData:
-        """读取数据"""
-        pass
-```
-
----
-
-## 6.2 设备基类 - 核心方法
-
-```python
-@abstractmethod
-def write_command(self, command: str, value: Any) -> bool:
-    """执行设备命令"""
-    pass
-
-def execute_with_retry(self, operation: Callable, name: str):
-    """带重试机制执行操作"""
-    for attempt in range(self.config.retry_count):
-        try:
-            return operation()
-        except Exception as e:
-            if attempt < self.config.retry_count - 1:
-                time.sleep(self.config.retry_delay)
-    raise last_error
-
-def __enter__(self):
-    self.connect()
-    return self
-
-def __exit__(self, *args):
-    self.disconnect()
-```
-
----
-
-## 6.3 AIBUS协议实现 - 指令构建
-
-```python
-def _build_read_command(self, param_code: int) -> bytes:
-    """构建读参数指令"""
-    checksum = self._calculate_read_checksum(param_code)
-    
-    frame = bytearray()
-    frame.extend(self._build_address_bytes())  # 地址(2字节)
-    frame.append(0x52)                          # 读命令
-    frame.append(param_code)                    # 参数代号
-    frame.extend([0x00, 0x00])                  # 固定值
-    frame.extend(struct.pack('<H', checksum))   # 校验和
-    return bytes(frame)
-```
-
----
-
-## 6.4 AIBUS协议实现 - 响应解析
-
-```python
-def _parse_response(self, data: bytes) -> AIBUSResponse:
-    """解析响应数据 - 10字节"""
-    pv_raw = struct.unpack('<H', data[0:2])[0]   # 测量值
-    sv_raw = struct.unpack('<H', data[2:4])[0]   # 设定值
-    mv = data[4]                                  # 输出值
-    alarm_status = data[5]                        # 报警状态
-    param_value = struct.unpack('<H', data[6:8])[0]
-    
-    # 处理负数
-    pv = pv_raw if pv_raw < 32768 else pv_raw - 65536
-    sv = sv_raw if sv_raw < 32768 else sv_raw - 65536
-    
-    return AIBUSResponse(pv=pv, sv=sv, mv=mv, ...)
-```
-
----
-
-## 6.5 加热器设备驱动
-
-```python
-class AIHeaterDevice(BaseDevice):
-    """宇电AI系列加热器设备驱动"""
-    
-    def connect(self) -> bool:
-        """连接加热器"""
-        self._protocol = AIBUSProtocol(port, address, baudrate)
-        self._protocol.open()
-        self._model_code = self._read_model_code()
-        return True
-    
-    def set_temperature(self, temperature: float) -> bool:
-        """设定目标温度"""
-        self._protocol.write_parameter(
-            ParameterCode.SV, temperature, 
-            decimal_places=self._decimal_places
-        )
-        return True
-```
-
----
-
-## 6.6 加热器 - 数据读取
-
-```python
-def read_data(self) -> HeaterData:
-    """读取加热器数据"""
-    pv, sv, mv, alarm_status = self._protocol.read_pv_sv()
-    
-    # 解析报警状态
-    alarms = self._parse_alarms(alarm_status)
-    
-    return HeaterData(
-        device_id=self.config.device_id,
-        timestamp=datetime.now(),
-        pv=pv / (10 ** self._decimal_places),
-        sv=sv / (10 ** self._decimal_places),
-        mv=mv, alarms=alarms
-    )
-```
-
----
-
-## 6.7 配置管理
-
-```yaml
-# config/system_config.yaml
-name: "自动化控制系统"
-version: "1.0.0"
-
-heaters:
-  - device_id: "heater1"
-    name: "主加热器"
-    connection:
-      port: "COM3"
-      baudrate: 9600
-      address: 1
-    decimal_places: 1
-    safety_limit: 450.0
-```
-
----
-
-## 6.8 控制脚本示例
-
-```python
-# 创建加热器
-config = HeaterConfig(
-    device_id="heater1",
-    connection_params={'port': 'COM3', 'baudrate': 9600, 'address': 1}
-)
-
-with AIHeaterDevice(config) as heater:
-    # 设定温度并启动
-    heater.set_temperature(100.0)
-    heater.start()
-    
-    # 读取数据
-    data = heater.read_data()
-    print(f"当前温度: {data.pv}°C")
-```
-
----
-
-# 七、演示与总结
-
----
-
-## 7.1 已实现功能
-
-| 功能 | 状态 | 说明 |
-|------|------|------|
-| 温度读取 | ✅ | PV/SV/MV实时读取 |
-| 温度设定 | ✅ | 支持安全限温 |
-| 运行控制 | ✅ | 启动/停止/保持 |
-| 多设备控制 | ✅ | 多线程并行 |
-| 数据监控 | ✅ | 实时采集存储 |
-| 报告生成 | ✅ | HTML格式报告 |
-
----
-
-## 7.2 演示：双加热器控制
-
-```
-============================================================
-双加热器温度控制脚本
-============================================================
-目标温度: 30.0°C
-加热时间: 5.0 分钟
-
-[21:16:59][Heater1] 目标: 30.0°C | 当前: 30.0°C
-[21:16:59][Heater2] 目标: 23.5°C | 当前: 23.5°C
-...
-[Heater1] 成功 - 最终温度: PV=29.9°C
-[Heater2] 成功 - 最终温度: PV=33.8°C
-```
-
----
-
-## 7.3 扩展性设计
-
-添加新设备只需3步：
-
-```python
-# 1. 继承BaseDevice
-class PumpDevice(BaseDevice):
-    pass
-
-# 2. 实现抽象方法
-    def connect(self): ...
-    def read_data(self): ...
-
-# 3. 添加到配置文件
-pumps:
-  - device_id: "pump1"
-    connection: {port: "COM5", ...}
-```
-
----
-
-## 7.4 未来规划
-
-- [ ] Web界面远程控制
-- [ ] 数据可视化仪表盘
-- [ ] 自动化实验流程编排
-- [ ] 更多设备支持（泵、阀门、传感器）
-- [ ] AI辅助实验优化
-
----
-
-## 7.5 项目亮点
-
-1. **模块化架构** - 设备独立，易于扩展
-2. **协议自主实现** - 不依赖厂商DLL
-3. **配置驱动** - 无需修改代码
-4. **完整日志** - 可追溯、可调试
-5. **并行控制** - 多设备同时运行
-
----
-
-# Q&A
-
-感谢聆听！
-
-项目地址：`d:\AI\Heat\`
-
----
-
-# 附录：关键文件说明
-
-| 文件 | 功能 | 代码行数 |
-|------|------|----------|
-| `protocols/aibus.py` | AIBUS协议实现 | ~500 |
-| `devices/heater.py` | 加热器驱动 | ~600 |
-| `devices/base_device.py` | 设备基类 | ~300 |
-| `monitor/data_monitor.py` | 数据监控 | ~400 |
-| `reports/report_generator.py` | 报告生成 | ~350 |
-
----
-
-# 📚 串口通讯参考资料
-
-| 资源 | 说明 |
-|------|------|
-| pyserial文档 | pythonhosted.org/pyserial |
-| MAX232芯片 | RS-232电平转换 |
-| MAX485芯片 | RS-485差分收发 |
-| CH340驱动 | USB转串口驱动 |
 
 ---
 
@@ -1254,7 +913,7 @@ def calculate_crc(data: bytes) -> int:
 | n001 | 启停控制 | uint16 | 0:停止 1:启动 2:暂停 3:全速 |
 | n002 | 方向控制 | uint16 | 0:顺时针 1:逆时针 |
 | n006 | 运行模式 | uint16 | 0-3 四种模式 |
-| n110 | 流速设置 | float | 流速值 |
+| n110 | 流速设置 | float | 流速值(mL/min) |
 | n104 | 分装液量 | float | 液量(mL) |
 
 > 注：n为通道号(1-4)，如1001表示通道1的启停控制
@@ -1285,19 +944,214 @@ value = struct.unpack('>f', b'BH\x00\x00')[0]  # → 50.0
 
 ---
 
-## 5.10 Python实现示例
+## 5.10 AIBUS vs MODBUS对比
 
-### MODBUS RTU协议类
+| 特性 | AIBUS | MODBUS-RTU |
+|------|-------|------------|
+| **帧长度** | 固定8/10字节 | 可变长度 |
+| **校验方式** | 校验和 | CRC-16 |
+| **功能码** | 2个(读/写) | 多个功能码 |
+| **数据类型** | 厂商专有 | 工业标准 |
+| **设备数量** | 最多81台 | 最多247台 |
+| **适用设备** | 宇电仪表 | 通用工业设备 |
+
+---
+
+# 六、项目架构设计
+
+---
+
+## 6.1 设计目标
+
+| 目标 | 说明 |
+|------|------|
+| 模块化 | 设备独立，易于扩展 |
+| 可配置 | 参数可调，无需改代码 |
+| 可监控 | 实时数据采集与报警 |
+| 可追溯 | 完整日志与报告 |
+| 联动控制 | 温度+流量协同 |
+
+---
+
+## 6.2 系统架构图
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     主程序 (main.py)                     │
+│              统一调度、设备管理、流程控制                  │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐      │
+│  │ devices │ │protocols│ │ control │ │ reports │      │
+│  │ 设备驱动 │ │通信协议  │ │程序控制  │ │报告生成  │      │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘      │
+├───────┴───────────┴───────────┴───────────┴────────────┤
+│                     utils (工具层)                       │
+│              配置管理、日志记录、通用工具                  │
+├─────────────────────────────────────────────────────────┤
+│                     硬件设备层                           │
+│     ┌─────────┐ ┌─────────┐ ┌─────────┐               │
+│     │ 加热器1 │ │ 加热器2 │ │ 蠕动泵  │  ...          │
+│     └─────────┘ └─────────┘ └─────────┘               │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6.3 目录结构
+
+```
+d:\AI\Heat\
+├── config/
+│   └── system_config.yaml    # 系统配置
+├── src/
+│   ├── control/              # 程序控制 ⭐新增
+│   │   └── program_controller.py
+│   ├── devices/              # 设备驱动
+│   │   ├── base_device.py    # 设备基类
+│   │   ├── heater.py         # 加热器驱动
+│   │   └── peristaltic_pump.py # 蠕动泵驱动 ⭐新增
+│   ├── protocols/            # 通信协议
+│   │   ├── aibus.py          # AIBUS协议
+│   │   ├── modbus_rtu.py     # MODBUS协议 ⭐新增
+│   │   ├── parameters.py     # 加热器参数
+│   │   └── pump_params.py    # 泵参数 ⭐新增
+│   ├── monitor/              # 数据监控
+│   ├── reports/              # 报告生成
+│   └── main.py               # 主程序
+├── scripts/                  # 控制脚本
+└── tests/                    # 测试脚本
+```
+
+---
+
+# 七、核心代码实现
+
+---
+
+## 7.1 设备抽象基类
+
+设计模式：**模板方法模式**
 
 ```python
-import serial
-import struct
+class BaseDevice(ABC):
+    """设备抽象基类 - 所有设备必须继承此类"""
+    
+    @abstractmethod
+    def connect(self) -> bool:
+        """连接设备"""
+        pass
+    
+    @abstractmethod
+    def disconnect(self) -> bool:
+        """断开连接"""
+        pass
+    
+    @abstractmethod
+    def read_data(self) -> DeviceData:
+        """读取数据"""
+        pass
+```
 
+---
+
+## 7.2 设备基类 - 核心方法
+
+```python
+@abstractmethod
+def write_command(self, command: str, value: Any) -> bool:
+    """执行设备命令"""
+    pass
+
+def execute_with_retry(self, operation: Callable, name: str):
+    """带重试机制执行操作"""
+    for attempt in range(self.config.retry_count):
+        try:
+            return operation()
+        except Exception as e:
+            if attempt < self.config.retry_count - 1:
+                time.sleep(self.config.retry_delay)
+    raise last_error
+
+def __enter__(self):
+    self.connect()
+    return self
+
+def __exit__(self, *args):
+    self.disconnect()
+```
+
+---
+
+## 7.3 AIBUS协议实现 - 指令构建
+
+```python
+def _build_read_command(self, param_code: int) -> bytes:
+    """构建读参数指令"""
+    checksum = self._calculate_read_checksum(param_code)
+    
+    frame = bytearray()
+    frame.extend(self._build_address_bytes())  # 地址(2字节)
+    frame.append(0x52)                          # 读命令
+    frame.append(param_code)                    # 参数代号
+    frame.extend([0x00, 0x00])                  # 固定值
+    frame.extend(struct.pack('<H', checksum))   # 校验和
+    return bytes(frame)
+```
+
+---
+
+## 7.4 AIBUS协议实现 - 响应解析
+
+```python
+def _parse_response(self, data: bytes) -> AIBUSResponse:
+    """解析响应数据 - 10字节"""
+    pv_raw = struct.unpack('<H', data[0:2])[0]   # 测量值
+    sv_raw = struct.unpack('<H', data[2:4])[0]   # 设定值
+    mv = data[4]                                  # 输出值
+    alarm_status = data[5]                        # 报警状态
+    param_value = struct.unpack('<H', data[6:8])[0]
+    
+    # 处理负数
+    pv = pv_raw if pv_raw < 32768 else pv_raw - 65536
+    sv = sv_raw if sv_raw < 32768 else sv_raw - 65536
+    
+    return AIBUSResponse(pv=pv, sv=sv, mv=mv, ...)
+```
+
+---
+
+## 7.5 加热器设备驱动
+
+```python
+class AIHeaterDevice(BaseDevice):
+    """宇电AI系列加热器设备驱动"""
+    
+    def connect(self) -> bool:
+        """连接加热器"""
+        self._protocol = AIBUSProtocol(port, address, baudrate)
+        self._protocol.open()
+        self._model_code = self._read_model_code()
+        return True
+    
+    def set_temperature(self, temperature: float) -> bool:
+        """设定目标温度"""
+        self._protocol.write_parameter(
+            ParameterCode.SV, temperature, 
+            decimal_places=self._decimal_places
+        )
+        return True
+```
+
+---
+
+## 7.6 MODBUS协议实现
+
+```python
 class ModbusRTUProtocol:
-    def __init__(self, port, baudrate=9600, parity='E'):
-        self._serial = serial.Serial(port, baudrate, parity=parity)
+    """MODBUS-RTU协议实现"""
     
     def calculate_crc(self, data: bytes) -> int:
+        """计算CRC-16校验"""
         crc = 0xFFFF
         for byte in data:
             crc ^= byte
@@ -1308,129 +1162,272 @@ class ModbusRTUProtocol:
                     crc >>= 1
         return crc
     
-    def read_registers(self, slave, address, count):
+    def read_holding_registers(self, slave: int, address: int, count: int):
+        """读保持寄存器 (功能码0x03)"""
         frame = bytes([slave, 0x03, 
                       (address >> 8) & 0xFF, address & 0xFF,
                       (count >> 8) & 0xFF, count & 0xFF])
         crc = self.calculate_crc(frame)
         self._serial.write(frame + bytes([crc & 0xFF, (crc >> 8) & 0xFF]))
-        
-        response = self._serial.read(3 + count * 2 + 2)
-        # 解析响应...
-        return values
+        return self._parse_read_response(count)
 ```
 
 ---
 
-## 5.11 蠕动泵控制示例
+## 7.7 蠕动泵设备驱动
 
 ```python
-from devices import LabSmartPumpDevice, PeristalticPumpConfig
-
-# 创建蠕动泵
-config = PeristalticPumpConfig(
-    device_id="pump1",
-    connection_params={"port": "COM4"},
-    slave_address=1
-)
-pump = LabSmartPumpDevice(config)
-pump.connect()
-
-# 设置流速 50 mL/min
-pump.set_flow_rate(channel=1, flow_rate=50.0)
-
-# 启动通道1
-pump.start_channel(1)
-
-# 读取状态
-status = pump.read_channel_status(1)
-print(f"运行状态: {status.running}")
-print(f"当前流速: {status.flow_rate} mL/min")
-
-# 停止
-pump.stop_channel(1)
-pump.disconnect()
+class LabSmartPumpDevice(BaseDevice):
+    """LabSmart蠕动泵设备驱动"""
+    
+    SUPPORTED_COMMANDS = [
+        "start_channel", "stop_channel", "pause_channel",
+        "set_direction", "set_flow_rate", "set_run_mode",
+        "calibrate_flow", "get_channel_status"
+    ]
+    
+    def start_channel(self, channel: int) -> bool:
+        """启动指定通道"""
+        address = get_channel_address(channel, 1)  # 启停控制寄存器
+        return self._write_register(address, PumpRunStatus.START)
+    
+    def set_flow_rate(self, channel: int, flow_rate: float) -> bool:
+        """设置流速 (mL/min)"""
+        address = get_channel_address(channel, 110)  # 流速寄存器
+        return self._write_float(address, flow_rate)
+    
+    def set_run_mode(self, channel: int, mode: PumpRunMode) -> bool:
+        """设置运行模式"""
+        address = get_channel_address(channel, 6)  # 模式寄存器
+        return self._write_register(address, mode)
 ```
 
 ---
 
-## 5.12 AIBUS vs MODBUS对比
+## 7.8 程序控制器
 
-| 特性 | AIBUS | MODBUS-RTU |
-|------|-------|------------|
-| **帧长度** | 固定8/10字节 | 可变长度 |
-| **校验方式** | 校验和 | CRC-16 |
-| **功能码** | 2个(读/写) | 多个功能码 |
-| **数据类型 | 厂商专有 | 工业标准 |
-| 帧长度 | 固定8字节 | 可变长度 |
-| 功能码 | 2个(读/写) | 多种功能码 |
-| 校验方式 | 校验和 | CRC-16 |
-| 设备数量 | 最多81台 | 最多247台 |
-| 适用设备 | 宇电仪表 | 通用工业设备 |
+```python
+class ProgramController:
+    """程序控制器 - 温度流量联动"""
+    
+    def __init__(self, heater=None, pump=None):
+        self._heater = heater
+        self._pump = pump
+        self._program = None
+        self._running = False
+    
+    def _execute_step(self, step: ProgramStep) -> bool:
+        """执行单个步骤"""
+        if step.step_type == StepType.HEAT:
+            return self._heater.set_temperature(step.temperature)
+        elif step.step_type == StepType.PUMP_START:
+            self._pump.set_flow_rate(step.pump_channel, step.pump_flow_rate)
+            return self._pump.start_channel(step.pump_channel)
+        elif step.step_type == StepType.HOLD:
+            time.sleep(step.hold_time)
+            return True
+        elif step.step_type == StepType.PUMP_STOP:
+            return self._pump.stop_channel(step.pump_channel)
+```
 
 ---
 
-## 5.13 程序控制联动
+## 7.9 配置管理
 
-### 温度+流量联动示例
+```yaml
+# config/system_config.yaml
+name: "自动化控制系统"
+version: "1.0.0"
+
+heaters:
+  - device_id: "heater1"
+    name: "主加热器"
+    connection:
+      port: "COM3"
+      baudrate: 9600
+      address: 1
+    decimal_places: 1
+    safety_limit: 450.0
+
+pumps:
+  - device_id: "pump1"
+    name: "蠕动泵"
+    connection:
+      port: "COM4"
+      baudrate: 9600
+    slave_address: 1
+    channels:
+      - channel: 1
+        enabled: true
+        pump_head: 5
+        max_flow_rate: 100.0
+```
+
+---
+
+## 7.10 控制脚本示例
+
+### 加热器控制
 
 ```python
-from control import ProgramController, ProgramStep, StepType
+config = HeaterConfig(device_id="heater1", connection_params={'port': 'COM3'})
+with AIHeaterDevice(config) as heater:
+    heater.set_temperature(100.0)
+    heater.start()
+    data = heater.read_data()
+    print(f"当前温度: {data.pv}°C")
+```
 
-# 创建程序控制器
+### 蠕动泵控制
+
+```python
+config = PeristalticPumpConfig(device_id="pump1", connection_params={'port': 'COM4'})
+with LabSmartPumpDevice(config) as pump:
+    pump.set_flow_rate(1, 50.0)  # 50 mL/min
+    pump.start_channel(1)
+    time.sleep(60)
+    pump.stop_channel(1)
+```
+
+### 联动控制
+
+```python
 controller = ProgramController(heater, pump)
-
-# 定义程序步骤
-steps = [
-    ProgramStep(step_id=1, step_type=StepType.HEAT, 
-                temperature=100, name="加热到100°C"),
-    ProgramStep(step_id=2, step_type=StepType.PUMP_START,
-                pump_channel=1, pump_flow_rate=50, name="启动泵"),
-    ProgramStep(step_id=3, step_type=StepType.HOLD,
-                hold_time=300, name="保持5分钟"),
-    ProgramStep(step_id=4, step_type=StepType.PUMP_STOP,
-                pump_channel=1, name="停止泵"),
-    ProgramStep(step_id=5, step_type=StepType.END, name="结束"),
-]
-
-# 运行程序
-program = ProgramConfig(name="温度流量联动", steps=steps)
+program = controller.create_simple_program(
+    temperature=100.0,
+    hold_time=300,
+    pump_channel=1,
+    pump_flow_rate=50.0
+)
 controller.load_program(program)
 controller.start()
 ```
 
 ---
 
-## 5.14 系统架构更新
+# 八、演示与总结
 
-### 新增模块
+---
+
+## 8.1 已实现功能
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 温度读取 | ✅ | PV/SV/MV实时读取 |
+| 温度设定 | ✅ | 支持安全限温 |
+| 运行控制 | ✅ | 启动/停止/保持 |
+| 蠕动泵控制 | ✅ | 四通道独立控制 |
+| 流量设定 | ✅ | 流速/定量/定时模式 |
+| 多设备控制 | ✅ | 多线程并行 |
+| 程序联动 | ✅ | 温度+流量协同 |
+| 数据监控 | ✅ | 实时采集存储 |
+| 报告生成 | ✅ | HTML格式报告 |
+
+---
+
+## 8.2 蠕动泵运行模式
+
+| 模式 | 说明 | 应用场景 |
+|------|------|----------|
+| 流量模式 | 设置流速持续运行 | 连续输送 |
+| 定时定量 | 设定时间后定量分装 | 自动分装 |
+| 定时定速 | 设定时间后定速运行 | 定时实验 |
+| 定量定速 | 设定总量后定速运行 | 精确计量 |
+
+---
+
+## 8.3 演示：双加热器控制
 
 ```
-src/
-├── control/                    # 新增：程序控制
-│   └── program_controller.py   # 联动控制
-├── devices/
-│   └── peristaltic_pump.py     # 新增：蠕动泵驱动
-└── protocols/
-    ├── modbus_rtu.py           # 新增：MODBUS协议
-    └── pump_params.py          # 新增：泵参数定义
+============================================================
+双加热器温度控制脚本
+============================================================
+目标温度: 30.0°C
+加热时间: 5.0 分钟
+
+[21:16:59][Heater1] 目标: 30.0°C | 当前: 30.0°C
+[21:16:59][Heater2] 目标: 23.5°C | 当前: 23.5°C
+...
+[Heater1] 成功 - 最终温度: PV=29.9°C
+[Heater2] 成功 - 最终温度: PV=33.8°C
 ```
 
 ---
 
-## 5.15 总结
+## 8.4 扩展性设计
 
-### MODBUS-RTU协议要点
+添加新设备只需3步：
 
-1. **帧结构**：地址 + 功能码 + 数据 + CRC
-2. **功能码**：03读、06写单、10写多
-3. **校验**：CRC-16，低字节在前
-4. **数据类型**：支持整数和浮点数
+```python
+# 1. 继承BaseDevice
+class NewDevice(BaseDevice):
+    pass
 
-### 项目扩展
+# 2. 实现抽象方法
+    def connect(self): ...
+    def read_data(self): ...
 
-- ✅ 支持蠕动泵设备
-- ✅ 实现MODBUS-RTU协议
-- ✅ 温度流量联动控制
-- ✅ 四通道独立控制
-- ✅ 四种运行模式
+# 3. 添加到配置文件
+new_devices:
+  - device_id: "device1"
+    connection: {port: "COM5", ...}
+```
+
+---
+
+## 8.5 未来规划
+
+- [ ] Web界面远程控制
+- [ ] 数据可视化仪表盘
+- [ ] 自动化实验流程编排
+- [ ] 更多设备支持（阀门、传感器）
+- [ ] AI辅助实验优化
+
+---
+
+## 8.6 项目亮点
+
+1. **模块化架构** - 设备独立，易于扩展
+2. **多协议支持** - AIBUS + MODBUS-RTU
+3. **协议自主实现** - 不依赖厂商DLL
+4. **配置驱动** - 无需修改代码
+5. **联动控制** - 温度+流量协同
+6. **完整日志** - 可追溯、可调试
+7. **并行控制** - 多设备同时运行
+
+---
+
+# Q&A
+
+感谢聆听！
+
+项目地址：`d:\AI\Heat\`
+
+---
+
+# 附录：关键文件说明
+
+| 文件 | 功能 | 代码行数 |
+|------|------|----------|
+| `protocols/aibus.py` | AIBUS协议实现 | ~500 |
+| `protocols/modbus_rtu.py` | MODBUS协议实现 | ~400 |
+| `devices/heater.py` | 加热器驱动 | ~600 |
+| `devices/peristaltic_pump.py` | 蠕动泵驱动 | ~500 |
+| `devices/base_device.py` | 设备基类 | ~300 |
+| `control/program_controller.py` | 程序控制器 | ~400 |
+| `monitor/data_monitor.py` | 数据监控 | ~400 |
+| `reports/report_generator.py` | 报告生成 | ~350 |
+
+---
+
+# 📚 参考资料
+
+| 资源 | 说明 |
+|------|------|
+| pyserial文档 | pythonhosted.org/pyserial |
+| MAX232芯片 | RS-232电平转换 |
+| MAX485芯片 | RS-485差分收发 |
+| CH340驱动 | USB转串口驱动 |
+| MODBUS协议 | modbus.org |
+| 宇电AIBUS | 宇电仪表通信协议 |
+| LabSmart | 蠕动泵通信协议 |
