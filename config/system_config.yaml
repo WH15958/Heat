@@ -20,6 +20,47 @@ heaters:
     retry_delay: 0.5
     enabled: true
 
+pumps:
+  - device_id: "pump1"
+    name: "蠕动泵"
+    connection:
+      port: "COM4"
+      baudrate: 9600
+    slave_address: 1
+    parity: "E"
+    stopbits: 1
+    bytesize: 8
+    timeout: 2.0
+    poll_interval: 1.0
+    retry_count: 3
+    retry_delay: 0.5
+    enabled: true
+    channels:
+      - channel: 1
+        enabled: true
+        pump_head: 5
+        tube_model: 0
+        suck_back_angle: 0
+        max_flow_rate: 100.0
+      - channel: 2
+        enabled: true
+        pump_head: 5
+        tube_model: 0
+        suck_back_angle: 0
+        max_flow_rate: 100.0
+      - channel: 3
+        enabled: true
+        pump_head: 5
+        tube_model: 0
+        suck_back_angle: 0
+        max_flow_rate: 100.0
+      - channel: 4
+        enabled: true
+        pump_head: 5
+        tube_model: 0
+        suck_back_angle: 0
+        max_flow_rate: 100.0
+
 monitor:
   enabled: true
   log_interval: 1.0

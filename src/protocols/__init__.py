@@ -17,6 +17,29 @@ from .parameters import (
     get_parameter_info,
     get_model_name,
 )
+from .modbus_rtu import (
+    ModbusRTUProtocol,
+    ModbusFunction,
+    ModbusException,
+    ModbusResponse,
+)
+from .pump_params import (
+    PumpRunMode,
+    PumpRunStatus,
+    PumpDirection,
+    TimeUnit,
+    FlowUnit,
+    RegisterDefinition,
+    get_channel_address,
+    get_register_info,
+    get_all_channel_registers,
+    CHANNEL_CONTROL_REGISTERS,
+    PARAMETER_REGISTERS,
+    STATUS_REGISTERS,
+    CALIBRATION_REGISTERS,
+    PUMP_HEAD_MODELS,
+    PUMP_TUBE_MODELS,
+)
 
 __all__ = [
     'AIBUSProtocol',
@@ -33,4 +56,23 @@ __all__ = [
     'PARAMETER_DEFINITIONS',
     'get_parameter_info',
     'get_model_name',
+    'ModbusRTUProtocol',
+    'ModbusFunction',
+    'ModbusException',
+    'ModbusResponse',
+    'PumpRunMode',
+    'PumpRunStatus',
+    'PumpDirection',
+    'TimeUnit',
+    'FlowUnit',
+    'RegisterDefinition',
+    'get_channel_address',
+    'get_register_info',
+    'get_all_channel_registers',
+    'CHANNEL_CONTROL_REGISTERS',
+    'PARAMETER_REGISTERS',
+    'STATUS_REGISTERS',
+    'CALIBRATION_REGISTERS',
+    'PUMP_HEAD_MODELS',
+    'PUMP_TUBE_MODELS',
 ]

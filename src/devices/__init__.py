@@ -13,6 +13,13 @@ from .base_device import (
     DeviceType,
 )
 from .heater import AIHeaterDevice, HeaterConfig, HeaterData
+from .peristaltic_pump import (
+    LabSmartPumpDevice,
+    PeristalticPumpConfig,
+    PeristalticPumpData,
+    PumpChannelConfig,
+    PumpChannelData,
+)
 
 __all__ = [
     'BaseDevice',
@@ -24,4 +31,9 @@ __all__ = [
     'AIHeaterDevice',
     'HeaterConfig',
     'HeaterData',
+    'LabSmartPumpDevice',
+    'PeristalticPumpConfig',
+    'PeristalticPumpData',
+    'PumpChannelConfig',
+    'PumpChannelData',
 ]
