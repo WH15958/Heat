@@ -20,6 +20,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 import logging
 import time
+import threading
+import atexit
 
 from devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
@@ -142,6 +144,11 @@ class LabSmartPumpDevice(BaseDevice):
             config: 蠕动泵配置对象
             info: 设备信息对象（可选）
         """
+        self._lock = threading.RLock()
+        self._closed = False
+        self._protocol: Optional[ModbusRTUProtocol] = None
+        self._channel_data: Dict[int, PumpChannelData] = {}
+        
         if info is None:
             info = DeviceInfo(
                 name=config.device_id,
@@ -152,11 +159,10 @@ class LabSmartPumpDevice(BaseDevice):
             )
         super().__init__(config, info)
         
-        self._protocol: Optional[ModbusRTUProtocol] = None
-        self._channel_data: Dict[int, PumpChannelData] = {}
-        
         for ch_config in config.channels:
             self._channel_data[ch_config.channel] = PumpChannelData(channel=ch_config.channel)
+        
+        atexit.register(self._force_disconnect)
     
     @property
     def protocol(self) -> Optional[ModbusRTUProtocol]:
@@ -167,6 +173,12 @@ class LabSmartPumpDevice(BaseDevice):
     def channel_data(self) -> Dict[int, PumpChannelData]:
         """获取通道数据"""
         return self._channel_data
+    
+    def get_serial_handle(self):
+        """获取串口句柄"""
+        if self._protocol is not None:
+            return self._protocol._serial
+        return None
     
     def connect(self) -> bool:
         """
@@ -182,10 +194,10 @@ class LabSmartPumpDevice(BaseDevice):
         
         try:
             port = self.config.connection_params.get("port", "COM4")
-            baudrate = getattr(self.config, 'baudrate', 9600)
-            parity = getattr(self.config, 'parity', 'E')
-            stopbits = getattr(self.config, 'stopbits', 1)
-            bytesize = getattr(self.config, 'bytesize', 8)
+            baudrate = self.config.connection_params.get("baudrate", 9600)
+            parity = self.config.connection_params.get("parity", "N")
+            stopbits = self.config.connection_params.get("stopbits", 1)
+            bytesize = self.config.connection_params.get("bytesize", 8)
             
             self._protocol = ModbusRTUProtocol(
                 port=port,
@@ -201,9 +213,12 @@ class LabSmartPumpDevice(BaseDevice):
                 return False
             
             self._status = DeviceStatus.CONNECTED
-            self._logger.info(f"Pump {self.config.device_id} connected")
+            self._logger.info(f"Pump {self.config.device_id} connected on {port} ({baudrate}, {parity})")
             
-            self._initialize_channels()
+            try:
+                self._initialize_channels()
+            except Exception as e:
+                self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
             
             return True
             
@@ -219,13 +234,29 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 断开成功返回True
         """
-        if self._protocol is not None:
-            self._protocol.disconnect()
-            self._protocol = None
-        
-        self._status = DeviceStatus.DISCONNECTED
-        self._logger.info(f"Pump {self.config.device_id} disconnected")
-        return True
+        with self._lock:
+            self._closed = True
+            if self._protocol is not None:
+                self._protocol.disconnect()
+                self._protocol = None
+            
+            self._status = DeviceStatus.DISCONNECTED
+            self._logger.info(f"Pump {self.config.device_id} disconnected")
+            return True
+    
+    def _force_disconnect(self):
+        """强制断开 - 用于atexit回调"""
+        try:
+            if self._protocol is not None:
+                self._protocol.disconnect()
+                self._protocol = None
+            self._closed = True
+        except Exception:
+            pass
+    
+    def is_closed(self) -> bool:
+        """检查是否已关闭"""
+        return self._closed
     
     def _initialize_channels(self):
         """初始化所有通道"""
@@ -253,13 +284,14 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 成功返回True
         """
-        if self._protocol is None:
-            return False
-        return self._protocol.write_single_register(
-            self._get_slave_address(),
-            address,
-            value
-        )
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return False
+            return self._protocol.write_single_register(
+                self._get_slave_address(),
+                address,
+                value
+            )
     
     def _write_float(self, address: int, value: float) -> bool:
         """
@@ -272,13 +304,14 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 成功返回True
         """
-        if self._protocol is None:
-            return False
-        return self._protocol.write_float_register(
-            self._get_slave_address(),
-            address,
-            value
-        )
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return False
+            return self._protocol.write_float_register(
+                self._get_slave_address(),
+                address,
+                value
+            )
     
     def _read_registers(self, start_address: int, count: int) -> Optional[List[int]]:
         """
@@ -291,13 +324,14 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             Optional[List[int]]: 寄存器值列表
         """
-        if self._protocol is None:
-            return None
-        return self._protocol.read_holding_registers(
-            self._get_slave_address(),
-            start_address,
-            count
-        )
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return None
+            return self._protocol.read_holding_registers(
+                self._get_slave_address(),
+                start_address,
+                count
+            )
     
     def _read_float(self, address: int) -> Optional[float]:
         """
@@ -309,12 +343,13 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             Optional[float]: 浮点数值
         """
-        if self._protocol is None:
-            return None
-        return self._protocol.read_float_register(
-            self._get_slave_address(),
-            address
-        )
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return None
+            return self._protocol.read_float_register(
+                self._get_slave_address(),
+                address
+            )
     
     def enable_channel(self, channel: int, enable: bool) -> bool:
         """
@@ -795,6 +830,49 @@ class LabSmartPumpDevice(BaseDevice):
         
         self._channel_data[channel] = data
         return data
+    
+    def is_connected(self) -> bool:
+        """
+        检查设备是否已连接
+        
+        Returns:
+            bool: 已连接返回True
+        """
+        return self._status == DeviceStatus.CONNECTED and self._protocol is not None
+    
+    def write_command(self, command: str, value: Any) -> bool:
+        """
+        向设备发送命令
+        
+        Args:
+            command: 命令名称
+            value: 命令值
+        
+        Returns:
+            bool: 命令发送成功返回True
+        """
+        return self.execute_command(command, **value) if isinstance(value, dict) else False
+    
+    def get_available_commands(self) -> List[str]:
+        """
+        获取设备支持的命令列表
+        
+        Returns:
+            List[str]: 命令名称列表
+        """
+        return self.SUPPORTED_COMMANDS.copy()
+    
+    def emergency_stop(self) -> bool:
+        """
+        紧急停止设备
+        
+        立即停止所有通道
+        
+        Returns:
+            bool: 停止成功返回True
+        """
+        self._logger.warning("Emergency stop triggered!")
+        return self.stop_all()
     
     def read_data(self) -> DeviceData:
         """

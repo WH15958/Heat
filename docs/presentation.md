@@ -33,9 +33,10 @@ layout: default
 **项目实现**
 - 六、项目架构设计
 - 七、核心代码实现
+- 八、安全机制设计 ⭐新增
 
 **演示与展望**
-- 八、演示与总结
+- 九、演示与总结
 
 </div>
 </div>
@@ -1003,22 +1004,30 @@ value = struct.unpack('>f', b'BH\x00\x00')[0]  # → 50.0
 d:\AI\Heat\
 ├── config/
 │   └── system_config.yaml    # 系统配置
+├── context/                  # 项目上下文 ⭐新增
+│   └── PROJECT_CONTEXT.md    # AI记忆库+交接手册
 ├── src/
-│   ├── control/              # 程序控制 ⭐新增
+│   ├── control/              # 程序控制
 │   │   └── program_controller.py
 │   ├── devices/              # 设备驱动
 │   │   ├── base_device.py    # 设备基类
 │   │   ├── heater.py         # 加热器驱动
-│   │   └── peristaltic_pump.py # 蠕动泵驱动 ⭐新增
+│   │   ├── peristaltic_pump.py # 蠕动泵驱动
+│   │   └── safe_pump.py      # 安全蠕动泵驱动 ⭐新增
 │   ├── protocols/            # 通信协议
 │   │   ├── aibus.py          # AIBUS协议
-│   │   ├── modbus_rtu.py     # MODBUS协议 ⭐新增
+│   │   ├── modbus_rtu.py     # MODBUS协议
 │   │   ├── parameters.py     # 加热器参数
-│   │   └── pump_params.py    # 泵参数 ⭐新增
+│   │   └── pump_params.py    # 泵参数
 │   ├── monitor/              # 数据监控
 │   ├── reports/              # 报告生成
-│   └── main.py               # 主程序
+│   └── utils/                # 工具函数 ⭐新增
+│       ├── config.py         # 配置管理
+│       ├── serial_manager.py # 串口资源管理 ⭐新增
+│       └── device_safety.py  # 设备安全基类 ⭐新增
 ├── scripts/                  # 控制脚本
+│   ├── heater_pump_safe.py   # 安全联动脚本 ⭐新增
+│   └── test_pump_safe.py     # 安全测试脚本 ⭐新增
 └── tests/                    # 测试脚本
 ```
 
@@ -1305,11 +1314,229 @@ controller.start()
 
 ---
 
-# 八、演示与总结
+# 八、安全机制设计
 
 ---
 
-## 8.1 已实现功能
+## 8.1 安全机制概述
+
+### 为什么需要安全机制？
+
+| 问题 | 后果 | 解决方案 |
+|------|------|----------|
+| 线程无安全关闭 | 串口被占用 | 全局停止事件 |
+| 串口未正确关闭 | 端口残留占用 | try...finally + 强制释放 |
+| 多线程并发访问 | 内核死锁 | 串口锁 + 命令队列 |
+| 异常崩溃 | 设备失控 | 异常隔离 + 紧急停止 |
+
+---
+
+## 8.2 系统架构图（安全增强版）
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     主程序 (main.py)                         │
+│              统一调度、设备管理、流程控制                      │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────┐ │
+│  │ devices │ │protocols│ │ control │ │ reports │ │utils  │ │
+│  │ 设备驱动 │ │通信协议  │ │程序控制  │ │报告生成  │ │安全层 │ │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └───┬───┘ │
+│       │          │          │          │           │      │
+│       └──────────┴──────────┴──────────┴───────────┘      │
+│                           │                                 │
+│                    ┌──────┴──────┐                         │
+│                    │ SafetyMgr   │                         │
+│                    │ 安全管理器   │                         │
+│                    │ - 紧急停止   │                         │
+│                    │ - 状态监控   │                         │
+│                    │ - 资源清理   │                         │
+│                    └─────────────┘                         │
+├─────────────────────────────────────────────────────────────┤
+│                     硬件设备层                               │
+│     ┌─────────┐ ┌─────────┐ ┌─────────┐                   │
+│     │ 加热器1 │ │ 加热器2 │ │ 蠕动泵  │  ...              │
+│     └─────────┘ └─────────┘ └─────────┘                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8.3 设备安全基类
+
+```python
+class SafeDevice(ABC):
+    """安全设备基类 - 提供线程安全、异常隔离、紧急停止"""
+    
+    def __init__(self, device_id: str):
+        self._device_id = device_id
+        self._state = DeviceState.DISCONNECTED
+        self._lock = threading.RLock()  # 线程锁
+        self._stop_event = threading.Event()  # 停止事件
+    
+    def _set_state(self, state: DeviceState):
+        """线程安全的状态切换"""
+        with self._lock:
+            self._state = state
+    
+    @abstractmethod
+    def emergency_stop(self):
+        """紧急停止 - 必须实现"""
+        pass
+    
+    def is_running(self) -> bool:
+        return self._state == DeviceState.RUNNING
+```
+
+---
+
+## 8.4 串口资源管理器
+
+```python
+class SerialPortManager:
+    """串口资源管理器 - 防止端口冲突"""
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def acquire_port(self, port: str, force: bool = False):
+        """获取串口（支持强制释放）"""
+        if force:
+            self._force_release_port(port)
+        # 检查并锁定端口
+        self._create_lock_file(port)
+    
+    def _force_release_port(self, port: str):
+        """强制释放被占用的端口"""
+        # 查找占用进程并终止
+        for proc in psutil.process_iter(['pid', 'name']):
+            if self._is_port_in_use_by(port, proc):
+                proc.terminate()
+```
+
+---
+
+## 8.5 安全蠕动泵驱动
+
+```python
+class SafePumpDevice(SafeDevice):
+    """安全蠕动泵驱动 - 通道隔离 + 命令队列"""
+    
+    def __init__(self, config: PeristalticPumpConfig):
+        super().__init__(config.device_id)
+        self._config = config
+        self._command_queue = queue.Queue()  # 命令队列
+        self._channel_tasks = {}  # 通道任务
+    
+    def connect(self, force: bool = False) -> bool:
+        """安全连接"""
+        self._set_state(DeviceState.INITIALIZING)
+        try:
+            manager = get_serial_manager()
+            manager.acquire_port(self._port, force=force)
+            self._serial = serial.Serial(...)
+            self._set_state(DeviceState.CONNECTED)
+            return True
+        except Exception as e:
+            self._set_state(DeviceState.ERROR)
+            raise
+    
+    def emergency_stop(self):
+        """紧急停止所有通道"""
+        self._stop_event.set()
+        for channel in self._config.channels:
+            self._stop_channel_internal(channel.channel)
+        self._serial.close()
+```
+
+---
+
+## 8.6 全局安全管理器
+
+```python
+class DeviceSafetyManager:
+    """全局安全管理器"""
+    
+    _instance = None
+    _emergency_callbacks = []
+    
+    def register_emergency_stop(self, callback: Callable):
+        """注册紧急停止回调"""
+        self._emergency_callbacks.append(callback)
+    
+    def emergency_stop_all(self, timeout: float = 3.0):
+        """触发全局紧急停止（带超时保护）"""
+        # 并行停止所有设备，每个设备最多等待 timeout 秒
+        for callback in self._emergency_callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+    
+    def cleanup_all(self):
+        """清理所有资源"""
+        self.emergency_stop_all()
+        get_serial_manager().cleanup()
+
+# 全局实例
+def get_safety_manager() -> DeviceSafetyManager:
+    if DeviceSafetyManager._instance is None:
+        DeviceSafetyManager._instance = DeviceSafetyManager()
+    return DeviceSafetyManager._instance
+```
+
+---
+
+## 8.7 信号处理与清理
+
+```python
+import signal
+import atexit
+
+def setup_signal_handlers():
+    """设置信号处理器"""
+    safety = get_safety_manager()
+    
+    def handle_sigint(signum, frame):
+        print("\n接收到中断信号，正在安全停止...")
+        safety.emergency_stop_all()
+        safety.cleanup_all()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, handle_sigint)
+    atexit.register(safety.cleanup_all)
+
+# 在程序入口调用
+setup_signal_handlers()
+```
+
+---
+
+## 8.8 安全机制总结
+
+| 机制 | 实现 | 效果 |
+|------|------|------|
+| 线程安全 | RLock + Event | 无竞争访问 |
+| 资源管理 | 单例管理器 | 无端口冲突 |
+| 异常隔离 | try...finally | 崩溃不影响其他设备 |
+| 紧急停止 | 全局回调 | 3秒内停止所有设备 |
+| 强制释放 | 进程检测 | 解决僵尸占用 |
+| 通道隔离 | 独立任务队列 | 单通道异常不影响其他 |
+
+---
+
+# 九、演示与总结
+
+---
+
+## 9.1 已实现功能
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
@@ -1322,10 +1549,14 @@ controller.start()
 | 程序联动 | ✅ | 温度+流量协同 |
 | 数据监控 | ✅ | 实时采集存储 |
 | 报告生成 | ✅ | HTML格式报告 |
+| **串口资源管理** | ✅ ⭐新增 | 强制释放、进程锁 |
+| **设备安全基类** | ✅ ⭐新增 | 状态监控、异常隔离 |
+| **紧急停止** | ✅ ⭐新增 | 全局回调、3秒停止 |
+| **通道隔离** | ✅ ⭐新增 | 单通道异常不影响其他 |
 
 ---
 
-## 8.2 蠕动泵运行模式
+## 9.2 蠕动泵运行模式
 
 | 模式 | 说明 | 应用场景 |
 |------|------|----------|
@@ -1336,7 +1567,7 @@ controller.start()
 
 ---
 
-## 8.3 演示：双加热器控制
+## 9.3 演示：双加热器控制
 
 ```
 ============================================================
@@ -1354,7 +1585,7 @@ controller.start()
 
 ---
 
-## 8.4 扩展性设计
+## 9.4 扩展性设计
 
 添加新设备只需3步：
 
@@ -1413,10 +1644,14 @@ new_devices:
 | `protocols/modbus_rtu.py` | MODBUS协议实现 | ~400 |
 | `devices/heater.py` | 加热器驱动 | ~600 |
 | `devices/peristaltic_pump.py` | 蠕动泵驱动 | ~500 |
+| `devices/safe_pump.py` | 安全蠕动泵驱动 ⭐新增 | ~400 |
 | `devices/base_device.py` | 设备基类 | ~300 |
+| `utils/serial_manager.py` | 串口资源管理 ⭐新增 | ~300 |
+| `utils/device_safety.py` | 设备安全基类 ⭐新增 | ~250 |
 | `control/program_controller.py` | 程序控制器 | ~400 |
 | `monitor/data_monitor.py` | 数据监控 | ~400 |
 | `reports/report_generator.py` | 报告生成 | ~350 |
+| `context/PROJECT_CONTEXT.md` | 项目上下文 ⭐新增 | ~500 |
 
 ---
 
@@ -1431,3 +1666,6 @@ new_devices:
 | MODBUS协议 | modbus.org |
 | 宇电AIBUS | 宇电仪表通信协议 |
 | LabSmart | 蠕动泵通信协议 |
+| psutil文档 | 进程管理库 |
+| Python threading | 多线程编程 |
+| Python signal | 信号处理 |

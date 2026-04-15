@@ -59,6 +59,35 @@ class HeaterDeviceConfig(BaseConfig):
 
 
 @dataclass
+class PumpChannelConfig(BaseConfig):
+    """蠕动泵通道配置"""
+    channel: int = 1
+    enabled: bool = True
+    pump_head: int = 5
+    tube_model: int = 0
+    suck_back_angle: int = 0
+    max_flow_rate: float = 100.0
+
+
+@dataclass
+class PumpDeviceConfig(BaseConfig):
+    """蠕动泵设备配置"""
+    device_id: str = "pump1"
+    name: str = "蠕动泵"
+    connection: DeviceConnectionConfig = field(default_factory=DeviceConnectionConfig)
+    slave_address: int = 1
+    parity: str = "N"
+    stopbits: int = 1
+    bytesize: int = 8
+    timeout: float = 2.0
+    poll_interval: float = 1.0
+    retry_count: int = 3
+    retry_delay: float = 0.5
+    enabled: bool = True
+    channels: List[PumpChannelConfig] = field(default_factory=list)
+
+
+@dataclass
 class MonitorConfig(BaseConfig):
     """监控配置"""
     enabled: bool = True
@@ -99,6 +128,7 @@ class SystemConfig(BaseConfig):
     name: str = "自动化控制系统"
     version: str = "1.0.0"
     heaters: List[HeaterDeviceConfig] = field(default_factory=list)
+    pumps: List[PumpDeviceConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -108,6 +138,13 @@ class SystemConfig(BaseConfig):
         for heater in self.heaters:
             if heater.device_id == device_id:
                 return heater
+        return None
+    
+    def get_pump_config(self, device_id: str) -> Optional[PumpDeviceConfig]:
+        """根据ID获取蠕动泵配置"""
+        for pump in self.pumps:
+            if pump.device_id == device_id:
+                return pump
         return None
 
 
@@ -159,10 +196,27 @@ class ConfigManager:
             )
             heaters.append(heater)
         
+        pumps = []
+        for pump_data in data.get("pumps", []):
+            conn_data = pump_data.get("connection", {})
+            connection = DeviceConnectionConfig(**conn_data)
+            
+            channels = []
+            for ch_data in pump_data.get("channels", []):
+                channels.append(PumpChannelConfig(**ch_data))
+            
+            pump = PumpDeviceConfig(
+                **{k: v for k, v in pump_data.items() if k not in ["connection", "channels"]},
+                connection=connection,
+                channels=channels
+            )
+            pumps.append(pump)
+        
         return SystemConfig(
             name=data.get("name", "自动化控制系统"),
             version=data.get("version", "1.0.0"),
             heaters=heaters,
+            pumps=pumps,
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),

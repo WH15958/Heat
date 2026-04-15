@@ -1,1 +1,0 @@
-Example control software for an integrated self-driving laboratory workflow, coordinating multi-channel syringe pumps, HPLC injection, microwave heating, and spectral measurement through serial and REST APIs.

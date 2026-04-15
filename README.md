@@ -2,6 +2,16 @@
 
 基于Python的实验室自动化控制系统，支持多设备协同控制、数据监控与报告生成。
 
+## 项目进度
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 加热器控制 | ✅ 完成 | AI-516/518/716/719 温控仪表 |
+| 蠕动泵控制 | ✅ 完成 | LabSmart 多通道蠕动泵 |
+| 安全机制 | ✅ 完成 | 串口资源管理、紧急停止、通道隔离 |
+| 程序控制 | ✅ 完成 | 温度+流量联动 |
+| 报告生成 | ✅ 完成 | HTML报告 + 温度曲线 |
+
 ## 功能特性
 
 ### 设备控制
@@ -12,6 +22,12 @@
 ### 通信协议
 - **AIBUS协议**：宇电仪表通信协议（自主实现，不依赖厂商DLL）
 - **MODBUS-RTU协议**：标准工业通信协议
+
+### 安全机制 ⭐新增
+- **串口资源管理**：进程锁文件、强制释放、看门狗线程
+- **设备安全基类**：状态监控、异常隔离、紧急停止
+- **通道隔离**：单通道异常不影响其他通道
+- **命令队列**：串行化串口操作，避免竞争
 
 ### 运行模式（蠕动泵）
 - 流量模式：设置流速持续运行
@@ -35,13 +51,16 @@
 Heat/
 ├── config/                     # 配置文件
 │   └── system_config.yaml      # 系统配置
+├── context/                    # 项目上下文 ⭐新增
+│   └── PROJECT_CONTEXT.md      # AI记忆库+交接手册
 ├── src/                        # 源代码
 │   ├── control/               # 程序控制
-│   │   └── program_controller.py  # 程序控制器
+│   │   └── program_controller.py
 │   ├── devices/               # 设备驱动
 │   │   ├── base_device.py     # 设备基类
 │   │   ├── heater.py          # 加热器驱动
-│   │   └── peristaltic_pump.py # 蠕动泵驱动
+│   │   ├── peristaltic_pump.py # 蠕动泵驱动(基础)
+│   │   └── safe_pump.py       # 蠕动泵驱动(安全增强) ⭐新增
 │   ├── protocols/             # 通信协议
 │   │   ├── aibus.py           # AIBUS协议
 │   │   ├── modbus_rtu.py      # MODBUS-RTU协议
@@ -50,11 +69,18 @@ Heat/
 │   ├── monitor/               # 数据监控
 │   ├── reports/               # 报告生成
 │   └── utils/                 # 工具函数
+│       ├── config.py          # 配置管理
+│       ├── serial_manager.py  # 串口资源管理 ⭐新增
+│       └── device_safety.py   # 设备安全基类 ⭐新增
 ├── scripts/                   # 控制脚本
 │   ├── simple_control.py      # 简单温度控制
 │   ├── dual_heater_control.py # 双加热器控制
-│   └── temperature_experiment.py # 温度实验
+│   ├── heater_pump_integration.py  # 加热器+蠕动泵联动
+│   ├── heater_pump_safe.py    # 安全联动脚本 ⭐新增
+│   ├── test_pump_only.py      # 蠕动泵测试
+│   └── test_pump_safe.py      # 安全蠕动泵测试 ⭐新增
 ├── tests/                     # 测试脚本
+│   └── diagnose_pump.py       # 诊断工具
 ├── docs/                      # 文档
 │   └── presentation.md        # 协议说明文档
 └── reference paper/           # 参考文献
@@ -72,27 +98,30 @@ python -m venv venv
 venv\Scripts\activate  # Windows
 
 # 安装依赖
-pip install -r requirements.txt
+pip install pyserial pyyaml psutil matplotlib
+
+# Windows 强制释放串口（可选）
+pip install pywin32
 ```
 
 ## 快速开始
 
-### 1. 测试硬件连接
+### 1. 测试蠕动泵连接
 
 ```bash
-python tests/test_hardware.py
+python scripts/test_pump_safe.py --port COM10 --force
 ```
 
-### 2. 简单温度控制
+### 2. 运行加热器+蠕动泵联动实验
+
+```bash
+python scripts/heater_pump_safe.py --heater-ports COM7 COM9 --pump-port COM10 --force
+```
+
+### 3. 简单温度控制
 
 ```bash
 python scripts/simple_control.py
-```
-
-### 3. 温度实验（带报告生成）
-
-```bash
-python scripts/temperature_experiment.py
 ```
 
 ## 配置说明
@@ -106,11 +135,11 @@ heaters:
   - device_id: "heater1"
     name: "主加热器"
     connection:
-      port: "COM3"        # 串口号
-      baudrate: 9600      # 波特率
-      address: 1          # 设备地址
-    decimal_places: 1     # 小数位数
-    safety_limit: 450.0   # 安全限温
+      port: "COM7"
+      baudrate: 9600
+      address: 1
+    decimal_places: 1
+    safety_limit: 450.0
 ```
 
 ### 蠕动泵配置
@@ -120,107 +149,145 @@ pumps:
   - device_id: "pump1"
     name: "蠕动泵"
     connection:
-      port: "COM4"        # 串口号
-      baudrate: 9600      # 波特率
-    slave_address: 1      # MODBUS从站地址
-    channels:             # 通道配置
+      port: "COM10"
+      baudrate: 9600
+      parity: "N"
+    slave_address: 1
+    channels:
       - channel: 1
         enabled: true
-        pump_head: 5      # 泵头型号
-        tube_model: 0     # 软管型号
+        pump_head: 5
+        tube_model: 0
 ```
 
 ## 使用示例
 
+### 安全蠕动泵控制（推荐）
+
+```python
+from devices.safe_pump import SafePumpDevice, ChannelTask
+from devices.peristaltic_pump import PeristalticPumpConfig, PumpChannelConfig
+from protocols.pump_params import PumpRunMode, PumpDirection
+
+config = PeristalticPumpConfig(
+    device_id="pump1",
+    connection_params={"port": "COM10", "baudrate": 9600, "parity": "N"},
+    channels=[PumpChannelConfig(channel=1, enabled=True)]
+)
+
+with SafePumpDevice(config) as pump:
+    pump.connect(force=True)
+    
+    task = ChannelTask(
+        channel=1,
+        volume=10.0,
+        flow_rate=20.0,
+        mode=PumpRunMode.QUANTITY_SPEED
+    )
+    pump.run_channel_task(task)
+    
+    pump.stop_all_channels()
+```
+
 ### 加热器控制
 
 ```python
-from devices import AIHeaterDevice, HeaterConfig
+from devices.heater import AIHeaterDevice, HeaterConfig
 
-# 创建加热器
-config = HeaterConfig(device_id="heater1", connection_params={"port": "COM3"})
+config = HeaterConfig(device_id="heater1", connection_params={"port": "COM7"})
 heater = AIHeaterDevice(config)
 heater.connect()
 
-# 设置温度并启动
 heater.set_temperature(100.0)
 heater.start()
 
-# 读取数据
-data = heater.read_data()
-print(f"当前温度: {data.pv}°C")
+pv, sv = heater.read_temperature()
+print(f"当前温度: {pv}°C")
 
-# 停止并断开
 heater.stop()
 heater.disconnect()
 ```
 
-### 蠕动泵控制
+### 加热器+蠕动泵联动
 
 ```python
-from devices import LabSmartPumpDevice, PeristalticPumpConfig, PumpChannelConfig
-from protocols import PumpRunMode, PumpDirection
+from scripts.heater_pump_safe import SafeExperiment
 
-# 创建蠕动泵
-config = PeristalticPumpConfig(
-    device_id="pump1",
-    connection_params={"port": "COM4"},
-    channels=[PumpChannelConfig(channel=1, enabled=True)]
+experiment = SafeExperiment(
+    heater_ports=["COM7", "COM9"],
+    pump_port="COM10",
+    target_temp=35.0,
+    pump_trigger_temp=30.0,
+    heat_duration=300,
+    hold_duration=300,
+    pump_volume=10.0,
+    pump_flow_rate=20.0,
+    force=True
 )
-pump = LabSmartPumpDevice(config)
-pump.connect()
 
-# 设置流速并启动
-pump.set_flow_rate(1, 50.0)  # 50 mL/min
-pump.set_direction(1, PumpDirection.CLOCKWISE)
-pump.start_channel(1)
-
-# 停止
-pump.stop_channel(1)
-pump.disconnect()
+experiment.run()
 ```
 
-### 程序控制（温度+流量联动）
+## 安全机制
+
+### 串口资源管理
 
 ```python
-from control import ProgramController, ProgramStep, StepType
+from utils.serial_manager import get_serial_manager, SerialPortForceRelease
 
-# 创建程序控制器
-controller = ProgramController(heater, pump)
+manager = get_serial_manager()
 
-# 创建简单程序：加热到100°C，保持5分钟，期间泵以50mL/min运行
-program = controller.create_simple_program(
-    temperature=100.0,
-    hold_time=300,
-    pump_channel=1,
-    pump_flow_rate=50.0
-)
+# 获取串口（强制模式）
+manager.acquire_port("COM10", force=True)
 
-# 运行程序
-controller.load_program(program)
-controller.start()
+# 强制释放残留串口
+SerialPortForceRelease.force_release("COM10")
+
+# 清理所有串口
+manager.cleanup()
+```
+
+### 紧急停止
+
+```python
+from utils.device_safety import get_safety_manager
+
+manager = get_safety_manager()
+
+# 注册紧急停止回调
+manager.register_emergency_stop(my_device.emergency_stop)
+
+# 触发全局紧急停止
+manager.emergency_stop_all()
 ```
 
 ## 扩展新设备
 
-1. 继承 `BaseDevice` 基类
+1. 继承 `BaseDevice` 或 `SafeDevice` 基类
 
 ```python
-from devices.base_device import BaseDevice, DeviceConfig, DeviceStatus
+from utils.device_safety import SafeDevice, DeviceState
 
-class NewDevice(BaseDevice):
-    def connect(self) -> bool:
+class NewDevice(SafeDevice):
+    def __init__(self, config):
+        super().__init__(device_id=config.device_id)
+        self._config = config
+    
+    def connect(self, force: bool = False) -> bool:
+        self._set_state(DeviceState.INITIALIZING)
         # 实现连接逻辑
-        self._status = DeviceStatus.CONNECTED
+        self._set_state(DeviceState.RUNNING)
         return True
     
     def disconnect(self) -> bool:
+        self._set_state(DeviceState.STOPPING)
         # 实现断开逻辑
+        self._set_state(DeviceState.DISPOSED)
         return True
     
-    def read_data(self):
-        # 实现数据读取
-        return DeviceData(...)
+    def emergency_stop(self):
+        # 实现紧急停止
+        pass
 ```
 
 2. 添加到配置文件
@@ -233,9 +300,12 @@ class NewDevice(BaseDevice):
 |------|------|
 | Python 3.8+ | 主要开发语言 |
 | pyserial | 串口通信 |
+| pyyaml | 配置管理 |
+| psutil | 进程管理 |
 | matplotlib | 数据可视化 |
-| PyYAML | 配置管理 |
 | struct | 二进制数据处理 |
+| threading | 多线程控制 |
+| dataclass | 数据结构定义 |
 
 ## 通信协议
 
@@ -252,6 +322,21 @@ class NewDevice(BaseDevice):
 - 支持浮点数和整数数据类型
 
 详见：[docs/presentation.md](docs/presentation.md)
+
+## 项目上下文
+
+新对话开始时，请先阅读项目上下文：
+
+```
+@context/PROJECT_CONTEXT.md
+```
+
+## 仓库地址
+
+| 平台 | 地址 |
+|------|------|
+| Gitee (主) | https://gitee.com/wh158958/heat |
+| GitHub (镜像) | https://github.com/WH15958/Heat |
 
 ## 许可证
 

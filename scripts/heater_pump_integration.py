@@ -2,10 +2,10 @@
 蠕动泵与加热器联动控制示例
 
 实验流程：
-1. 加热到30°C
-2. 到达30°C时，蠕动泵通道1开始定时定量运行
-3. 同时保持温度20分钟
-4. 保持结束后开始降温
+1. 从当前温度5分钟升温至35°C
+2. 当温度到达30°C时蠕动泵通道1和4同时定时定量运行
+3. 温度在35°C稳定5分钟
+4. 停止加热，停止蠕动泵
 
 使用方法：
     python scripts/heater_pump_integration.py
@@ -16,8 +16,10 @@ import os
 import time
 import argparse
 import threading
+import signal
+import atexit
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _project_root)
@@ -28,10 +30,36 @@ from devices.peristaltic_pump import (
     LabSmartPumpDevice, 
     PeristalticPumpConfig, 
     PumpChannelConfig,
-    PumpChannelData
 )
 from devices.base_device import DeviceInfo, DeviceType
 from protocols.pump_params import PumpRunMode, PumpDirection
+from utils.config import ConfigManager, SystemConfig, HeaterDeviceConfig, PumpDeviceConfig
+
+_stop_event = threading.Event()
+_experiment = None
+
+
+def signal_handler(signum, frame):
+    """信号处理器"""
+    print("\n\n收到停止信号，正在关闭...")
+    _stop_event.set()
+
+
+def cleanup():
+    """清理函数"""
+    global _experiment
+    if _experiment is not None:
+        try:
+            _experiment.stop_all()
+            _experiment.disconnect_devices()
+            print("[清理] 设备已断开")
+        except Exception as e:
+            print(f"[清理] 错误: {e}")
+
+
+atexit.register(cleanup)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 class ExperimentLogger:
@@ -58,153 +86,165 @@ class ExperimentLogger:
                 f.write(full_msg + "\n")
 
 
+class DeviceFactory:
+    """设备工厂 - 根据配置创建设备实例"""
+    
+    @staticmethod
+    def create_heater(config: HeaterDeviceConfig) -> AIHeaterDevice:
+        """创建加热器设备"""
+        heater_config = HeaterConfig(
+            device_id=config.device_id,
+            connection_params={
+                'port': config.connection.port,
+                'baudrate': config.connection.baudrate,
+                'address': config.connection.address,
+            },
+            timeout=config.connection.timeout,
+            decimal_places=config.decimal_places,
+        )
+        
+        device_info = DeviceInfo(
+            name=config.name,
+            device_type=DeviceType.HEATER,
+            manufacturer="Yudian",
+        )
+        
+        return AIHeaterDevice(heater_config, device_info)
+    
+    @staticmethod
+    def create_pump(config: PumpDeviceConfig) -> LabSmartPumpDevice:
+        """创建蠕动泵设备"""
+        channels = []
+        for ch in config.channels:
+            channels.append(PumpChannelConfig(
+                channel=ch.channel,
+                enabled=ch.enabled,
+                pump_head=ch.pump_head,
+                tube_model=ch.tube_model,
+                max_flow_rate=ch.max_flow_rate,
+            ))
+        
+        pump_config = PeristalticPumpConfig(
+            device_id=config.device_id,
+            connection_params={
+                'port': config.connection.port,
+                'baudrate': config.connection.baudrate,
+            },
+            slave_address=config.slave_address,
+            parity=config.parity,
+            stopbits=config.stopbits,
+            bytesize=config.bytesize,
+            channels=channels
+        )
+        
+        device_info = DeviceInfo(
+            name=config.name,
+            device_type=DeviceType.PUMP,
+            manufacturer="LabSmart",
+        )
+        
+        return LabSmartPumpDevice(pump_config, device_info)
+
+
 class HeaterPumpExperiment:
     """加热器与蠕动泵联动实验"""
     
     def __init__(
         self,
-        heater_port: str = "COM3",
-        pump_port: str = "COM4",
+        config_path: Optional[str] = None,
         log_file: Optional[str] = None
     ):
+        self.config_path = config_path or "config/system_config.yaml"
         self.logger = ExperimentLogger(log_file)
         
-        self.heater_port = heater_port
-        self.pump_port = pump_port
-        
-        self.heater: Optional[AIHeaterDevice] = None
+        self.heaters: List[AIHeaterDevice] = []
         self.pump: Optional[LabSmartPumpDevice] = None
-        
-        self.running = False
         self.pump_started = False
+        self.running = False
+        
+        self._pump_threads: List[threading.Thread] = []
+        
+        global _experiment
+        _experiment = self
+    
+    def stop_all(self):
+        """停止所有设备"""
+        _stop_event.set()
+        
+        for heater in self.heaters:
+            try:
+                heater.stop()
+            except Exception:
+                pass
+        
+        if self.pump:
+            try:
+                self.pump.stop_all()
+            except Exception:
+                pass
+        
+        for thread in self._pump_threads:
+            if thread.is_alive():
+                thread.join(timeout=2)
     
     def setup_devices(self):
         """初始化设备"""
-        self.logger.log("=" * 60)
+        self.logger.log("\n" + "=" * 60)
         self.logger.log("初始化设备...")
         self.logger.log("=" * 60)
         
-        heater_config = HeaterConfig(
-            device_id="heater1",
-            connection_params={
-                'port': self.heater_port,
-                'baudrate': 9600,
-                'address': 1,
-            },
-            timeout=2.0,
-            decimal_places=1,
-        )
+        config_manager = ConfigManager(self.config_path)
+        system_config = config_manager.load_config()
         
-        heater_info = DeviceInfo(
-            name="主加热器",
-            device_type=DeviceType.HEATER,
-            manufacturer="Yudian",
-        )
+        for heater_config in system_config.heaters:
+            self.logger.log(f"配置加热器: {heater_config.name} ({heater_config.connection.port})")
+            heater = DeviceFactory.create_heater(heater_config)
+            self.heaters.append(heater)
         
-        self.heater = AIHeaterDevice(heater_config, heater_info)
+        if system_config.pumps:
+            pump_config = system_config.pumps[0]
+            self.logger.log(f"配置蠕动泵: {pump_config.name} ({pump_config.connection.port})")
+            self.pump = DeviceFactory.create_pump(pump_config)
         
-        pump_config = PeristalticPumpConfig(
-            device_id="pump1",
-            connection_params={
-                'port': self.pump_port,
-                'baudrate': 9600,
-            },
-            slave_address=1,
-            channels=[
-                PumpChannelConfig(channel=1, enabled=True, max_flow_rate=100.0),
-            ]
-        )
-        
-        self.pump = LabSmartPumpDevice(pump_config)
-        
-        self.logger.log("设备配置完成")
+        self.logger.log(f"设备配置完成: {len(self.heaters)}个加热器, {1 if self.pump else 0}个蠕动泵")
     
     def connect_devices(self):
-        """连接设备"""
-        self.logger.log("\n连接加热器...")
-        if self.heater.connect():
-            self.logger.log(f"[OK] 加热器已连接: {self.heater.model_name}")
-        else:
-            raise RuntimeError("加热器连接失败")
-        
-        self.logger.log("\n连接蠕动泵...")
-        if self.pump.connect():
-            self.logger.log("[OK] 蠕动泵已连接")
-        else:
-            raise RuntimeError("蠕动泵连接失败")
-    
-    def disconnect_devices(self):
-        """断开设备连接"""
-        if self.heater:
-            self.heater.disconnect()
-            self.logger.log("[OK] 加热器已断开")
+        """连接所有设备"""
+        for i, heater in enumerate(self.heaters):
+            self.logger.log(f"\n连接加热器{i+1}...")
+            if not heater.connect():
+                raise RuntimeError(f"加热器{i+1}连接失败")
+            self.logger.log(f"[OK] 加热器{i+1}已连接: {heater.info.model}")
         
         if self.pump:
-            self.pump.disconnect()
-            self.logger.log("[OK] 蠕动泵已断开")
+            self.logger.log("\n连接蠕动泵...")
+            if not self.pump.connect():
+                raise RuntimeError("蠕动泵连接失败")
+            self.logger.log("[OK] 蠕动泵已连接")
     
-    def read_temperature(self) -> Tuple[float, float]:
-        """读取当前温度"""
-        data = self.heater.read_data()
-        return data.pv, data.sv
+    def disconnect_devices(self):
+        """断开所有设备"""
+        for heater in self.heaters:
+            try:
+                heater.disconnect()
+                self.logger.log(f"[OK] {heater.config.device_id}已断开")
+            except Exception as e:
+                self.logger.log(f"[WARN] 断开加热器失败: {e}")
+        
+        if self.pump:
+            try:
+                self.pump.disconnect()
+                self.logger.log("[OK] 蠕动泵已断开")
+            except Exception as e:
+                self.logger.log(f"[WARN] 断开蠕动泵失败: {e}")
     
-    def wait_for_temperature(
-        self, 
-        target: float, 
-        tolerance: float = 0.5,
-        timeout: float = 600,
-        check_interval: float = 2.0
-    ) -> bool:
-        """等待温度达到目标值"""
-        self.logger.log(f"等待温度达到 {target}°C (容差: ±{tolerance}°C)...")
-        
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            pv, sv = self.read_temperature()
-            elapsed = time.time() - start_time
-            
-            self.logger.log(f"温度: PV={pv:.1f}°C, SV={sv:.1f}°C, 目标={target}°C")
-            
-            if abs(pv - target) <= tolerance:
-                self.logger.log(f"[OK] 温度已稳定在 {target}°C")
-                return True
-            
-            time.sleep(check_interval)
-        
-        self.logger.log(f"[WARN] 等待超时，当前温度: {pv:.1f}°C")
-        return False
-    
-    def hold_temperature_with_pump(
-        self, 
-        duration_minutes: float, 
-        check_interval: float = 10.0
-    ):
-        """保持当前温度一段时间，同时监控蠕动泵状态"""
-        self.logger.log(f"\n保持温度 {duration_minutes} 分钟（蠕动泵同时运行）...")
-        
-        duration_seconds = duration_minutes * 60
-        start_time = time.time()
-        
-        while time.time() - start_time < duration_seconds:
-            pv, sv = self.read_temperature()
-            elapsed = time.time() - start_time
-            remaining = duration_seconds - elapsed
-            
-            pump_status = ""
-            if self.pump_started:
-                status = self.pump.get_channel_status(1)
-                if status:
-                    pump_status = f" | 泵: {status.dispensed_volume:.1f}mL"
-            
-            self.logger.log(
-                f"保持中: PV={pv:.1f}°C, SV={sv:.1f}°C, "
-                f"剩余: {remaining/60:.1f}分钟{pump_status}"
-            )
-            
-            time.sleep(check_interval)
-        
-        self.logger.log("[OK] 保持阶段完成")
+    def read_temperatures(self) -> List[Tuple[float, float]]:
+        """读取所有加热器温度"""
+        temps = []
+        for heater in self.heaters:
+            pv, sv = heater.read_temperature()
+            temps.append((pv, sv))
+        return temps
     
     def start_pump_async(self):
         """异步启动蠕动泵分装序列"""
@@ -212,109 +252,72 @@ class HeaterPumpExperiment:
             try:
                 self.start_pump_dispense_sequence()
             except Exception as e:
-                self.logger.log(f"[ERROR] 蠕动泵线程出错: {e}")
+                if not _stop_event.is_set():
+                    self.logger.log(f"[ERROR] 蠕动泵线程出错: {e}")
         
-        thread = threading.Thread(target=pump_thread, daemon=True)
+        thread = threading.Thread(target=pump_thread, daemon=False)
+        self._pump_threads.append(thread)
         thread.start()
         return thread
     
-    def ramp_temperature(
-        self,
-        start_temp: float,
-        end_temp: float,
-        duration_minutes: float,
-        interval_seconds: float = 10.0
-    ):
-        """斜率升温/降温"""
-        self.logger.log(f"\n{'='*60}")
-        self.logger.log(f"温度变化: {start_temp}°C → {end_temp}°C")
-        self.logger.log(f"持续时间: {duration_minutes} 分钟")
-        self.logger.log(f"{'='*60}")
-        
-        duration_seconds = duration_minutes * 60
-        temp_diff = end_temp - start_temp
-        steps = max(1, int(duration_seconds / interval_seconds))
-        temp_step = temp_diff / steps
-        
-        start_time = time.time()
-        
-        for step in range(steps + 1):
-            target_temp = start_temp + temp_step * step
-            self.heater.set_temperature(target_temp)
-            
-            pv, sv = self.read_temperature()
-            elapsed = time.time() - start_time
-            remaining = duration_seconds - elapsed
-            
-            self.logger.log(
-                f"目标: {target_temp:.1f}°C | "
-                f"当前: PV={pv:.1f}°C | "
-                f"设定: SV={sv:.1f}°C | "
-                f"剩余: {remaining:.0f}秒"
-            )
-            
-            if step < steps:
-                time.sleep(interval_seconds)
-        
-        self.logger.log(f"[OK] 温度变化完成")
-    
-    def cooldown_to_target(
-        self,
-        target_temp: float,
-        check_interval: float = 5.0,
-        pump_trigger_temp: float = 3.0
-    ):
-        """降温到目标温度，并在触发温度启动蠕动泵"""
-        self.logger.log(f"\n{'='*60}")
-        self.logger.log(f"降温阶段: 目标 {target_temp}°C")
-        self.logger.log(f"蠕动泵触发温度: {pump_trigger_temp}°C")
-        self.logger.log(f"{'='*60}")
-        
-        self.heater.set_temperature(target_temp)
-        
-        while True:
-            pv, sv = self.read_temperature()
-            
-            self.logger.log(f"降温中: PV={pv:.1f}°C, SV={sv:.1f}°C")
-            
-            if not self.pump_started and pv <= pump_trigger_temp:
-                self.logger.log(f"\n{'*'*60}")
-                self.logger.log(f"温度达到 {pump_trigger_temp}°C，启动蠕动泵！")
-                self.logger.log(f"{'*'*60}\n")
-                self.start_pump_dispense_sequence()
-            
-            if pv <= target_temp + 0.5:
-                self.logger.log(f"[OK] 降温完成，当前温度: {pv:.1f}°C")
-                break
-            
-            time.sleep(check_interval)
-    
     def start_pump_dispense_sequence(self):
-        """启动蠕动泵定时定量分装序列"""
+        """启动蠕动泵定时定量分装序列（通道1和通道4同时运行）"""
         self.pump_started = True
         
-        dispense_configs = [
-            {"volume": 10.0, "flow_rate": 20.0, "name": "小量快速"},
-            {"volume": 25.0, "flow_rate": 30.0, "name": "中量中速"},
-            {"volume": 50.0, "flow_rate": 50.0, "name": "大量高速"},
-            {"volume": 15.0, "flow_rate": 15.0, "name": "小量慢速"},
-        ]
+        channel_configs = {
+            1: [
+                {"volume": 10.0, "flow_rate": 20.0, "name": "CH1-小量快速"},
+            ],
+            4: [
+                {"volume": 15.0, "flow_rate": 15.0, "name": "CH4-小量慢速"},
+            ]
+        }
         
-        for i, config in enumerate(dispense_configs):
-            self.logger.log(f"\n--- 分装 {i+1}/{len(dispense_configs)}: {config['name']} ---")
+        self.logger.log("\n" + "=" * 60)
+        self.logger.log("启动多通道分装序列")
+        self.logger.log("=" * 60)
+        
+        threads = []
+        for channel, configs in channel_configs.items():
+            thread = threading.Thread(
+                target=self._run_channel_sequence,
+                args=(channel, configs),
+                daemon=False
+            )
+            self._pump_threads.append(thread)
+            thread.start()
+            threads.append(thread)
+        
+        for thread in threads:
+            thread.join()
+        
+        if not _stop_event.is_set():
+            self.logger.log("\n[OK] 所有通道分装任务完成！")
+    
+    def _run_channel_sequence(self, channel: int, configs: list):
+        """运行单个通道的分装序列"""
+        for i, config in enumerate(configs):
+            if _stop_event.is_set():
+                return
+            
+            self.logger.log(f"\n--- 通道{channel} 分装 {i+1}/{len(configs)}: {config['name']} ---")
             self.logger.log(f"参数: 流速={config['flow_rate']} mL/min, 定量={config['volume']} mL")
             
             self.run_dispense_cycle(
-                channel=1,
+                channel=channel,
                 volume=config['volume'],
                 flow_rate=config['flow_rate']
             )
             
-            if i < len(dispense_configs) - 1:
-                self.logger.log("等待5秒后进行下一次分装...")
-                time.sleep(5)
+            if i < len(configs) - 1 and not _stop_event.is_set():
+                self.logger.log(f"通道{channel}: 等待3秒后进行下一次分装...")
+                for _ in range(30):
+                    if _stop_event.is_set():
+                        return
+                    time.sleep(0.1)
         
-        self.logger.log("\n[OK] 所有分装任务完成！")
+        if not _stop_event.is_set():
+            self.logger.log(f"[OK] 通道{channel} 分装序列完成")
     
     def run_dispense_cycle(
         self,
@@ -324,6 +327,13 @@ class HeaterPumpExperiment:
         direction: PumpDirection = PumpDirection.CLOCKWISE
     ):
         """执行一次定时定量分装"""
+        if not self.pump:
+            self.logger.log("[WARN] 蠕动泵未初始化")
+            return
+        
+        if _stop_event.is_set():
+            return
+        
         self.pump.set_run_mode(channel, PumpRunMode.QUANTITY_SPEED)
         self.pump.set_direction(channel, direction)
         self.pump.set_flow_rate(channel, flow_rate)
@@ -338,12 +348,18 @@ class HeaterPumpExperiment:
         
         start_time = time.time()
         
-        while True:
-            status = self.pump.get_channel_status(channel)
+        while not _stop_event.is_set():
+            if self.pump.is_closed():
+                return
+            
+            status = self.pump.read_channel_status(channel)
             
             if status is None:
                 self.logger.log("[WARN] 无法读取泵状态")
-                time.sleep(1)
+                for _ in range(10):
+                    if _stop_event.is_set():
+                        return
+                    time.sleep(0.1)
                 continue
             
             elapsed = time.time() - start_time
@@ -363,22 +379,36 @@ class HeaterPumpExperiment:
                 self.pump.stop_channel(channel)
                 break
             
-            time.sleep(1)
+            for _ in range(10):
+                if _stop_event.is_set():
+                    return
+                time.sleep(0.1)
+        
+        if _stop_event.is_set():
+            self.pump.stop_channel(channel)
     
     def run_experiment(
         self,
-        heat_temp: float = 30.0,
-        hold_minutes: float = 20.0,
-        cooldown_target: float = 3.0
+        target_temp: float = 35.0,
+        heat_duration_minutes: float = 5.0,
+        hold_minutes: float = 5.0,
+        pump_trigger_temp: float = 30.0
     ):
-        """运行完整实验"""
+        """
+        运行完整实验
+        
+        流程：
+        1. 从当前温度5分钟升温至35°C
+        2. 当温度到达30°C时蠕动泵通道1,4同时定时定量运行
+        3. 温度在35°C稳定5分钟
+        4. 停止加热，停止蠕动泵
+        """
         self.logger.log("\n" + "=" * 60)
         self.logger.log("开始实验")
         self.logger.log("=" * 60)
-        self.logger.log(f"加热目标: {heat_temp}°C")
-        self.logger.log(f"保持时间: {hold_minutes} 分钟")
-        self.logger.log(f"降温目标: {cooldown_target}°C")
-        self.logger.log(f"蠕动泵触发: 到达 {heat_temp}°C 时启动")
+        self.logger.log(f"升温目标: {target_temp}°C (预计{heat_duration_minutes}分钟)")
+        self.logger.log(f"蠕动泵触发温度: {pump_trigger_temp}°C")
+        self.logger.log(f"稳定保持时间: {hold_minutes} 分钟")
         self.logger.log("=" * 60 + "\n")
         
         self.running = True
@@ -388,73 +418,126 @@ class HeaterPumpExperiment:
             self.setup_devices()
             self.connect_devices()
             
-            pv, sv = self.read_temperature()
-            self.logger.log(f"初始温度: PV={pv:.1f}°C, SV={sv:.1f}°C")
+            temps = self.read_temperatures()
+            temp_strs = [f"H{i+1}={pv:.1f}°C" for i, (pv, sv) in enumerate(temps)]
+            self.logger.log(f"初始温度: {', '.join(temp_strs)}")
             
-            self.logger.log("\n--- 阶段1: 启动加热器 ---")
-            self.heater.start()
-            self.logger.log("[OK] 加热器已启动")
+            self.logger.log("\n--- 阶段1: 设置目标温度 ---")
+            for heater in self.heaters:
+                heater.set_temperature(target_temp)
+            self.logger.log(f"[OK] {len(self.heaters)}个加热器目标温度已设置为 {target_temp}°C")
             
-            self.logger.log(f"\n--- 阶段2: 加热到 {heat_temp}°C ---")
-            self.heater.set_temperature(heat_temp)
-            self.wait_for_temperature(heat_temp, tolerance=0.5, timeout=600)
+            self.logger.log("\n--- 阶段2: 启动加热器 ---")
+            for heater in self.heaters:
+                heater.start()
+            self.logger.log(f"[OK] {len(self.heaters)}个加热器已启动")
             
-            self.logger.log(f"\n{'*'*60}")
-            self.logger.log(f"温度达到 {heat_temp}°C，启动蠕动泵！")
-            self.logger.log(f"{'*'*60}\n")
+            self.logger.log(f"\n--- 阶段3: 升温至 {target_temp}°C ---")
+            self.logger.log(f"当温度达到 {pump_trigger_temp}°C 时启动蠕动泵")
             
-            self.logger.log("\n--- 阶段3: 启动蠕动泵（异步） ---")
-            pump_thread = self.start_pump_async()
-            self.logger.log("[OK] 蠕动泵线程已启动")
+            start_time = time.time()
+            heat_timeout = heat_duration_minutes * 60 + 120
+            pump_triggered = False
             
-            self.logger.log("\n--- 阶段4: 保持温度（蠕动泵同时运行） ---")
-            self.hold_temperature_with_pump(hold_minutes)
-            
-            self.logger.log("\n--- 阶段5: 等待蠕动泵完成 ---")
-            if pump_thread and pump_thread.is_alive():
-                self.logger.log("蠕动泵仍在运行，等待完成...")
-                pump_thread.join(timeout=300)
-                if pump_thread.is_alive():
-                    self.logger.log("[WARN] 蠕动泵运行超时，强制停止")
-                    self.pump.stop_channel(1)
-            
-            self.logger.log("\n--- 阶段6: 降温 ---")
-            self.heater.stop()
-            self.logger.log(f"开始降温到 {cooldown_target}°C...")
-            
-            while True:
-                pv, sv = self.read_temperature()
-                self.logger.log(f"降温中: PV={pv:.1f}°C")
+            while time.time() - start_time < heat_timeout and not _stop_event.is_set():
+                temps = self.read_temperatures()
+                elapsed = time.time() - start_time
                 
-                if pv <= cooldown_target + 0.5:
-                    self.logger.log(f"[OK] 降温完成，当前温度: {pv:.1f}°C")
+                temp_strs = [f"H{i+1}={pv:.1f}°C" for i, (pv, sv) in enumerate(temps)]
+                min_temp = min(pv for pv, sv in temps)
+                
+                pump_status = " | 泵: 运行中" if pump_triggered else ""
+                self.logger.log(f"升温中: {', '.join(temp_strs)} | 最低={min_temp:.1f}°C{pump_status}")
+                
+                if not pump_triggered and min_temp >= pump_trigger_temp:
+                    self.logger.log(f"\n{'*'*60}")
+                    self.logger.log(f"温度达到 {pump_trigger_temp}°C，启动蠕动泵！")
+                    self.logger.log(f"{'*'*60}\n")
+                    pump_thread = self.start_pump_async()
+                    pump_triggered = True
+                
+                all_reached = all(pv >= target_temp - 0.5 for pv, sv in temps)
+                if all_reached:
+                    self.logger.log(f"[OK] 所有加热器温度都已达到 {target_temp}°C")
                     break
                 
-                time.sleep(5)
+                for _ in range(20):
+                    if _stop_event.is_set():
+                        break
+                    time.sleep(0.1)
             
-            self.logger.log("\n--- 阶段7: 实验结束 ---")
-            self.heater.stop()
+            if _stop_event.is_set():
+                self.logger.log("\n[停止] 用户中断")
+                return
             
-            if self.pump_started:
+            self.logger.log(f"\n--- 阶段4: 在 {target_temp}°C 稳定 {hold_minutes} 分钟 ---")
+            hold_start = time.time()
+            hold_seconds = hold_minutes * 60
+            
+            while time.time() - hold_start < hold_seconds and not _stop_event.is_set():
+                temps = self.read_temperatures()
+                elapsed = time.time() - hold_start
+                remaining = hold_seconds - elapsed
+                
+                temp_strs = [f"H{i+1}={pv:.1f}°C" for i, (pv, sv) in enumerate(temps)]
+                
+                pump_status = ""
+                if pump_triggered and self.pump and not self.pump.is_closed():
+                    status_parts = []
+                    for ch in [1, 4]:
+                        status = self.pump.read_channel_status(ch)
+                        if status:
+                            status_parts.append(f"CH{ch}:{status.dispensed_volume:.1f}mL")
+                    if status_parts:
+                        pump_status = f" | 泵: {', '.join(status_parts)}"
+                
+                self.logger.log(
+                    f"保持中: {', '.join(temp_strs)}, "
+                    f"剩余: {remaining/60:.1f}分钟{pump_status}"
+                )
+                
+                for _ in range(100):
+                    if _stop_event.is_set():
+                        break
+                    time.sleep(0.1)
+            
+            if _stop_event.is_set():
+                self.logger.log("\n[停止] 用户中断")
+                return
+            
+            self.logger.log("[OK] 保持阶段完成")
+            
+            self.logger.log("\n--- 阶段5: 停止加热器和蠕动泵 ---")
+            for heater in self.heaters:
+                heater.stop()
+            self.logger.log("[OK] 所有加热器已停止")
+            
+            if pump_thread and pump_thread.is_alive():
+                self.logger.log("蠕动泵仍在运行，等待完成...")
+                pump_thread.join(timeout=60)
+            
+            if self.pump:
                 self.pump.stop_channel(1)
-                self.logger.log("[OK] 蠕动泵已停止")
+                self.pump.stop_channel(4)
+                self.logger.log("[OK] 蠕动泵已停止（通道1、4）")
+            
+            self.logger.log("\n--- 阶段6: 实验结束 ---")
+            
+            temps = self.read_temperatures()
+            temp_strs = [f"H{i+1}={pv:.1f}°C" for i, (pv, sv) in enumerate(temps)]
+            self.logger.log(f"最终温度: {', '.join(temp_strs)}")
             
             self.logger.log("\n" + "=" * 60)
             self.logger.log("实验完成！")
             self.logger.log("=" * 60)
             
-        except KeyboardInterrupt:
-            self.logger.log("\n\n[WARN] 用户中断实验")
-            self.heater.stop()
-            if self.pump:
-                self.pump.stop_channel(1)
-        
         except Exception as e:
             self.logger.log(f"\n[ERROR] 实验出错: {e}")
             import traceback
             traceback.print_exc()
         
         finally:
+            self.stop_all()
             self.disconnect_devices()
             self.running = False
 
@@ -462,32 +545,33 @@ class HeaterPumpExperiment:
 def main():
     parser = argparse.ArgumentParser(description="加热器与蠕动泵联动实验")
     parser.add_argument(
-        "--heater-port", 
-        default="COM3", 
-        help="加热器串口 (默认: COM3)"
+        "--config", 
+        default=None, 
+        help="配置文件路径 (默认: config/system_config.yaml)"
     )
     parser.add_argument(
-        "--pump-port", 
-        default="COM4", 
-        help="蠕动泵串口 (默认: COM4)"
-    )
-    parser.add_argument(
-        "--heat-temp", 
+        "--target-temp", 
         type=float, 
-        default=30.0, 
-        help="加热目标温度，蠕动泵在此温度启动 (默认: 30°C)"
+        default=35.0, 
+        help="升温目标温度 (默认: 35°C)"
+    )
+    parser.add_argument(
+        "--heat-duration", 
+        type=float, 
+        default=5.0, 
+        help="升温时间 (默认: 5分钟)"
     )
     parser.add_argument(
         "--hold-minutes", 
         type=float, 
-        default=20.0, 
-        help="保持时间 (默认: 20分钟)"
+        default=5.0, 
+        help="稳定保持时间 (默认: 5分钟)"
     )
     parser.add_argument(
-        "--cooldown-target", 
+        "--pump-trigger-temp", 
         type=float, 
-        default=3.0, 
-        help="降温目标温度 (默认: 3°C)"
+        default=30.0, 
+        help="蠕动泵触发温度 (默认: 30°C)"
     )
     parser.add_argument(
         "--log-file", 
@@ -498,15 +582,15 @@ def main():
     args = parser.parse_args()
     
     experiment = HeaterPumpExperiment(
-        heater_port=args.heater_port,
-        pump_port=args.pump_port,
+        config_path=args.config,
         log_file=args.log_file
     )
     
     experiment.run_experiment(
-        heat_temp=args.heat_temp,
+        target_temp=args.target_temp,
+        heat_duration_minutes=args.heat_duration,
         hold_minutes=args.hold_minutes,
-        cooldown_target=args.cooldown_target
+        pump_trigger_temp=args.pump_trigger_temp
     )
 
 

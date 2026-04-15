@@ -3,9 +3,27 @@ version: "1.0.0"
 
 heaters:
   - device_id: "heater1"
-    name: "主加热器"
+    name: "加热器1"
     connection:
-      port: "COM3"
+      port: "COM7"
+      baudrate: 9600
+      address: 1
+      parity: "N"
+      timeout: 2.0
+    decimal_places: 1
+    temperature_unit: "C"
+    max_temperature: 400.0
+    min_temperature: 0.0
+    safety_limit: 450.0
+    poll_interval: 1.0
+    retry_count: 3
+    retry_delay: 0.5
+    enabled: true
+
+  - device_id: "heater2"
+    name: "加热器2"
+    connection:
+      port: "COM9"
       baudrate: 9600
       address: 1
       parity: "N"
@@ -24,12 +42,12 @@ pumps:
   - device_id: "pump1"
     name: "蠕动泵"
     connection:
-      port: "COM4"
+      port: "COM10"
       baudrate: 9600
+      parity: "N"
+      stopbits: 1
+      bytesize: 8
     slave_address: 1
-    parity: "E"
-    stopbits: 1
-    bytesize: 8
     timeout: 2.0
     poll_interval: 1.0
     retry_count: 3
