@@ -88,6 +88,22 @@ Heat/
 
 ## 安装
 
+### 方式一：Conda 环境（推荐）
+
+```bash
+# 克隆仓库
+git clone https://gitee.com/wh158958/heat.git
+cd heat
+
+# 从 environment.yml 创建环境
+conda env create -f environment.yml
+
+# 激活环境
+conda activate heat
+```
+
+### 方式二：pip + venv
+
 ```bash
 # 克隆仓库
 git clone https://gitee.com/wh158958/heat.git
@@ -98,9 +114,13 @@ python -m venv venv
 venv\Scripts\activate  # Windows
 
 # 安装依赖
-pip install pyserial pyyaml psutil matplotlib
+pip install -r requirements.txt
+```
 
-# Windows 强制释放串口（可选）
+### 可选依赖
+
+```bash
+# Windows 强制释放串口
 pip install pywin32
 ```
 

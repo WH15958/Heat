@@ -28,7 +28,8 @@
 |---------|--------------------------------|
 | 项目类型 | 工业自动化 + Python 硬件控制 |
 | 核心功能 | 多设备联动控制、温度监控、流体分装 |
-| 开发环境 | Windows + Python 3.x + Trae IDE |
+| 开发环境 | Windows + Python 3.10 + Trae IDE |
+| Conda 环境 | `heat` |
 | 通信协议 | MODBUS RTU (RS232/RS485) |
 
 ### 1.2 核心目标
@@ -103,6 +104,8 @@
 Heat/
 ├── config/
 │   └── system_config.yaml      # 系统配置
+├── context/
+│   └── PROJECT_CONTEXT.md      # AI记忆库+交接手册
 ├── docs/
 │   ├── README.md               # 项目说明
 │   └── presentation.md         # 演示文档
@@ -124,8 +127,10 @@ Heat/
 │       ├── config.py           # 配置管理
 │       ├── serial_manager.py   # 串口资源管理
 │       └── device_safety.py    # 设备安全基类
-└── tests/
-    └── diagnose_pump.py        # 诊断工具
+├── tests/
+│   └── diagnose_pump.py        # 诊断工具
+├── environment.yml             # Conda环境配置
+└── requirements.txt            # pip依赖列表
 ```
 
 ---
@@ -795,10 +800,35 @@ python scripts/heater_pump_safe.py --heater-ports COM7 COM9 --pump-port COM10 --
 python tests/diagnose_pump.py
 ```
 
-### B. 依赖安装
+### B. 环境管理
+
+**推荐使用 Conda 管理环境：**
 
 ```bash
-pip install pyserial pyyaml psutil
+# 创建环境
+conda env create -f environment.yml
+
+# 激活环境
+conda activate heat
+
+# 导出环境（新增依赖后）
+conda env export > environment.yml
+
+# 删除环境
+conda env remove -n heat
+```
+
+**或使用 pip + venv：**
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**可选依赖：**
+
+```bash
 pip install pywin32  # Windows 强制释放串口
 ```
 
