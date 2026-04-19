@@ -6,6 +6,7 @@
 
 import logging
 import sys
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -142,7 +143,6 @@ class DeviceLogger:
     
     def log_data(self, data: dict):
         """记录设备数据"""
-        import json
         self.info(f"DATA: {json.dumps(data, ensure_ascii=False)}")
     
     def log_command(self, command: str, value, success: bool):

@@ -10,6 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Callable, TypeVar
 import logging
+import time
 
 T = TypeVar('T')
 
@@ -257,7 +258,6 @@ class BaseDevice(ABC):
                     f"{operation_name} failed (attempt {attempt + 1}/{self.config.retry_count}): {e}"
                 )
                 if attempt < self.config.retry_count - 1:
-                    import time
                     time.sleep(self.config.retry_delay)
         
         raise last_error
