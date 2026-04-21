@@ -20,6 +20,11 @@ from .peristaltic_pump import (
     PumpChannelConfig,
     PumpChannelData,
 )
+from .safe_pump import (
+    SafePumpDevice,
+    ChannelTask,
+    ChannelState,
+)
 
 __all__ = [
     'BaseDevice',
@@ -36,4 +41,7 @@ __all__ = [
     'PeristalticPumpData',
     'PumpChannelConfig',
     'PumpChannelData',
+    'SafePumpDevice',
+    'ChannelTask',
+    'ChannelState',
 ]

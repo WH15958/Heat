@@ -185,7 +185,7 @@ pumps:
 ### 安全蠕动泵控制（推荐）
 
 ```python
-from devices.safe_pump import SafePumpDevice, ChannelTask
+from devices import SafePumpDevice, ChannelTask
 from devices.peristaltic_pump import PeristalticPumpConfig, PumpChannelConfig
 from protocols.pump_params import PumpRunMode, PumpDirection
 
@@ -253,7 +253,7 @@ experiment.run()
 ### 串口资源管理
 
 ```python
-from utils.serial_manager import get_serial_manager, SerialPortForceRelease
+from utils import get_serial_manager, SerialPortForceRelease
 
 manager = get_serial_manager()
 
@@ -270,7 +270,7 @@ manager.cleanup()
 ### 紧急停止
 
 ```python
-from utils.device_safety import get_safety_manager
+from utils import get_safety_manager
 
 manager = get_safety_manager()
 
@@ -286,7 +286,7 @@ manager.emergency_stop_all()
 1. 继承 `BaseDevice` 或 `SafeDevice` 基类
 
 ```python
-from utils.device_safety import SafeDevice, DeviceState
+from utils import SafeDevice, DeviceState
 
 class NewDevice(SafeDevice):
     def __init__(self, config):

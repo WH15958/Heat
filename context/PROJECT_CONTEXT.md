@@ -410,12 +410,12 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 ```python
 # 1. 使用 SerialPortManager 管理串口
-from utils.serial_manager import get_serial_manager
+from utils import get_serial_manager
 manager = get_serial_manager()
 manager.acquire_port("COM10", force=True)
 
 # 2. 使用 SafePumpDevice 替代 LabSmartPumpDevice
-from devices.safe_pump import SafePumpDevice
+from devices import SafePumpDevice
 pump = SafePumpDevice(config)
 pump.connect(force=True)
 
@@ -738,7 +738,7 @@ main (主分支 - 稳定版本)
 ### 8.1.3 设备驱动模板
 
 ```python
-from utils.device_safety import SafeDevice, DeviceState
+from utils import SafeDevice, DeviceState
 
 class XxxDevice(SafeDevice):
     def __init__(self, config):

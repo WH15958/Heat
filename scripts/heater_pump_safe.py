@@ -27,13 +27,11 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _project_root)
 sys.path.insert(0, os.path.join(_project_root, 'src'))
 
-from devices.heater import AIHeaterDevice, HeaterConfig
-from devices.safe_pump import SafePumpDevice, ChannelTask
+from devices import AIHeaterDevice, HeaterConfig, SafePumpDevice, ChannelTask
 from devices.peristaltic_pump import PeristalticPumpConfig, PumpChannelConfig
 from devices.base_device import DeviceInfo, DeviceType
 from protocols.pump_params import PumpRunMode, PumpDirection
-from utils.serial_manager import get_serial_manager, SerialPortForceRelease, cleanup_all_serial_ports
-from utils.device_safety import get_safety_manager, DeviceState, DeviceError
+from utils import get_serial_manager, SerialPortForceRelease, cleanup_all_serial_ports, get_safety_manager, DeviceState, DeviceError
 
 _experiment = None
 _stop_event = threading.Event()

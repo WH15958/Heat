@@ -16,6 +16,24 @@ from .logger import (
     get_logger,
     DeviceLogger,
 )
+from .serial_manager import (
+    get_serial_manager,
+    SerialPortLock,
+    SerialPortManager,
+    SerialPortForceRelease,
+    acquire_serial_port,
+    release_serial_port,
+    cleanup_all_serial_ports,
+)
+from .device_safety import (
+    get_safety_manager,
+    DeviceSafetyManager,
+    SafeDevice,
+    DeviceState,
+    DeviceError,
+    ChannelManager,
+    ThreadSafeExecutor,
+)
 
 __all__ = [
     'ConfigManager',
@@ -28,4 +46,18 @@ __all__ = [
     'setup_logging',
     'get_logger',
     'DeviceLogger',
+    'get_serial_manager',
+    'SerialPortLock',
+    'SerialPortManager',
+    'SerialPortForceRelease',
+    'acquire_serial_port',
+    'release_serial_port',
+    'cleanup_all_serial_ports',
+    'get_safety_manager',
+    'DeviceSafetyManager',
+    'SafeDevice',
+    'DeviceState',
+    'DeviceError',
+    'ChannelManager',
+    'ThreadSafeExecutor',
 ]
