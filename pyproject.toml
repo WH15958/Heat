@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heat"
+version = "0.1.0"
+description = "自动化控制系统"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = []
+dependencies = [
+    "pyserial>=3.5",
+    "PyPDF2>=3.0.0",
+    "pefile>=2023.2.7",
+    "matplotlib>=3.5.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+windows = [
+    "pywin32>=306",
+    "psutil>=5.9.0",
+]
+
+[project.scripts]
+heat = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

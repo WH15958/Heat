@@ -3,3 +3,7 @@ PyPDF2>=3.0.0
 pefile>=2023.2.7
 matplotlib>=3.5.0
 PyYAML>=6.0
+
+# Windows 可选依赖（用于串口强制释放）
+# pywin32>=306
+# psutil>=5.9.0

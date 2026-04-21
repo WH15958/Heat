@@ -4,13 +4,6 @@
 主程序入口，提供设备控制、数据监控和报告生成的统一接口。
 """
 
-import sys
-import os
-
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _project_root)
-sys.path.insert(0, os.path.join(_project_root, 'src'))
-
 import argparse
 import signal
 import time

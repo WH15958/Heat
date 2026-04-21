@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 > 
-> 最后更新：2026-04-15
-> 版本：v1.5
+> 最后更新：2026-04-22
+> 版本：v1.6
 
 ---
 
@@ -126,11 +126,14 @@ Heat/
 │   └── utils/
 │       ├── config.py           # 配置管理
 │       ├── serial_manager.py   # 串口资源管理
-│       └── device_safety.py    # 设备安全基类
+│       ├── device_safety.py    # 设备安全基类
+│       └── logger.py           # 日志工具
 ├── tests/
 │   └── diagnose_pump.py        # 诊断工具
 ├── environment.yml             # Conda环境配置
-└── requirements.txt            # pip依赖列表
+├── requirements.txt            # pip依赖列表
+├── pyproject.toml              # Python项目配置(新增)
+└── README.md                   # 项目说明
 ```
 
 ---
@@ -528,6 +531,73 @@ manager.register_emergency_stop(pump.emergency_stop)
 - 下次启动时强制释放
 - **无法完全解决**：这是操作系统层面限制
 
+### 6.6 2026-04-22 代码审查与修复
+
+**问题现象：**
+- 多处使用 `daemon=True` 线程
+- `requirements.txt` 缺少可选依赖说明
+- 多处使用空 `except:` 捕获所有异常
+- `src/` 下文件重复定义 `_project_root` 并插入 `sys.path`
+- 缺少配置验证机制
+
+**根本原因：**
+1. 开发过程中逐步引入的问题，未进行统一审查
+2. 缺少项目级打包配置，导致路径处理混乱
+3. 异常处理不规范，可能掩盖真实错误
+4. 配置加载时未进行有效性验证
+
+**最终解决方案：**
+
+```python
+# 1. 创建 pyproject.toml，实现可编辑模式安装
+# pyproject.toml
+[project]
+name = "heat"
+version = "0.1.0"
+dependencies = [
+    "pyserial>=3.5",
+    "PyYAML>=6.0",
+]
+[project.optional-dependencies]
+windows = ["pywin32>=306", "psutil>=5.9.0"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# 2. 安装项目
+pip install -e .
+
+# 3. 移除 src/ 下文件的重复路径处理代码
+# 之前：
+_project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(_project_root))
+# 之后：直接使用包导入
+
+# 4. 完善异常处理，避免空 except
+try:
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+except (OSError, ValueError):  # 明确捕获具体异常
+    pass
+
+# 5. 为配置类添加 validate() 方法
+class BaseConfig:
+    def validate(self) -> List[str]:
+        return []
+
+class DeviceConnectionConfig(BaseConfig):
+    def validate(self) -> List[str]:
+        errors = []
+        if self.baudrate not in [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]:
+            errors.append(f"波特率无效: {self.baudrate}")
+        return errors
+```
+
+**经验教训：**
+- **定期代码审查**：即使是小问题，积累起来也会影响项目质量
+- **使用标准 Python 打包**：`pyproject.toml` + `pip install -e .` 是解决路径问题的标准方案
+- **明确异常捕获**：捕获具体异常类型，避免掩盖错误
+- **配置验证**：加载配置时立即验证，提前发现问题
+
 ---
 
 ## 7. AI 开发指南
@@ -818,19 +888,34 @@ conda env export > environment.yml
 conda env remove -n heat
 ```
 
-**或使用 pip + venv：**
+**或使用 pip + venv + pyproject.toml：**
 
 ```bash
+# 创建虚拟环境
 python -m venv venv
 venv\Scripts\activate
+
+# 安装项目（推荐：可编辑模式）
+pip install -e .
+
+# 安装项目 + Windows 可选依赖
+pip install -e ".[windows]"
+
+# 仅安装依赖（不安装项目）
 pip install -r requirements.txt
 ```
 
 **可选依赖：**
 
 ```bash
-pip install pywin32  # Windows 强制释放串口
+# Windows 可选依赖（用于串口强制释放）
+pip install pywin32 psutil
 ```
+
+**项目结构说明：**
+- `pyproject.toml` 定义了项目元数据、依赖和包发现配置
+- `pip install -e .` 将 `src/` 目录安装到 Python 路径中
+- 安装后可以直接使用 `from devices import ...`、`from utils import ...`，无需处理路径
 
 ### C. 配置文件模板
 

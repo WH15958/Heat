@@ -77,7 +77,7 @@ class DeviceSafetyManager:
         try:
             signal.signal(signal.SIGTERM, self._signal_handler)
             signal.signal(signal.SIGINT, self._signal_handler)
-        except:
+        except (OSError, ValueError):
             pass
     
     def _signal_handler(self, signum, frame):

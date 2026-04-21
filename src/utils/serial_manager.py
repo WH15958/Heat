@@ -115,7 +115,7 @@ class SerialPortLock:
                     except OSError as e:
                         try:
                             temp_lock_file.unlink()
-                        except:
+                        except (OSError, FileNotFoundError):
                             pass
                         logger.warning(f"Race condition detected for {port}, please retry")
                         return False
@@ -128,7 +128,7 @@ class SerialPortLock:
                 logger.warning(f"Failed to read existing lock file: {e}")
                 try:
                     lock_file.unlink()
-                except:
+                except (OSError, FileNotFoundError):
                     pass
                 logger.warning(f"Removed corrupted lock file for {port}, please retry")
                 return False
@@ -184,7 +184,7 @@ class SerialPortLock:
             try:
                 with open(lock_file, 'r') as f:
                     return json.load(f)
-            except:
+            except (OSError, json.JSONDecodeError):
                 pass
         return None
 
@@ -267,7 +267,7 @@ class WatchdogThread(threading.Thread):
     """看门狗线程 - 监控主进程状态"""
     
     def __init__(self, callback=None, interval=1.0, parent_pid=None, check_parent: bool = False):
-        super().__init__(daemon=True, name="WatchdogThread")
+        super().__init__(daemon=False, name="WatchdogThread")
         self._stop_event = threading.Event()
         self._callback = callback
         self._interval = interval
@@ -311,7 +311,7 @@ class WatchdogThread(threading.Thread):
         try:
             import psutil
             return psutil.pid_exists(self._parent_pid)
-        except:
+        except ImportError:
             try:
                 os.kill(self._parent_pid, 0)
                 return True
@@ -353,7 +353,7 @@ class SerialPortManager:
             try:
                 signal.signal(signal.SIGTERM, self._signal_handler)
                 signal.signal(signal.SIGINT, self._signal_handler)
-            except:
+            except (OSError, ValueError):
                 pass
             self._cleanup_registered = True
     
@@ -436,6 +436,8 @@ class SerialPortManager:
         
         if self._watchdog:
             self._watchdog.stop()
+            if self._watchdog.is_alive():
+                self._watchdog.join(timeout=2.0)
             self._watchdog = None
         
         logger.info("SerialPortManager cleanup completed")

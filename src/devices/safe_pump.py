@@ -9,12 +9,6 @@
 5. 心跳检测
 """
 
-import sys
-import os
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, _project_root)
-sys.path.insert(0, os.path.join(_project_root, 'src'))
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
@@ -204,7 +198,7 @@ class SafePumpDevice(SafeDevice):
         self._stop_event.clear()
         self._command_thread = threading.Thread(
             target=self._command_loop,
-            daemon=True,
+            daemon=False,
             name=f"PumpCommand-{self._device_id}"
         )
         self._command_thread.start()
@@ -268,13 +262,15 @@ class SafePumpDevice(SafeDevice):
         
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
-            daemon=True,
+            daemon=False,
             name=f"PumpHeartbeat-{self._device_id}"
         )
         self._heartbeat_thread.start()
     
     def _stop_heartbeat_thread(self):
         """停止心跳线程"""
+        self._stop_event.set()
+        
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             self._heartbeat_thread.join(timeout=2.0)
     
