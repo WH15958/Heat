@@ -38,6 +38,18 @@ else:
     HAS_WIN32 = False
 
 
+def is_process_alive(pid: int) -> bool:
+    try:
+        if _platform == 'win32':
+            import psutil
+            return psutil.pid_exists(pid)
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ImportError):
+        return False
+
+
 class SerialPortLock:
     """串口锁文件管理"""
     
@@ -166,16 +178,7 @@ class SerialPortLock:
             self.release(port)
     
     def _is_process_alive(self, pid: int) -> bool:
-        """检查进程是否存活"""
-        try:
-            if _platform == 'win32':
-                import psutil
-                return psutil.pid_exists(pid)
-            else:
-                os.kill(pid, 0)
-                return True
-        except (OSError, ImportError):
-            return False
+        return is_process_alive(pid)
     
     def get_lock_info(self, port: str) -> Optional[Dict]:
         """获取锁信息"""
@@ -187,6 +190,91 @@ class SerialPortLock:
             except (OSError, json.JSONDecodeError):
                 pass
         return None
+    
+    def list_all_locks(self) -> list:
+        """
+        列出所有锁文件
+        
+        Returns:
+            list: 锁信息列表，每项包含 port, pid, time, datetime
+        """
+        locks = []
+        try:
+            if self.LOCK_DIR.exists():
+                for lock_file in self.LOCK_DIR.glob("*.lock"):
+                    try:
+                        with open(lock_file, 'r') as f:
+                            data = json.load(f)
+                        locks.append(data)
+                    except (OSError, json.JSONDecodeError):
+                        # 损坏的锁文件也记录一下
+                        locks.append({
+                            'port': lock_file.stem.replace("_", ":"),
+                            'pid': None,
+                            'time': None,
+                            'datetime': None,
+                            'corrupted': True
+                        })
+        except Exception as e:
+            logger.error(f"Failed to list locks: {e}")
+        return locks
+    
+    def cleanup_all_stale_locks(self, include_current_process: bool = False) -> int:
+        """
+        清理所有过期锁文件（包括其他进程遗留的）
+        
+        Args:
+            include_current_process: 是否清理当前进程的锁
+        
+        Returns:
+            int: 清理的锁文件数量
+        """
+        cleaned = 0
+        current_pid = os.getpid()
+        
+        try:
+            if self.LOCK_DIR.exists():
+                for lock_file in self.LOCK_DIR.glob("*.lock"):
+                    try:
+                        should_delete = False
+                        
+                        if include_current_process:
+                            should_delete = True
+                        else:
+                            # 检查是否是过期锁
+                            try:
+                                with open(lock_file, 'r') as f:
+                                    data = json.load(f)
+                                pid = data.get('pid')
+                                
+                                if pid and not self._is_process_alive(pid):
+                                    should_delete = True
+                                    logger.info(f"Found stale lock for {data.get('port')} (dead PID {pid})")
+                            except (OSError, json.JSONDecodeError):
+                                # 损坏的锁文件也删除
+                                should_delete = True
+                                logger.info(f"Found corrupted lock file: {lock_file.name}")
+                        
+                        if should_delete:
+                            lock_file.unlink()
+                            cleaned += 1
+                            logger.info(f"Deleted lock file: {lock_file.name}")
+                            
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {lock_file.name}: {e}")
+                
+                # 如果目录空了，删除目录
+                try:
+                    if self.LOCK_DIR.exists() and not list(self.LOCK_DIR.glob("*")):
+                        self.LOCK_DIR.rmdir()
+                        logger.info(f"Deleted empty lock directory: {self.LOCK_DIR}")
+                except Exception as e:
+                    logger.debug(f"Could not delete lock directory: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to cleanup locks: {e}")
+        
+        return cleaned
 
 
 class SerialPortForceRelease:
@@ -274,7 +362,7 @@ class WatchdogThread(threading.Thread):
         self._check_parent = check_parent
         self._parent_pid = parent_pid if check_parent else None
         self._last_heartbeat = time.time()
-        self._heartbeat_timeout = 30.0
+        self._heartbeat_timeout = 120.0
     
     def run(self):
         while not self._stop_event.is_set():
@@ -455,6 +543,32 @@ class SerialPortManager:
     def is_port_acquired(self, port: str) -> bool:
         """检查端口是否已被获取"""
         return port in self._active_ports
+    
+    def feed_watchdog(self):
+        """喂狗 - 更新看门狗心跳时间，防止误触发cleanup"""
+        if self._watchdog and self._watchdog.is_alive():
+            self._watchdog.heartbeat()
+    
+    def list_all_locks(self) -> list:
+        """
+        列出所有锁文件
+        
+        Returns:
+            list: 锁信息列表
+        """
+        return self._port_lock.list_all_locks()
+    
+    def cleanup_all_stale_locks(self, include_current_process: bool = False) -> int:
+        """
+        清理所有过期锁文件（包括其他进程遗留的）
+        
+        Args:
+            include_current_process: 是否清理当前进程的锁
+        
+        Returns:
+            int: 清理的锁文件数量
+        """
+        return self._port_lock.cleanup_all_stale_locks(include_current_process)
 
 
 _global_manager = None
@@ -480,3 +594,13 @@ def release_serial_port(port: str) -> bool:
 def cleanup_all_serial_ports():
     """便捷函数：清理所有串口"""
     get_serial_manager().cleanup()
+
+
+def list_all_serial_locks() -> list:
+    """便捷函数：列出所有锁文件"""
+    return get_serial_manager().list_all_locks()
+
+
+def cleanup_all_stale_serial_locks(include_current_process: bool = False) -> int:
+    """便捷函数：清理所有过期锁文件"""
+    return get_serial_manager().cleanup_all_stale_locks(include_current_process)

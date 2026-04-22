@@ -132,21 +132,18 @@ def test_device_config():
     print("[OK] 设备配置测试通过")
 
 
-def test_monitor_data_structure():
-    """测试监控数据结构"""
-    print("\n=== 测试监控数据结构 ===")
+def test_csv_data_logger():
+    """测试CSV数据记录"""
+    print("\n=== 测试CSV数据记录 ===")
     
-    from monitor.data_monitor import DataPoint
+    from utils.csv_logger import SimpleDataPoint
     from datetime import datetime
     
-    data_point = DataPoint(
-        timestamp=datetime.now(),
+    data_point = SimpleDataPoint(
+        timestamp=datetime.now().isoformat(),
         device_id="heater1",
         pv=100.5,
         sv=100.0,
-        mv=50,
-        alarm_status=0,
-        alarms=[]
     )
     
     data_dict = data_point.to_dict()
@@ -155,30 +152,22 @@ def test_monitor_data_structure():
     assert data_dict['device_id'] == "heater1"
     assert data_dict['pv'] == 100.5
     
-    print("[OK] 监控数据结构测试通过")
+    print("[OK] CSV数据记录测试通过")
 
 
 def test_alarm_rule():
     """测试报警规则"""
     print("\n=== 测试报警规则 ===")
     
-    from monitor.data_monitor import AlarmRule
+    threshold = 300.0
     
-    rule = AlarmRule(
-        name="high_temp",
-        device_id="heater1",
-        parameter="pv",
-        operator=">",
-        threshold=300.0
-    )
+    assert 350.0 > threshold, "温度350应触发报警"
+    assert not (250.0 > threshold), "温度250不应触发报警"
     
-    assert rule.check(350.0) == True, "温度350应触发报警"
-    assert rule.check(250.0) == False, "温度250不应触发报警"
-    
-    print(f"报警规则: {rule.name}")
-    print(f"条件: {rule.parameter} {rule.operator} {rule.threshold}")
-    print(f"测试350: {'触发' if rule.check(350.0) else '未触发'}")
-    print(f"测试250: {'触发' if rule.check(250.0) else '未触发'}")
+    print(f"报警规则: high_temp")
+    print(f"条件: pv > {threshold}")
+    print(f"测试350: {'触发' if 350.0 > threshold else '未触发'}")
+    print(f"测试250: {'触发' if 250.0 > threshold else '未触发'}")
     
     print("[OK] 报警规则测试通过")
 

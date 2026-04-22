@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 > 
-> 最后更新：2026-04-22
-> 版本：v1.6
+> 最后更新：2026-04-23
+版本：v2.0
 
 ---
 
@@ -55,29 +55,36 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    scripts/ (实验脚本层)                      │
-│         heater_pump_safe.py, test_pump_safe.py              │
-│         职责：实验流程编排，不涉及设备细节                        │
+│   chemical_synthesis_experiment.py, heater_only_experiment  │
+│   职责：实验流程编排，不涉及设备细节                        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  control/ (程序控制层)                        │
+│         program_controller.py                                │
+│         职责：实验步骤调度（单线程顺序执行）                    │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    devices/ (设备驱动层)                      │
-│         heater.py, safe_pump.py, peristaltic_pump.py        │
-│         职责：设备控制逻辑，封装通信细节                          │
+│         heater.py, peristaltic_pump.py                       │
+│         职责：设备控制逻辑，封装通信细节（纯同步，无线程）       │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    protocols/ (协议层)                        │
-│         modbus_rtu.py, pump_params.py                       │
+│         aibus.py, modbus_rtu.py, pump_params.py             │
 │         职责：通信协议实现，寄存器映射                           │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    utils/ (工具层)                            │
-│         serial_manager.py, device_safety.py, config.py      │
-│         职责：资源管理、安全机制、配置解析                        │
+│         serial_manager.py, config.py, csv_logger.py         │
+│         职责：资源管理、配置解析、数据记录                        │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -87,6 +94,21 @@
 │         职责：设备参数、串口配置、实验参数                        │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**关键架构约束：串口驱动必须是纯同步、无线程架构**
+
+串口是半双工通信，同一时间只能有一个指令在执行。正确的访问模式：
+
+```
+程序控制器（1个线程，顺序调度）
+    ↓
+加热器驱动（无线程）→ 串口A
+泵驱动 LabSmartPumpDevice（无线程）→ 串口B
+    ↓
+串口（单线程访问 → 100% 稳定）
+```
+
+**严禁在串口驱动内部开线程！** 心跳、状态刷新、任务调度全部放在上层（脚本/GUI）实现。
 
 ### 2.2 核心设计原则
 
@@ -107,33 +129,47 @@ Heat/
 ├── context/
 │   └── PROJECT_CONTEXT.md      # AI记忆库+交接手册
 ├── docs/
-│   ├── README.md               # 项目说明
+│   ├── images/                 # 文档图片
+│   ├── lock_cleanup_usage.md   # 锁文件清理说明
 │   └── presentation.md         # 演示文档
 ├── scripts/
-│   ├── heater_pump_integration.py  # 原集成脚本
-│   ├── heater_pump_safe.py         # 安全集成脚本
-│   ├── test_pump_only.py           # 原测试脚本
-│   └── test_pump_safe.py           # 安全测试脚本
+│   ├── chemical_synthesis_experiment.py  # 化学合成实验
+│   ├── heater_only_experiment.py         # 纯加热实验
+│   ├── temperature_experiment.py         # 温度控制实验
+│   ├── test_connections.py               # 设备连接测试
+│   └── cleanup_locks.py                  # 锁文件清理
 ├── src/
+│   ├── control/
+│   │   └── program_controller.py  # 程序控制器（单线程调度）
 │   ├── devices/
-│   │   ├── base_device.py      # 设备基类
-│   │   ├── heater.py           # 加热器驱动
-│   │   ├── peristaltic_pump.py # 蠕动泵驱动(基础)
-│   │   └── safe_pump.py        # 蠕动泵驱动(安全增强)
+│   │   ├── base_device.py          # 设备基类
+│   │   ├── heater.py               # 加热器驱动（纯同步）
+│   │   └── peristaltic_pump.py     # 蠕动泵驱动（纯同步）
+│   ├── monitor/
+│   │   └── __init__.py             # 已废弃DataMonitor
 │   ├── protocols/
-│   │   ├── modbus_rtu.py       # MODBUS协议
-│   │   └── pump_params.py      # 泵参数定义
+│   │   ├── aibus.py                # AI-BUS协议
+│   │   ├── modbus_rtu.py           # MODBUS RTU协议
+│   │   ├── parameters.py           # 加热器参数定义
+│   │   └── pump_params.py          # 泵参数定义
+│   ├── reports/
+│   │   └── report_generator.py     # 报告生成器
 │   └── utils/
-│       ├── config.py           # 配置管理
-│       ├── serial_manager.py   # 串口资源管理
-│       ├── device_safety.py    # 设备安全基类
-│       └── logger.py           # 日志工具
+│       ├── config.py               # 配置管理
+│       ├── serial_manager.py       # 串口资源管理
+│       ├── csv_logger.py           # CSV数据记录
+│       └── logger.py               # 日志工具
 ├── tests/
-│   └── diagnose_pump.py        # 诊断工具
-├── environment.yml             # Conda环境配置
-├── requirements.txt            # pip依赖列表
-├── pyproject.toml              # Python项目配置(新增)
-└── README.md                   # 项目说明
+│   ├── test_heater.py              # 加热器测试
+│   ├── test_hardware.py            # 硬件测试
+│   ├── diagnose.py                 # 诊断工具
+│   ├── diagnose_pump.py            # 泵诊断
+│   └── diagnose_ttl.py             # TTL诊断
+├── output/                         # 实验输出（报告/图表）
+├── environment.yml                 # Conda环境配置
+├── requirements.txt                # pip依赖列表
+├── pyproject.toml                  # Python项目配置
+└── README.md                       # 项目说明
 ```
 
 ---
@@ -150,6 +186,7 @@ Heat/
 | **禁止无锁串口操作** | 所有串口读写必须通过 `RLock` 保护 |
 | **禁止无 `finally` 清理** | 设备操作必须有 `try...finally` 确保资源释放 |
 | **禁止注释** | 代码必须自解释，除非用户明确要求 |
+| **禁止串口驱动内部开线程** | 心跳、轮询、命令队列等线程严禁在驱动层实现 |
 
 ### 3.2 推荐做法
 
@@ -347,7 +384,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 - 设置温度后需等待设备响应
 - 多加热器同时运行需独立线程监控
 
-### 5.2 蠕动泵 (LabSmartPumpDevice / SafePumpDevice)
+### 5.2 蠕动泵 (LabSmartPumpDevice)
 
 | 属性 | 值 |
 |------|-----|
@@ -368,19 +405,21 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 | 类 | 用途 |
 |---|------|
-| `LabSmartPumpDevice` | 基础驱动，直接操作串口 |
-| `SafePumpDevice` | 安全增强版，命令队列 + 通道隔离 |
-| `ChannelTask` | 通道任务定义 |
+| `LabSmartPumpDevice` | 基础驱动，纯同步操作串口 |
 
 **开发经验：**
 
 | 问题 | 原因 | 解决方案 |
 |------|------|----------|
 | 串口被占用 | 进程被强制终止，串口未释放 | 使用 `SerialPortManager` + 锁文件 |
-| 通道互相影响 | 共享串口，无隔离 | `SafePumpDevice` 命令队列 |
+| 通道互相影响 | 共享串口，无隔离 | 上层顺序调度，不要并发 |
 | 程序无法退出 | `daemon=True` 线程卡死 | `daemon=False` + 停止标志 |
 | 读取超时 | 串口阻塞 | 设置 `timeout` + 超时重试 |
 | 校验位错误 | 设备默认偶校验 | 确认设备配置，使用 N |
+
+**⚠️ 已废弃：SafePumpDevice**
+
+`SafePumpDevice` 因架构错误已移除。它在驱动内部开线程（命令队列线程、心跳线程、通道任务线程），导致多线程抢占串口，产生通信冲突、Timeout、锁文件无法释放等问题。串口是半双工通信，驱动必须是纯同步、无线程架构。
 
 **寄存器映射：**
 
@@ -597,6 +636,102 @@ class DeviceConnectionConfig(BaseConfig):
 - **使用标准 Python 打包**：`pyproject.toml` + `pip install -e .` 是解决路径问题的标准方案
 - **明确异常捕获**：捕获具体异常类型，避免掩盖错误
 - **配置验证**：加载配置时立即验证，提前发现问题
+
+### 6.7 2026-04-23 彻底移除 DataMonitor 解决串口资源竞争
+
+**问题现象：**
+- DataMonitor 后台独立线程持续轮询读取串口
+- 与主线程的加热控制指令产生严重串口资源竞争
+- 导致串口被占用、通信超时、指令错乱、数据丢包
+- 甚至程序崩溃，完全破坏加热实验的稳定性与安全性
+
+**根本原因：**
+1. 串口是硬件独占资源，不支持多线程共享读写
+2. DataMonitor 使用后台线程轮询，与主线程同时访问串口
+3. 该设计更适合网口/TCP/OPC UA 等非独占通信场景，不适合 RS485/串口
+
+**最终解决方案：**
+
+```python
+# 1. 创建 CSVDataLogger 替代 DataMonitor
+# src/utils/csv_logger.py
+class CSVDataLogger:
+    def __init__(self, output_dir: str, filename_prefix: str = "data"):
+        self._data_points: Dict[str, List[Dict]] = {}
+        # 完全在主线程运行，无后台线程
+    
+    def record(self, device_id: str, pv: float = None, sv: float = None, 
+               mv: float = None, alarm_status: int = 0, alarms: list = None):
+        # 手动调用记录数据
+```
+
+### 6.8 2026-04-23 移除 SafePumpDevice 解决多线程串口冲突
+
+**问题现象：**
+- SafePumpDevice 内部包含心跳线程、命令队列线程、通道任务线程
+- 多线程同时访问串口，产生大量通信冲突、Timeout
+- 锁文件无法释放，程序无法正常退出
+- 无论脚本还是GUI都无法稳定使用
+
+**根本原因：**
+1. 串口是半双工通信，同一时间只能有一个指令
+2. SafePumpDevice 在驱动内部开线程，从架构上就是错误的
+3. 命令队列看似解决了并发问题，实际上只是把冲突延迟和复杂化
+4. 心跳线程定期发送心跳包，与业务指令抢占串口
+5. 通道任务线程同时操作不同通道，共享同一串口
+
+**正确架构：**
+```
+程序控制器（1个线程，顺序调度）
+    ↓
+加热器驱动（无线程）→ 串口A
+泵驱动 LabSmartPumpDevice（无线程）→ 串口B
+    ↓
+串口（单线程访问 → 100% 稳定）
+```
+
+**最终解决方案：**
+1. 删除 `src/devices/safe_pump.py`（SafePumpDevice）
+2. 删除 `src/monitor/data_monitor.py`（DataMonitor，同样有后台线程问题）
+3. 删除 `src/utils/device_safety.py`（SafeDevice/ChannelManager/ThreadSafeExecutor，仅被SafePumpDevice使用）
+4. 所有泵操作改用 `LabSmartPumpDevice`（纯同步、无线程）
+5. 心跳、状态刷新、任务调度全部放在上层（脚本/GUI）实现
+
+**经验教训：**
+- **串口驱动必须是纯同步、无线程架构**，这是不可违反的铁律
+- 心跳、轮询、状态刷新等"便利功能"不应在驱动层实现
+- 上层（脚本/GUI）负责调度，驱动层只负责执行
+- ProgramController 的设计是正确的：虽然使用线程，但全程单线程顺序访问设备
+
+# 2. 在实验脚本中手动记录数据
+# scripts/chemical_synthesis_experiment.py
+def _record_temperature(self):
+    try:
+        if self.heater1:
+            pv1, sv1 = self.heater1.get_temperature()
+            self._csv_logger.record("heater1", pv1, sv1)
+    except Exception as e:
+        self.logger.log(f"警告: 读取加热器1温度失败: {e}")
+
+# 3. 更新所有相关文件移除 DataMonitor
+# src/main.py
+# scripts/heater_only_experiment.py
+# scripts/chemical_synthesis_experiment.py
+# src/__init__.py
+```
+
+**关键变更：**
+- 新增 `src/utils/csv_logger.py` 实现单线程 CSV 数据记录
+- 移除 `src/monitor/` 下 DataMonitor 相关代码的所有引用
+- 更新 `src/utils/__init__.py` 导出 CSVDataLogger
+- 更新 `src/__init__.py` 移除 DataMonitor 导出，添加 CSVDataLogger
+- 修改所有实验脚本使用 CSVDataLogger
+
+**经验教训：**
+- **独占资源绝对禁止多线程访问**：串口硬件同一时刻只允许一个线程操作
+- **设计选择必须匹配通信方式**：DataMonitor 适合网络通信，不适合独占串口
+- **宁愿手动记录也不要多线程冲突**：安全性 > 便利性
+- **问题暴露不一定立即明显**：竞争条件可能在长时间运行后才触发
 
 ---
 

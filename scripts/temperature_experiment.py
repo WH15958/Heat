@@ -341,8 +341,8 @@ def main():
             heater.stop()
             heater.disconnect()
             log("加热器已关闭")
-        except:
-            pass
+        except Exception as e:
+            log(f"  [警告] 关闭加热器异常: {e}")
     
     log(f"\n结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 

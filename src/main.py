@@ -6,6 +6,7 @@
 
 import argparse
 import signal
+import sys
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -14,9 +15,8 @@ import logging
 from devices import AIHeaterDevice, HeaterConfig, DeviceStatus
 from devices.base_device import DeviceConfig, DeviceInfo, DeviceType
 from protocols import AIBUSProtocol, ParameterCode
-from monitor import DataMonitor, AlarmRule
 from reports import ReportGenerator
-from utils import ConfigManager, setup_logging, get_logger
+from utils import ConfigManager, setup_logging, get_logger, CSVDataLogger, SimpleDataPoint, data_points_to_simple
 
 
 class AutomationController:
@@ -45,7 +45,7 @@ class AutomationController:
         self.config_manager = ConfigManager(config_path)
         self.config = None
         self._heaters: Dict[str, AIHeaterDevice] = {}
-        self._monitor: Optional[DataMonitor] = None
+        self._csv_logger: Optional[CSVDataLogger] = None
         self._report_generator: Optional[ReportGenerator] = None
         self._logger = get_logger(__name__)
         self._running = False
@@ -73,8 +73,11 @@ class AutomationController:
             
             self._init_heaters()
             
-            if self.config.monitor.enabled:
-                self._init_monitor()
+            # 初始化CSV记录器
+            self._csv_logger = CSVDataLogger(
+                output_dir=self.config.report.output_dir,
+                filename_prefix="experiment"
+            )
             
             self._report_generator = ReportGenerator(self.config.report.output_dir)
             
@@ -119,32 +122,27 @@ class AutomationController:
             self._heaters[heater_cfg.device_id] = heater
             self._logger.info(f"Heater device created: {heater_cfg.device_id}")
     
-    def _init_monitor(self):
-        """初始化数据监控"""
-        self._monitor = DataMonitor(
-            storage_dir="data",
-            use_database=self.config.monitor.enable_database,
-            poll_interval=self.config.monitor.log_interval,
-        )
+    def record_device_data(self, device_id: str):
+        """
+        手动记录设备数据
         
-        for device_id, heater in self._heaters.items():
-            self._monitor.add_device(heater)
-        
-        high_temp_rule = AlarmRule(
-            name="high_temperature_warning",
-            device_id="heater1",
-            parameter="pv",
-            operator=">",
-            threshold=350.0,
-            description="温度过高警告"
-        )
-        self._monitor.add_alarm_rule(high_temp_rule)
-        
-        self._monitor.add_alarm_callback(self._on_alarm)
-    
-    def _on_alarm(self, rule_name: str, device_id: str, value: float):
-        """报警回调处理"""
-        self._logger.warning(f"ALARM: {rule_name} on {device_id}, value={value}")
+        Args:
+            device_id: 设备ID
+        """
+        heater = self._heaters.get(device_id)
+        if heater and heater.is_connected():
+            try:
+                data = heater.read_data()
+                self._csv_logger.record(
+                    device_id=device_id,
+                    pv=data.pv,
+                    sv=data.sv,
+                    mv=data.mv,
+                    alarm_status=data.alarm_status,
+                    alarms=data.alarms
+                )
+            except Exception as e:
+                self._logger.warning(f"Failed to record data for {device_id}: {e}")
     
     def connect_device(self, device_id: str) -> bool:
         """
@@ -177,17 +175,17 @@ class AutomationController:
             self._logger.info(f"Device disconnected: {device_id}")
         return True
     
-    def start_monitoring(self):
-        """启动数据监控"""
-        if self._monitor:
-            self._monitor.start()
-            self._logger.info("Data monitoring started")
+    def start_recording(self):
+        """开始数据记录"""
+        if self._csv_logger:
+            self._csv_logger.start()
+            self._logger.info("Data recording started")
     
-    def stop_monitoring(self):
-        """停止数据监控"""
-        if self._monitor:
-            self._monitor.stop()
-            self._logger.info("Data monitoring stopped")
+    def stop_recording(self):
+        """停止数据记录"""
+        if self._csv_logger:
+            self._csv_logger.stop()
+            self._logger.info("Data recording stopped")
     
     def start_heater(self, device_id: str, temperature: float) -> bool:
         """
@@ -282,20 +280,30 @@ class AutomationController:
         Returns:
             str: 报告文件路径
         """
-        if self._monitor is None:
-            self._logger.error("Monitor not initialized")
+        if self._csv_logger is None:
+            self._logger.error("CSV logger not initialized")
             return None
         
+        # 获取数据
+        data_dicts = self._csv_logger.get_data_points(device_id)
+        
+        # 时间过滤
         if end_time is None:
             end_time = datetime.now()
         if start_time is None:
             start_time = end_time - timedelta(hours=1)
         
-        data_points = self._monitor.query_data(device_id, start_time, end_time)
+        filtered_data = [
+            d for d in data_dicts 
+            if start_time <= d["timestamp"] <= end_time
+        ]
         
-        if not data_points:
+        if not filtered_data:
             self._logger.warning(f"No data found for {device_id}")
             return None
+        
+        # 转换为SimpleDataPoint格式
+        data_points = data_points_to_simple(filtered_data)
         
         report_path = self._report_generator.generate(
             device_id=device_id,
@@ -363,7 +371,7 @@ class AutomationController:
         
         self._running = False
         
-        self.stop_monitoring()
+        self.stop_recording()
         
         for device_id in list(self._heaters.keys()):
             self.disconnect_device(device_id)
@@ -380,6 +388,7 @@ class AutomationController:
         print("  disconnect <device_id>  - 断开设备")
         print("  start <device_id> <temp> - 启动加热")
         print("  stop <device_id>        - 停止加热")
+        print("  record <device_id>      - 手动记录数据")
         print("  status [device_id]      - 查看状态")
         print("  report <device_id>      - 生成报告")
         print("  emergency [device_id]   - 紧急停止")
@@ -402,6 +411,9 @@ class AutomationController:
                     self.start_heater(cmd[1], float(cmd[2]))
                 elif cmd[0] == "stop" and len(cmd) >= 2:
                     self.stop_heater(cmd[1])
+                elif cmd[0] == "record" and len(cmd) >= 2:
+                    self.record_device_data(cmd[1])
+                    print(f"Data recorded for {cmd[1]}")
                 elif cmd[0] == "status":
                     if len(cmd) >= 2:
                         status = self.get_device_status(cmd[1])

@@ -211,6 +211,16 @@ class LabSmartPumpDevice(BaseDevice):
             
             try:
                 self._initialize_channels()
+                # 验证连接：尝试读取通道1状态，确保设备真的在响应
+                try:
+                    status = self.read_channel_status(1)
+                    self._logger.info(f"Connection verified: channel 1 status = {status}")
+                except Exception as verify_err:
+                    self._logger.error(f"Connection verification failed: {verify_err}")
+                    self._protocol.disconnect()
+                    self._protocol = None
+                    self._status = DeviceStatus.ERROR
+                    return False
             except Exception as e:
                 self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
             
