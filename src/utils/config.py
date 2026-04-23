@@ -123,8 +123,8 @@ class HeaterDeviceConfig(BaseConfig):
 
 
 @dataclass
-class PumpChannelConfig(BaseConfig):
-    """蠕动泵通道配置"""
+class PumpChannelConfigYaml(BaseConfig):
+    """蠕动泵通道配置（YAML解析用）"""
     channel: int = 1
     enabled: bool = True
     pump_head: int = 5
@@ -169,7 +169,7 @@ class PumpDeviceConfig(BaseConfig):
     retry_count: int = 3
     retry_delay: float = 0.5
     enabled: bool = True
-    channels: List[PumpChannelConfig] = field(default_factory=list)
+    channels: List[PumpChannelConfigYaml] = field(default_factory=list)
     
     def validate(self) -> List[str]:
         """验证配置"""
@@ -416,7 +416,7 @@ class ConfigManager:
             
             channels = []
             for ch_data in pump_data.get("channels", []):
-                channels.append(PumpChannelConfig(**ch_data))
+                channels.append(PumpChannelConfigYaml(**ch_data))
             
             pump = PumpDeviceConfig(
                 **{k: v for k, v in pump_data.items() if k not in ["connection", "channels"]},

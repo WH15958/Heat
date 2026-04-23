@@ -59,8 +59,11 @@ def cleanup():
         finally:
             _exp_instance = None
 
-    cleanup_all_serial_ports()
-    print("[清理] 串口资源已释放")
+    try:
+        cleanup_all_serial_ports()
+        print("[清理] 串口资源已释放")
+    except Exception as e:
+        print(f"[清理] 串口清理异常: {e}")
 
 
 class ExperimentLogger:
@@ -83,7 +86,7 @@ class ExperimentLogger:
                 try:
                     with open(self.log_file, 'a', encoding='utf-8') as f:
                         f.write(line + '\n')
-                except:
+                except Exception:
                     pass
 
 
@@ -221,11 +224,11 @@ class HeaterOnlyExperiment:
             try:
                 heater.stop()
                 heater.disconnect()
-            except:
+            except Exception:
                 pass
         try:
             self._serial_manager.release_port(port)
-        except:
+        except Exception:
             pass
 
     def disconnect_devices(self):
@@ -245,7 +248,7 @@ class HeaterOnlyExperiment:
             finally:
                 try:
                     self._serial_manager.release_port(self.heater1_port)
-                except:
+                except Exception:
                     pass
 
         # 停止加热器2
@@ -259,13 +262,13 @@ class HeaterOnlyExperiment:
             finally:
                 try:
                     self._serial_manager.release_port(self.heater2_port)
-                except:
+                except Exception:
                     pass
         
         # 停止CSV记录器
         try:
             self._csv_logger.stop()
-        except:
+        except Exception:
             pass
 
         self.logger.log("")

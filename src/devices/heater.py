@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 import logging
+import threading
 import time
 
 from devices.base_device import (
@@ -120,6 +121,7 @@ class AIHeaterDevice(BaseDevice):
         self._protocol: Optional[AIBUSProtocol] = None
         self._model_code: Optional[int] = None
         self._decimal_places: int = config.decimal_places
+        self._lock = threading.RLock()
         
     @property
     def protocol(self) -> Optional[AIBUSProtocol]:
@@ -231,33 +233,34 @@ class AIHeaterDevice(BaseDevice):
     
     def read_data(self) -> HeaterData:
         """
-        读取加热器数据
+        读取加热器全部数据（PV、SV、MV、报警状态等）
         
         Returns:
             HeaterData: 加热器数据对象
         
         Raises:
-            IOError: 读取失败
+            IOError: 设备未连接
         """
         if not self.is_connected():
             raise IOError("Device not connected")
         
         def _read():
-            pv, sv, mv, alarm_status = self._protocol.read_pv_sv()
-            
-            run_status_val = 0
-            is_manual = False
-            is_auto_tuning = False
-            
-            try:
-                status_val, _ = self._protocol.read_parameter(
-                    ParameterCode.OUTPUT_STATUS
-                )
-                run_status_val = status_val & 0x03
-                is_auto_tuning = bool(status_val & 0x04)
-                is_manual = bool(status_val & 0x08)
-            except Exception as e:
-                self._logger.debug(f"Could not read output status: {e}")
+            with self._lock:
+                pv, sv, mv, alarm_status = self._protocol.read_pv_sv()
+                
+                run_status_val = 0
+                is_manual = False
+                is_auto_tuning = False
+                
+                try:
+                    status_val, _ = self._protocol.read_parameter(
+                        ParameterCode.OUTPUT_STATUS
+                    )
+                    run_status_val = status_val & 0x03
+                    is_auto_tuning = bool(status_val & 0x04)
+                    is_manual = bool(status_val & 0x08)
+                except Exception as e:
+                    self._logger.debug(f"Could not read output status: {e}")
             
             alarms = self._parse_alarms(alarm_status)
             
@@ -359,46 +362,32 @@ class AIHeaterDevice(BaseDevice):
         """
         紧急停止加热器
         
-        立即停止加热，将输出设为0，确保安全。
-        
         Returns:
-            bool: 停止成功返回True
+            bool: 成功返回True
         """
         self._logger.warning("Emergency stop triggered!")
         
-        try:
-            self._protocol.write_parameter(
-                ParameterCode.SRUN, 
-                RunStatus.STOP,
-                decimal_places=0
-            )
-            
-            self._protocol.write_parameter(
-                ParameterCode.MV,
-                0,
-                decimal_places=0
-            )
-            
-            self._logger.info("Emergency stop completed")
-            return True
-        except Exception as e:
-            self._logger.error(f"Emergency stop failed: {e}")
-            return False
+        with self._lock:
+            try:
+                self._protocol.write_parameter(
+                    ParameterCode.SRUN, 
+                    RunStatus.STOP,
+                    decimal_places=0
+                )
+                
+                self._protocol.write_parameter(
+                    ParameterCode.MV,
+                    0,
+                    decimal_places=0
+                )
+                
+                self._logger.info("Emergency stop completed")
+                return True
+            except Exception as e:
+                self._logger.error(f"Emergency stop failed: {e}")
+                return False
     
     def set_temperature(self, temperature: float) -> bool:
-        """
-        设定目标温度
-        
-        Args:
-            temperature: 目标温度值
-        
-        Returns:
-            bool: 设定成功返回True
-        
-        Raises:
-            ValueError: 温度超出安全范围
-            IOError: 设定失败
-        """
         if temperature > self._heater_config.safety_limit:
             raise ValueError(
                 f"Temperature {temperature} exceeds safety limit "
@@ -411,16 +400,17 @@ class AIHeaterDevice(BaseDevice):
                 f"{self._heater_config.min_temperature}"
             )
         
-        def _set():
-            self._protocol.write_parameter(
-                ParameterCode.SV,
-                temperature,
-                decimal_places=self._decimal_places
-            )
-            self._logger.info(f"Temperature set to {temperature}°{self._heater_config.temperature_unit}")
-            return True
-        
-        return self.execute_with_retry(_set, "set_temperature")
+        with self._lock:
+            def _set():
+                self._protocol.write_parameter(
+                    ParameterCode.SV,
+                    temperature,
+                    decimal_places=self._decimal_places
+                )
+                self._logger.info(f"Temperature set to {temperature}°{self._heater_config.temperature_unit}")
+                return True
+            
+            return self.execute_with_retry(_set, "set_temperature")
     
     def get_temperature(self) -> tuple:
         """
@@ -433,179 +423,121 @@ class AIHeaterDevice(BaseDevice):
         return data.pv, data.sv
     
     def start(self) -> bool:
-        """
-        启动加热器运行
-        
-        Returns:
-            bool: 启动成功返回True
-        """
-        def _start():
-            self._protocol.write_parameter(
-                ParameterCode.SRUN,
-                RunStatus.RUN,
-                decimal_places=0
-            )
-            self._logger.info("Heater started")
-            return True
-        
-        return self.execute_with_retry(_start, "start")
+        """启动加热器（运行状态设为RUN）"""
+        with self._lock:
+            def _start():
+                self._protocol.write_parameter(
+                    ParameterCode.SRUN,
+                    RunStatus.RUN,
+                    decimal_places=0
+                )
+                self._logger.info("Heater started")
+                return True
+            
+            return self.execute_with_retry(_start, "start")
     
     def stop(self) -> bool:
-        """
-        停止加热器运行
-        
-        Returns:
-            bool: 停止成功返回True
-        """
-        def _stop():
-            self._protocol.write_parameter(
-                ParameterCode.SRUN,
-                RunStatus.STOP,
-                decimal_places=0
-            )
-            self._logger.info("Heater stopped")
-            return True
-        
-        return self.execute_with_retry(_stop, "stop")
+        """停止加热器（运行状态设为STOP）"""
+        with self._lock:
+            def _stop():
+                self._protocol.write_parameter(
+                    ParameterCode.SRUN,
+                    RunStatus.STOP,
+                    decimal_places=0
+                )
+                self._logger.info("Heater stopped")
+                return True
+            
+            return self.execute_with_retry(_stop, "stop")
     
     def hold(self) -> bool:
-        """
-        暂停加热器（保持当前状态）
-        
-        Returns:
-            bool: 暂停成功返回True
-        """
-        def _hold():
-            self._protocol.write_parameter(
-                ParameterCode.SRUN,
-                RunStatus.HOLD,
-                decimal_places=0
-            )
-            self._logger.info("Heater on hold")
-            return True
-        
-        return self.execute_with_retry(_hold, "hold")
+        """保持加热器当前输出（运行状态设为HOLD）"""
+        with self._lock:
+            def _hold():
+                self._protocol.write_parameter(
+                    ParameterCode.SRUN,
+                    RunStatus.HOLD,
+                    decimal_places=0
+                )
+                self._logger.info("Heater on hold")
+                return True
+            
+            return self.execute_with_retry(_hold, "hold")
     
     def set_manual_output(self, output_percent: int) -> bool:
-        """
-        设置手动输出百分比
-        
-        Args:
-            output_percent: 输出百分比(0-100)
-        
-        Returns:
-            bool: 设定成功返回True
-        
-        Raises:
-            ValueError: 输出值超出范围
-        """
         if not 0 <= output_percent <= 100:
             raise ValueError(f"Output must be 0-100, got {output_percent}")
         
-        def _set():
-            self._protocol.write_parameter(
-                ParameterCode.AMAN,
-                ManualAutoMode.MAN,
-                decimal_places=0
-            )
-            self._protocol.write_parameter(
-                ParameterCode.MV,
-                output_percent,
-                decimal_places=0
-            )
-            self._logger.info(f"Manual output set to {output_percent}%")
-            return True
-        
-        return self.execute_with_retry(_set, "set_manual_output")
+        with self._lock:
+            def _set():
+                self._protocol.write_parameter(
+                    ParameterCode.AMAN,
+                    ManualAutoMode.MAN,
+                    decimal_places=0
+                )
+                self._protocol.write_parameter(
+                    ParameterCode.MV,
+                    output_percent,
+                    decimal_places=0
+                )
+                self._logger.info(f"Manual output set to {output_percent}%")
+                return True
+            
+            return self.execute_with_retry(_set, "set_manual_output")
     
     def set_auto_mode(self) -> bool:
-        """
-        切换到自动控制模式
-        
-        Returns:
-            bool: 切换成功返回True
-        """
-        def _set():
-            self._protocol.write_parameter(
-                ParameterCode.AMAN,
-                ManualAutoMode.AUTO,
-                decimal_places=0
-            )
-            self._logger.info("Switched to auto mode")
-            return True
-        
-        return self.execute_with_retry(_set, "set_auto_mode")
+        with self._lock:
+            def _set():
+                self._protocol.write_parameter(
+                    ParameterCode.AMAN,
+                    ManualAutoMode.AUTO,
+                    decimal_places=0
+                )
+                self._logger.info("Switched to auto mode")
+                return True
+            
+            return self.execute_with_retry(_set, "set_auto_mode")
     
     def start_auto_tune(self) -> bool:
-        """
-        启动自整定功能
-        
-        自整定会自动计算最优PID参数。
-        
-        Returns:
-            bool: 启动成功返回True
-        """
-        def _start():
-            self._protocol.write_parameter(
-                ParameterCode.AT,
-                AutoTuneMode.ON,
-                decimal_places=0
-            )
-            self._logger.info("Auto-tune started")
-            return True
-        
-        return self.execute_with_retry(_start, "start_auto_tune")
+        with self._lock:
+            def _start():
+                self._protocol.write_parameter(
+                    ParameterCode.AT,
+                    AutoTuneMode.ON,
+                    decimal_places=0
+                )
+                self._logger.info("Auto-tune started")
+                return True
+            
+            return self.execute_with_retry(_start, "start_auto_tune")
     
     def stop_auto_tune(self) -> bool:
-        """
-        停止自整定
-        
-        Returns:
-            bool: 停止成功返回True
-        """
-        def _stop():
-            self._protocol.write_parameter(
-                ParameterCode.AT,
-                AutoTuneMode.OFF,
-                decimal_places=0
-            )
-            self._logger.info("Auto-tune stopped")
-            return True
-        
-        return self.execute_with_retry(_stop, "stop_auto_tune")
+        with self._lock:
+            def _stop():
+                self._protocol.write_parameter(
+                    ParameterCode.AT,
+                    AutoTuneMode.OFF,
+                    decimal_places=0
+                )
+                self._logger.info("Auto-tune stopped")
+                return True
+            
+            return self.execute_with_retry(_stop, "stop_auto_tune")
     
     def set_control_mode(self, mode: ControlMode) -> bool:
-        """
-        设置控制方式
-        
-        Args:
-            mode: 控制方式枚举值
-        
-        Returns:
-            bool: 设定成功返回True
-        """
-        def _set():
-            self._protocol.write_parameter(
-                ParameterCode.CTR_L,
-                mode,
-                decimal_places=0
-            )
-            self._logger.info(f"Control mode set to {ControlMode.get_description(mode)}")
-            return True
-        
-        return self.execute_with_retry(_set, "set_control_mode")
+        with self._lock:
+            def _set():
+                self._protocol.write_parameter(
+                    ParameterCode.CTR_L,
+                    mode,
+                    decimal_places=0
+                )
+                self._logger.info(f"Control mode set to {ControlMode.get_description(mode)}")
+                return True
+            
+            return self.execute_with_retry(_set, "set_control_mode")
     
     def set_alarm(self, alarm_type: str, value: float) -> bool:
-        """
-        设置报警值
-        
-        Args:
-            alarm_type: 报警类型 ('high', 'low', 'deviation_high', 'deviation_low')
-            value: 报警值
-        
-        Returns:
-            bool: 设定成功返回True
-        """
         param_map = {
             'high': ParameterCode.HIAL,
             'low': ParameterCode.LOAL,
@@ -616,16 +548,17 @@ class AIHeaterDevice(BaseDevice):
         if alarm_type not in param_map:
             raise ValueError(f"Unknown alarm type: {alarm_type}")
         
-        def _set():
-            self._protocol.write_parameter(
-                param_map[alarm_type],
-                value,
-                decimal_places=self._decimal_places
-            )
-            self._logger.info(f"Alarm '{alarm_type}' set to {value}")
-            return True
-        
-        return self.execute_with_retry(_set, "set_alarm")
+        with self._lock:
+            def _set():
+                self._protocol.write_parameter(
+                    param_map[alarm_type],
+                    value,
+                    decimal_places=self._decimal_places
+                )
+                self._logger.info(f"Alarm '{alarm_type}' set to {value}")
+                return True
+            
+            return self.execute_with_retry(_set, "set_alarm")
     
     def get_alarm_status(self) -> List[str]:
         """
@@ -638,51 +571,34 @@ class AIHeaterDevice(BaseDevice):
         return data.alarms
     
     def read_parameter(self, param_code: int) -> float:
-        """
-        读取指定参数值
-        
-        Args:
-            param_code: 参数代号
-        
-        Returns:
-            float: 参数值
-        """
         param_info = get_parameter_info(param_code)
         decimal_places = param_info.decimal_places if param_info else 0
         
-        def _read():
-            value, _ = self._protocol.read_parameter(
-                param_code, 
-                decimal_places=decimal_places
-            )
-            return value
-        
-        return self.execute_with_retry(_read, f"read_parameter({param_code})")
+        with self._lock:
+            def _read():
+                value, _ = self._protocol.read_parameter(
+                    param_code, 
+                    decimal_places=decimal_places
+                )
+                return value
+            
+            return self.execute_with_retry(_read, f"read_parameter({param_code})")
     
     def write_parameter(self, param_code: int, value: float) -> bool:
-        """
-        写入指定参数值
-        
-        Args:
-            param_code: 参数代号
-            value: 参数值
-        
-        Returns:
-            bool: 写入成功返回True
-        """
         param_info = get_parameter_info(param_code)
         decimal_places = param_info.decimal_places if param_info else 0
         
-        def _write():
-            self._protocol.write_parameter(
-                param_code,
-                value,
-                decimal_places=decimal_places
-            )
-            self._logger.info(f"Parameter {param_code} set to {value}")
-            return True
-        
-        return self.execute_with_retry(_write, f"write_parameter({param_code})")
+        with self._lock:
+            def _write():
+                self._protocol.write_parameter(
+                    param_code,
+                    value,
+                    decimal_places=decimal_places
+                )
+                self._logger.info(f"Parameter {param_code} set to {value}")
+                return True
+            
+            return self.execute_with_retry(_write, f"write_parameter({param_code})")
     
     def wait_for_temperature(self, target: float, tolerance: float = 1.0, 
                             timeout: float = 3600.0,

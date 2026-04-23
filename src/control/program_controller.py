@@ -127,6 +127,7 @@ class ProgramController:
         self._pump = pump
         self._program: Optional[ProgramConfig] = None
         self._status = ProgramStatus()
+        self._status_lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
@@ -140,8 +141,8 @@ class ProgramController:
     
     @property
     def status(self) -> ProgramStatus:
-        """获取程序状态"""
-        return self._status
+        with self._status_lock:
+            return self._status
     
     @property
     def program(self) -> Optional[ProgramConfig]:
@@ -206,13 +207,14 @@ class ProgramController:
         
         self._stop_event.clear()
         self._pause_event.clear()
-        self._status.running = True
-        self._status.paused = False
-        self._status.completed = False
-        self._status.current_step = 0
-        self._status.error = None
+        with self._status_lock:
+            self._status.running = True
+            self._status.paused = False
+            self._status.completed = False
+            self._status.current_step = 0
+            self._status.error = None
         
-        self._thread = threading.Thread(target=self._run_program, daemon=True)
+        self._thread = threading.Thread(target=self._run_program, daemon=False)
         self._thread.start()
         
         self._logger.info("Program started")
@@ -227,8 +229,9 @@ class ProgramController:
             self._thread.join(timeout=5.0)
             self._thread = None
         
-        self._status.running = False
-        self._status.paused = False
+        with self._status_lock:
+            self._status.running = False
+            self._status.paused = False
         
         if self._pump is not None:
             self._pump.stop_all()
@@ -236,19 +239,20 @@ class ProgramController:
         self._logger.info("Program stopped")
     
     def pause(self):
-        """暂停程序"""
+        """暂停程序执行"""
         self._pause_event.set()
-        self._status.paused = True
+        with self._status_lock:
+            self._status.paused = True
         self._logger.info("Program paused")
     
     def resume(self):
-        """恢复程序"""
+        """恢复程序执行"""
         self._pause_event.clear()
-        self._status.paused = False
+        with self._status_lock:
+            self._status.paused = False
         self._logger.info("Program resumed")
     
     def _run_program(self):
-        """运行程序（线程函数）"""
         try:
             while not self._stop_event.is_set():
                 self._pause_event.wait()
@@ -256,24 +260,28 @@ class ProgramController:
                 if self._stop_event.is_set():
                     break
                 
-                if self._status.current_step >= len(self._program.steps):
-                    self._complete_program()
-                    break
-                
-                step = self._program.steps[self._status.current_step]
+                with self._status_lock:
+                    if self._status.current_step >= len(self._program.steps):
+                        self._complete_program()
+                        break
+                    
+                    step = self._program.steps[self._status.current_step]
                 
                 if not self._execute_step(step):
                     break
                 
-                self._status.current_step += 1
+                with self._status_lock:
+                    self._status.current_step += 1
             
         except Exception as e:
-            self._status.error = str(e)
+            with self._status_lock:
+                self._status.error = str(e)
             self._logger.error(f"Program error: {e}")
             self._trigger_callbacks('on_error', e)
         
         finally:
-            self._status.running = False
+            with self._status_lock:
+                self._status.running = False
     
     def _execute_step(self, step: ProgramStep) -> bool:
         """
@@ -285,7 +293,8 @@ class ProgramController:
         Returns:
             bool: 成功返回True
         """
-        self._status.step_start_time = datetime.now()
+        with self._status_lock:
+            self._status.step_start_time = datetime.now()
         self._trigger_callbacks('on_step_start', step)
         
         self._logger.info(f"Executing step {step.step_id}: {step.name or step.step_type.name}")
@@ -315,7 +324,8 @@ class ProgramController:
         
         except Exception as e:
             self._logger.error(f"Step execution error: {e}")
-            self._status.error = str(e)
+            with self._status_lock:
+                self._status.error = str(e)
             return False
         
         finally:
@@ -342,14 +352,14 @@ class ProgramController:
         return True
     
     def _execute_hold(self, step: ProgramStep) -> bool:
-        """执行保持步骤"""
         start_time = time.time()
         
         while not self._stop_event.is_set():
             self._pause_event.wait()
             elapsed = time.time() - start_time
-            self._status.elapsed_time = elapsed
-            self._status.remaining_time = max(0, step.hold_time - elapsed)
+            with self._status_lock:
+                self._status.elapsed_time = elapsed
+                self._status.remaining_time = max(0, step.hold_time - elapsed)
             
             if elapsed >= step.hold_time:
                 break
@@ -420,14 +430,14 @@ class ProgramController:
         return True
     
     def _execute_wait(self, step: ProgramStep) -> bool:
-        """执行等待步骤"""
         start_time = time.time()
         
         while not self._stop_event.is_set():
             self._pause_event.wait()
             elapsed = time.time() - start_time
-            self._status.elapsed_time = elapsed
-            self._status.remaining_time = max(0, step.wait_time - elapsed)
+            with self._status_lock:
+                self._status.elapsed_time = elapsed
+                self._status.remaining_time = max(0, step.wait_time - elapsed)
             
             if elapsed >= step.wait_time:
                 break
@@ -437,16 +447,16 @@ class ProgramController:
         return True
     
     def _execute_loop(self, step: ProgramStep) -> bool:
-        """执行循环步骤"""
         if step.loop_start < 0:
             return True
         
-        self._status.loop_counter += 1
-        
-        if self._status.loop_counter < step.loop_count:
-            self._status.current_step = step.loop_start - 1
-        else:
-            self._status.loop_counter = 0
+        with self._status_lock:
+            self._status.loop_counter += 1
+            
+            if self._status.loop_counter < step.loop_count:
+                self._status.current_step = step.loop_start - 1
+            else:
+                self._status.loop_counter = 0
         
         return True
     
@@ -460,9 +470,9 @@ class ProgramController:
         return True
     
     def _complete_program(self):
-        """完成程序"""
-        self._status.completed = True
-        self._status.running = False
+        with self._status_lock:
+            self._status.completed = True
+            self._status.running = False
         self._logger.info("Program completed")
         self._trigger_callbacks('on_program_complete')
     

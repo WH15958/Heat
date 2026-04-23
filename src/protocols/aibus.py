@@ -356,6 +356,10 @@ class AIBUSProtocol:
                 f"Checksum mismatch: calculated={calculated_checksum:04X}, "
                 f"received={checksum_raw:04X}"
             )
+            raise IOError(
+                f"AIBUS checksum mismatch: calculated={calculated_checksum:04X}, "
+                f"received={checksum_raw:04X}"
+            )
         
         return AIBUSResponse(
             pv=pv,

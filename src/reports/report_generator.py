@@ -156,6 +156,54 @@ class ChartGenerator:
             buffer.seek(0)
             return base64.b64encode(buffer.read()).decode()
 
+    @staticmethod
+    def generate_flow_chart(data_points: List[Any],
+                            title: str = "Flow Rate Monitor",
+                            output_path: Optional[str] = None) -> Optional[str]:
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+        except ImportError:
+            return None
+        
+        if not data_points:
+            return None
+        
+        timestamps = [dp.timestamp for dp in data_points]
+        flow_values = [dp.flow_rate for dp in data_points]
+        
+        fig, ax = plt.subplots(figsize=(12, 4))
+        
+        ax.fill_between(timestamps, flow_values, alpha=0.3, color='#2196F3')
+        ax.plot(timestamps, flow_values, '-', color='#1565C0',
+                label='Flow Rate (mL/min)', linewidth=1.5)
+        
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Flow Rate (mL/min)')
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+        
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        plt.xticks(rotation=45)
+        
+        plt.tight_layout()
+        
+        if output_path:
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            return output_path
+        else:
+            buffer = io.BytesIO()
+            plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            plt.close()
+            buffer.seek(0)
+            return base64.b64encode(buffer.read()).decode()
+
 
 class ReportGenerator:
     """
@@ -698,21 +746,11 @@ class ReportGenerator:
     def generate_combined_report(
         self,
         devices_data: Dict[str, List[Any]],
+        pump_data: Optional[Dict[str, List[Any]]] = None,
         title: str = "Experiment Summary Report",
         experiment_duration: Optional[float] = None,
     ) -> str:
-        """
-        生成多设备汇总HTML报告（含曲线图）
-        
-        Args:
-            devices_data: {device_id: data_points} 字典
-            title: 报告标题
-            experiment_duration: 实验时长（秒）
-        
-        Returns:
-            str: 报告文件路径
-        """
-        if not devices_data:
+        if not devices_data and not pump_data:
             raise ValueError("No device data to generate report")
 
         device_sections_html = []
@@ -778,6 +816,67 @@ class ReportGenerator:
             </div>
             """
             device_sections_html.append(section)
+
+        if pump_data:
+            for device_id, data_points in pump_data.items():
+                if not data_points:
+                    continue
+
+                flow_stats = calculate_statistics([dp.flow_rate for dp in data_points])
+                
+                channels = sorted(set(dp.channel for dp in data_points))
+                channel_info = ", ".join([f"通道{ch}" for ch in channels])
+                
+                running_count = sum(1 for dp in data_points if dp.running)
+                total_count = len(data_points)
+
+                flow_chart_b64 = ChartGenerator.generate_flow_chart(
+                    data_points,
+                    title=f"{device_id} - Flow Rate"
+                )
+                flow_chart_html = ""
+                if flow_chart_b64:
+                    flow_chart_html = f'<div class="chart-container"><img src="data:image/png;base64,{flow_chart_b64}" alt="{device_id} Flow Chart"></div>'
+
+                start_time = data_points[0].timestamp
+                end_time = data_points[-1].timestamp
+
+                section = f"""
+                <div class="device-section" style="border-left: 4px solid #2196F3;">
+                    <h2>{device_id} (蠕动泵)</h2>
+                    <div class="meta-info">
+                        <p><strong>数据点数量:</strong> {len(data_points)}</p>
+                        <p><strong>时间范围:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                        <p><strong>运行通道:</strong> {channel_info}</p>
+                        <p><strong>运行比例:</strong> {running_count}/{total_count} ({running_count*100//max(total_count,1)}%)</p>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>平均流量</h3>
+                            <div class="value">{flow_stats.mean:.2f}</div>
+                            <div class="unit">mL/min</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>流量标准差</h3>
+                            <div class="value">{flow_stats.std:.2f}</div>
+                            <div class="unit">mL/min</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>最大流量</h3>
+                            <div class="value">{flow_stats.max:.2f}</div>
+                            <div class="unit">mL/min</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>最小流量</h3>
+                            <div class="value">{flow_stats.min:.2f}</div>
+                            <div class="unit">mL/min</div>
+                        </div>
+                    </div>
+                    <h3>流量曲线</h3>
+                    {flow_chart_html}
+                </div>
+                """
+                device_sections_html.append(section)
 
         duration_str = ""
         if experiment_duration is not None:

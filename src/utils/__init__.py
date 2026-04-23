@@ -29,8 +29,10 @@ from .serial_manager import (
 from .csv_logger import (
     CSVDataLogger,
     SimpleDataPoint,
+    PumpDataPoint,
     dict_to_data_point,
     data_points_to_simple,
+    pump_data_points_to_simple,
 )
 
 __all__ = [
@@ -54,6 +56,8 @@ __all__ = [
     'is_process_alive',
     'CSVDataLogger',
     'SimpleDataPoint',
+    'PumpDataPoint',
     'dict_to_data_point',
     'data_points_to_simple',
+    'pump_data_points_to_simple',
 ]

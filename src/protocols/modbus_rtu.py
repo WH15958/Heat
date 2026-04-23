@@ -268,12 +268,12 @@ class ModbusRTUProtocol:
 
             if len(response) == 0:
                 logger.debug(f"Receive timeout (no data)")
-                return bytes(response)
+                return None
 
             if len(response) < min_length:
                 logger.debug(f"Received partial frame: {len(response)} bytes")
 
-            return bytes(response) if response else None
+            return bytes(response)
         except Exception as e:
             logger.error(f"Failed to receive frame: {e}")
             return None
@@ -396,11 +396,11 @@ class ModbusRTUProtocol:
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+            if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.info(f"Write: {ModbusException(exception_code).name} (ignored)")
                 return True
-            logger.info(f"Write: {ModbusException(exception_code).name}")
-            return True
+            logger.warning(f"Write: {ModbusException(exception_code).name}")
+            return False
 
         return True
     
@@ -452,11 +452,11 @@ class ModbusRTUProtocol:
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+            if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.info(f"WriteMultiple: {ModbusException(exception_code).name} (ignored)")
                 return True
-            logger.info(f"WriteMultiple: {ModbusException(exception_code).name}")
-            return True
+            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name}")
+            return False
 
         return True
     

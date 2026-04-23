@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Callable
 import logging
 import time
 import threading
+import copy
 import atexit
 
 from devices.base_device import (
@@ -181,10 +182,10 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 连接成功返回True
         """
-        if self._status == DeviceStatus.CONNECTED:
+        if self.status == DeviceStatus.CONNECTED:
             return True
         
-        self._status = DeviceStatus.CONNECTING
+        self.status = DeviceStatus.CONNECTING
         
         try:
             port = self.config.connection_params.get("port", "COM4")
@@ -203,10 +204,10 @@ class LabSmartPumpDevice(BaseDevice):
             )
             
             if not self._protocol.connect():
-                self._status = DeviceStatus.ERROR
+                self.status = DeviceStatus.ERROR
                 return False
             
-            self._status = DeviceStatus.CONNECTED
+            self.status = DeviceStatus.CONNECTED
             self._logger.info(f"Pump {self.config.device_id} connected on {port} ({baudrate}, {parity})")
             
             try:
@@ -219,7 +220,7 @@ class LabSmartPumpDevice(BaseDevice):
                     self._logger.error(f"Connection verification failed: {verify_err}")
                     self._protocol.disconnect()
                     self._protocol = None
-                    self._status = DeviceStatus.ERROR
+                    self.status = DeviceStatus.ERROR
                     return False
             except Exception as e:
                 self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
@@ -228,7 +229,7 @@ class LabSmartPumpDevice(BaseDevice):
             
         except Exception as e:
             self._logger.error(f"Failed to connect pump: {e}")
-            self._status = DeviceStatus.ERROR
+            self.status = DeviceStatus.ERROR
             return False
     
     def disconnect(self) -> bool:
@@ -244,7 +245,7 @@ class LabSmartPumpDevice(BaseDevice):
                 self._protocol.disconnect()
                 self._protocol = None
             
-            self._status = DeviceStatus.DISCONNECTED
+            self.status = DeviceStatus.DISCONNECTED
             self._logger.info(f"Pump {self.config.device_id} disconnected")
             return True
     
@@ -798,12 +799,12 @@ class LabSmartPumpDevice(BaseDevice):
             channel: 通道号(1-4)
         
         Returns:
-            Optional[PumpChannelData]: 通道数据
+            Optional[PumpChannelData]: 通道数据的深拷贝
         """
         if not self._validate_channel(channel):
             return None
         
-        data = self._channel_data.get(channel, PumpChannelData(channel=channel))
+        data = copy.deepcopy(self._channel_data.get(channel, PumpChannelData(channel=channel)))
         
         enable_addr = get_channel_address(300, channel)
         run_addr = get_channel_address(301, channel)
@@ -842,7 +843,7 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 已连接返回True
         """
-        return self._status == DeviceStatus.CONNECTED and self._protocol is not None
+        return self.status == DeviceStatus.CONNECTED and self._protocol is not None
     
     def write_command(self, command: str, value: Any) -> bool:
         """

@@ -14,7 +14,9 @@ import logging
 
 from devices import AIHeaterDevice, HeaterConfig, DeviceStatus
 from devices.base_device import DeviceConfig, DeviceInfo, DeviceType
+from devices.peristaltic_pump import LabSmartPumpDevice, PeristalticPumpConfig, PumpChannelConfig
 from protocols import AIBUSProtocol, ParameterCode
+from protocols.pump_params import PumpRunMode, PumpDirection
 from reports import ReportGenerator
 from utils import ConfigManager, setup_logging, get_logger, CSVDataLogger, SimpleDataPoint, data_points_to_simple
 
@@ -45,6 +47,7 @@ class AutomationController:
         self.config_manager = ConfigManager(config_path)
         self.config = None
         self._heaters: Dict[str, AIHeaterDevice] = {}
+        self._pumps: Dict[str, LabSmartPumpDevice] = {}
         self._csv_logger: Optional[CSVDataLogger] = None
         self._report_generator: Optional[ReportGenerator] = None
         self._logger = get_logger(__name__)
@@ -72,6 +75,7 @@ class AutomationController:
             self._logger.info(f"Initializing {self.config.name} v{self.config.version}")
             
             self._init_heaters()
+            self._init_pumps()
             
             # 初始化CSV记录器
             self._csv_logger = CSVDataLogger(
@@ -121,6 +125,43 @@ class AutomationController:
             heater = AIHeaterDevice(device_config, device_info)
             self._heaters[heater_cfg.device_id] = heater
             self._logger.info(f"Heater device created: {heater_cfg.device_id}")
+    
+    def _init_pumps(self):
+        """初始化蠕动泵设备"""
+        if not hasattr(self.config, 'pumps') or not self.config.pumps:
+            return
+
+        for pump_cfg in self.config.pumps:
+            if not pump_cfg.enabled:
+                continue
+
+            channels = []
+            for ch_cfg in pump_cfg.channels:
+                channels.append(PumpChannelConfig(
+                    channel=ch_cfg.channel,
+                    enabled=ch_cfg.enabled,
+                    pump_head=ch_cfg.pump_head,
+                    tube_model=ch_cfg.tube_model,
+                    suck_back_angle=ch_cfg.suck_back_angle,
+                ))
+
+            device_config = PeristalticPumpConfig(
+                device_id=pump_cfg.device_id,
+                connection_params={
+                    'port': pump_cfg.connection.port,
+                    'baudrate': pump_cfg.connection.baudrate,
+                    'parity': pump_cfg.connection.parity,
+                    'stopbits': pump_cfg.connection.stopbits,
+                    'bytesize': pump_cfg.connection.bytesize,
+                },
+                slave_address=pump_cfg.slave_address,
+                timeout=pump_cfg.connection.timeout,
+                channels=channels,
+            )
+
+            pump = LabSmartPumpDevice(device_config)
+            self._pumps[pump_cfg.device_id] = pump
+            self._logger.info(f"Pump device created: {pump_cfg.device_id}")
     
     def record_device_data(self, device_id: str):
         """
@@ -235,11 +276,108 @@ class AutomationController:
             heater = self._heaters.get(device_id)
             if heater:
                 heater.emergency_stop()
+            pump = self._pumps.get(device_id)
+            if pump:
+                pump.stop_all()
         else:
             for heater in self._heaters.values():
                 heater.emergency_stop()
+            for pump in self._pumps.values():
+                pump.stop_all()
         
         self._logger.warning("Emergency stop executed")
+    
+    def connect_pump(self, device_id: str) -> bool:
+        """
+        连接蠕动泵
+        
+        Args:
+            device_id: 设备ID
+        
+        Returns:
+            bool: 连接成功返回True
+        """
+        pump = self._pumps.get(device_id)
+        if pump is None:
+            self._logger.error(f"Pump not found: {device_id}")
+            return False
+        
+        try:
+            pump.connect()
+            self._logger.info(f"Pump connected: {device_id}")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to connect pump {device_id}: {e}")
+            return False
+    
+    def disconnect_pump(self, device_id: str) -> bool:
+        """断开蠕动泵连接"""
+        pump = self._pumps.get(device_id)
+        if pump:
+            pump.disconnect()
+            self._logger.info(f"Pump disconnected: {device_id}")
+        return True
+    
+    def start_pump(self, device_id: str, channel: int, flow_rate: float,
+                   direction: PumpDirection = PumpDirection.CLOCKWISE) -> bool:
+        """
+        启动蠕动泵
+        
+        Args:
+            device_id: 设备ID
+            channel: 通道号(1-4)
+            flow_rate: 流量(mL/min)
+            direction: 方向
+        
+        Returns:
+            bool: 启动成功返回True
+        """
+        pump = self._pumps.get(device_id)
+        if pump is None:
+            self._logger.error(f"Pump not found: {device_id}")
+            return False
+        
+        if not pump.is_connected():
+            if not self.connect_pump(device_id):
+                return False
+        
+        try:
+            pump.set_direction(channel, direction)
+            pump.set_run_mode(channel, PumpRunMode.FLOW_MODE)
+            pump.set_flow_rate(channel, flow_rate)
+            pump.start_channel(channel)
+            self._logger.info(f"Pump {device_id} ch{channel} started at {flow_rate} mL/min")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to start pump {device_id}: {e}")
+            return False
+    
+    def stop_pump(self, device_id: str, channel: int = None) -> bool:
+        """
+        停止蠕动泵
+        
+        Args:
+            device_id: 设备ID
+            channel: 通道号，None则停止所有通道
+        
+        Returns:
+            bool: 停止成功返回True
+        """
+        pump = self._pumps.get(device_id)
+        if pump is None:
+            self._logger.error(f"Pump not found: {device_id}")
+            return False
+        
+        try:
+            if channel is not None:
+                pump.stop_channel(channel)
+            else:
+                pump.stop_all()
+            self._logger.info(f"Pump {device_id} stopped")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to stop pump {device_id}: {e}")
+            return False
     
     def get_device_status(self, device_id: str) -> Optional[Dict]:
         """获取设备状态"""
@@ -376,6 +514,9 @@ class AutomationController:
         for device_id in list(self._heaters.keys()):
             self.disconnect_device(device_id)
         
+        for device_id in list(self._pumps.keys()):
+            self.disconnect_pump(device_id)
+        
         self._logger.info("System shutdown complete")
     
     def interactive_mode(self):
@@ -388,6 +529,8 @@ class AutomationController:
         print("  disconnect <device_id>  - 断开设备")
         print("  start <device_id> <temp> - 启动加热")
         print("  stop <device_id>        - 停止加热")
+        print("  pump_start <device_id> <channel> <flow_rate> - 启动蠕动泵")
+        print("  pump_stop <device_id> [channel] - 停止蠕动泵")
         print("  record <device_id>      - 手动记录数据")
         print("  status [device_id]      - 查看状态")
         print("  report <device_id>      - 生成报告")
@@ -411,6 +554,11 @@ class AutomationController:
                     self.start_heater(cmd[1], float(cmd[2]))
                 elif cmd[0] == "stop" and len(cmd) >= 2:
                     self.stop_heater(cmd[1])
+                elif cmd[0] == "pump_start" and len(cmd) >= 4:
+                    self.start_pump(cmd[1], int(cmd[2]), float(cmd[3]))
+                elif cmd[0] == "pump_stop" and len(cmd) >= 2:
+                    ch = int(cmd[2]) if len(cmd) >= 3 else None
+                    self.stop_pump(cmd[1], ch)
                 elif cmd[0] == "record" and len(cmd) >= 2:
                     self.record_device_data(cmd[1])
                     print(f"Data recorded for {cmd[1]}")

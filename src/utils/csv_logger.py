@@ -42,11 +42,17 @@ class CSVDataLogger:
         self._fieldnames = [
             "timestamp",
             "device_id",
+            "data_type",
             "pv",
             "sv",
             "mv",
             "alarm_status",
-            "alarms"
+            "alarms",
+            "channel",
+            "flow_rate",
+            "volume",
+            "direction",
+            "running"
         ]
         
         # 内存缓存的数据点，用于报告生成
@@ -71,11 +77,17 @@ class CSVDataLogger:
             row = {
                 "timestamp": timestamp,
                 "device_id": device_id,
+                "data_type": "heater",
                 "pv": pv,
                 "sv": sv,
                 "mv": mv,
                 "alarm_status": alarm_status,
-                "alarms": ",".join(alarms) if alarms else ""
+                "alarms": ",".join(alarms) if alarms else "",
+                "channel": "",
+                "flow_rate": "",
+                "volume": "",
+                "direction": "",
+                "running": ""
             }
             
             self._writer.writerow(row)
@@ -86,6 +98,7 @@ class CSVDataLogger:
             
             data_point = {
                 "timestamp": datetime.fromisoformat(timestamp),
+                "data_type": "heater",
                 "pv": pv,
                 "sv": sv,
                 "mv": mv,
@@ -96,6 +109,50 @@ class CSVDataLogger:
             self._data_points[device_id].append(data_point)
         except Exception as e:
             _logger.warning(f"Failed to write CSV record: {e}")
+    
+    def record_pump(self, device_id: str, channel: int, flow_rate: float,
+                    volume: float = 0.0, direction: int = 0, running: bool = False):
+        if self._writer is None:
+            self.start()
+        
+        try:
+            timestamp = datetime.now().isoformat()
+            
+            row = {
+                "timestamp": timestamp,
+                "device_id": device_id,
+                "data_type": "pump",
+                "pv": flow_rate,
+                "sv": 0.0,
+                "mv": 0,
+                "alarm_status": 0,
+                "alarms": "",
+                "channel": channel,
+                "flow_rate": flow_rate,
+                "volume": volume,
+                "direction": direction,
+                "running": running
+            }
+            
+            self._writer.writerow(row)
+            self._file.flush()
+            
+            if device_id not in self._data_points:
+                self._data_points[device_id] = []
+            
+            data_point = {
+                "timestamp": datetime.fromisoformat(timestamp),
+                "data_type": "pump",
+                "device_id": device_id,
+                "channel": channel,
+                "flow_rate": flow_rate,
+                "volume": volume,
+                "direction": direction,
+                "running": running
+            }
+            self._data_points[device_id].append(data_point)
+        except Exception as e:
+            _logger.warning(f"Failed to write pump CSV record: {e}")
     
     def get_data_points(self, device_id: str) -> List[Dict]:
         """
@@ -178,13 +235,36 @@ def dict_to_data_point(data: Dict) -> SimpleDataPoint:
 
 
 def data_points_to_simple(points: List[Dict]) -> List[SimpleDataPoint]:
-    """
-    将字典列表转换为SimpleDataPoint列表
-    
-    Args:
-        points: 数据字典列表
-    
-    Returns:
-        SimpleDataPoint列表
-    """
     return [dict_to_data_point(p) for p in points]
+
+
+class PumpDataPoint:
+    """蠕动泵数据点"""
+    
+    def __init__(self, timestamp: datetime, channel: int, flow_rate: float,
+                 volume: float = 0.0, direction: int = 0, running: bool = False):
+        self.timestamp = timestamp
+        self.channel = channel
+        self.flow_rate = flow_rate
+        self.volume = volume
+        self.direction = direction
+        self.running = running
+        self.device_id = ""
+
+
+def dict_to_pump_data_point(data: Dict) -> PumpDataPoint:
+    """将字典转换为PumpDataPoint对象"""
+    point = PumpDataPoint(
+        timestamp=data["timestamp"],
+        channel=data.get("channel", 1),
+        flow_rate=data.get("flow_rate", 0.0),
+        volume=data.get("volume", 0.0),
+        direction=data.get("direction", 0),
+        running=data.get("running", False)
+    )
+    point.device_id = data.get("device_id", "")
+    return point
+
+
+def pump_data_points_to_simple(points: List[Dict]) -> List[PumpDataPoint]:
+    return [dict_to_pump_data_point(p) for p in points if p.get("data_type") == "pump"]

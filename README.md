@@ -9,9 +9,10 @@
 | 加热器控制 | ✅ 完成 | AI-708 温控器 |
 | 蠕动泵控制 | ✅ 完成 | LabSmart 多通道蠕动泵 |
 | 程序控制 | ✅ 完成 | 温度+流量联动 |
-| 数据记录 | ✅ 完成 | CSVDataLogger（纯同步，无后台线程） |
-| 报告生成 | ✅ 完成 | HTML报告 + 温度曲线图 |
+| 数据记录 | ✅ 完成 | CSVDataLogger（纯同步，无后台线程，支持温度+泵数据） |
+| 报告生成 | ✅ 完成 | HTML报告 + 温度曲线图 + 泵流量曲线图 |
 | 串口资源管理 | ✅ 完成 | 进程锁文件、强制释放、看门狗 |
+| 主控制器 | ✅ 完成 | main.py 支持加热器+蠕动泵交互控制 |
 
 ## 核心架构
 
@@ -199,8 +200,13 @@ from utils import CSVDataLogger
 logger = CSVDataLogger("output", "experiment")
 logger.start()
 
+# 记录温度数据
 logger.record(device_id="heater1", pv=25.3, sv=30.0)
 logger.record(device_id="heater2", pv=28.1, sv=30.0)
+
+# 记录泵数据
+logger.record_pump(device_id="pump1", channel=1, flow_rate=5.0,
+                   volume=2.5, direction="CW", status="running")
 
 logger.close()
 ```

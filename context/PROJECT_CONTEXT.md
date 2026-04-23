@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-04-23
-版本：v2.1
+> 最后更新：2026-04-24
+版本：v2.2
 
 ---
 
@@ -1110,3 +1110,48 @@ pumps:
 > 此文档是项目的核心记忆库，任何新对话开始时，请先阅读此文档。
 > 
 > 每次重要更新后，请更新"最后更新"日期。
+
+---
+
+### 6.7 2026-04-23 全面代码审查与修复
+
+**审查范围：** 项目全部17个源代码文件，按优先级分4级共发现17个问题。
+
+**P0 严重问题（3项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| Modbus写操作所有异常都返回True | modbus_rtu.py | 仅SLAVE_DEVICE_BUSY返回True，其他异常返回False |
+| AIBUS校验和失败静默通过 | aibus.py | 校验失败时抛出IOError |
+| 蠕动泵绕过BaseDevice的status属性setter | peristaltic_pump.py | `self._status=` 全部改为 `self.status=` |
+
+**P1 中等问题（3项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| _receive_frame空数据返回空bytes而非None | modbus_rtu.py | 统一返回None |
+| read_channel_status返回内部数据引用 | peristaltic_pump.py | 使用copy.deepcopy返回深拷贝 |
+| heater_only_experiment.py cleanup无try/except | heater_only_experiment.py | 加try/except保护 |
+
+**P2 改进项（3项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| temperature_experiment.py自定义DataPoint | temperature_experiment.py | 统一使用CSVDataLogger + SimpleDataPoint + argparse |
+| main.py不支持蠕动泵 | main.py | 添加_init_pumps/connect_pump/start_pump/stop_pump等方法和交互命令 |
+| 多处裸except | 3个实验脚本 | 全部改为except Exception |
+
+**P3 规范项（4项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| 多处方法缺少docstring | heater.py, program_controller.py, csv_logger.py | 补充文档字符串 |
+| PumpChannelConfig重复定义 | config.py | 重命名为PumpChannelConfigYaml |
+| heater.py read_data锁范围过大 | heater.py | 锁从外层移入_read()内部，仅保护协议调用 |
+
+**关键经验：**
+
+1. **Modbus异常处理策略**：`SLAVE_DEVICE_BUSY` 是可恢复异常（设备忙稍后重试），返回True不中断主流程；`ILLEGAL_DATA_ADDRESS`、`SLAVE_DEVICE_FAILURE` 等是真实错误，必须返回False通知调用方
+2. **AIBUS校验失败必须抛异常**：校验和错误意味着数据已损坏，静默通过会导致加热器温度被错误解析，可能造成误控
+3. **BaseDevice.status属性setter**：直接赋值 `self._status` 绕过了属性setter，状态变更回调永远不会触发，外部无法感知状态变化
+4. **锁范围最小化**：锁应仅保护共享资源（串口协议调用），纯计算逻辑（数据解析、对象构造）应在锁外执行，避免重试时长时间阻塞其他线程
