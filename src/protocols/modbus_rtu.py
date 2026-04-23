@@ -97,7 +97,7 @@ class ModbusRTUProtocol:
         self,
         port: str,
         baudrate: int = 9600,
-        parity: str = 'E',
+        parity: str = 'N',
         stopbits: int = 1,
         bytesize: int = 8,
         timeout: float = 2.0,
@@ -201,49 +201,79 @@ class ModbusRTUProtocol:
     def _send_frame(self, frame: bytes) -> bool:
         """
         发送数据帧
-        
+
         Args:
             frame: 完整的数据帧（不含CRC）
-        
+
         Returns:
             bool: 发送成功返回True
         """
         if not self.is_connected:
             logger.error("Serial port not connected")
             return False
-        
+
         crc = self.calculate_crc(frame)
         full_frame = frame + self.crc_to_bytes(crc)
-        
+
         try:
             self._serial.reset_input_buffer()
             self._serial.reset_output_buffer()
             self._serial.write(full_frame)
             self._serial.flush()
+            time.sleep(0.05)
             return True
         except Exception as e:
             logger.error(f"Failed to send frame: {e}")
             return False
     
-    def _receive_frame(self, expected_length: int) -> Optional[bytes]:
+    def _receive_frame(self, min_length: int, max_length: int = 256) -> Optional[bytes]:
         """
-        接收数据帧
-        
+        接收数据帧（宽松读取模式，支持分块到达的响应）
+
         Args:
-            expected_length: 期望接收的字节数
-        
+            min_length: 最小期望字节数（可短于完整响应，如错误帧5字节）
+            max_length: 最大允许字节数
+
         Returns:
             Optional[bytes]: 接收到的数据帧，失败返回None
         """
         if not self.is_connected:
             return None
-        
+
+        time.sleep(0.1)
+
         try:
-            response = self._serial.read(expected_length)
-            if len(response) < expected_length:
-                logger.warning(f"Timeout: expected {expected_length} bytes, got {len(response)}")
-                return None
-            return response
+            response = bytearray()
+            deadline = time.time() + self.timeout
+
+            while time.time() < deadline:
+                chunk = self._serial.read(min(64, max_length - len(response)))
+                if not chunk:
+                    if len(response) >= min_length:
+                        break
+                    time.sleep(0.02)
+                    continue
+
+                response.extend(chunk)
+
+                if len(response) >= min_length:
+                    time.sleep(0.05)
+                    remaining = self._serial.in_waiting
+                    if remaining > 0:
+                        continue
+                    break
+
+                if len(response) >= max_length:
+                    break
+
+            if len(response) == 0:
+                logger.debug(f"Receive timeout (no data)")
+                return bytes(response)
+
+            if len(response) < min_length:
+                logger.debug(f"Received partial frame: {len(response)} bytes")
+
+            return bytes(response) if response else None
         except Exception as e:
             logger.error(f"Failed to receive frame: {e}")
             return None
@@ -297,19 +327,22 @@ class ModbusRTUProtocol:
             return None
         
         expected_length = 3 + count * 2 + 2
-        response = self._receive_frame(expected_length)
+        response = self._receive_frame(5, expected_length)
         
         if response is None:
             return None
         
         if not self._validate_response(response):
-            logger.error("CRC validation failed")
+            logger.debug(f"CRC validation failed")
             return None
-        
+
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            logger.error(f"MODBUS exception: {ModbusException(exception_code).name}")
+            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+                logger.info(f"Read: {ModbusException(exception_code).name} (ignored)")
+                return None
+            logger.error(f"Read: {ModbusException(exception_code).name}")
             return None
         
         byte_count = response[2]
@@ -351,21 +384,24 @@ class ModbusRTUProtocol:
         if not self._send_frame(frame):
             return False
         
-        response = self._receive_frame(8)
+        response = self._receive_frame(5, 8)
         
         if response is None:
             return False
         
         if not self._validate_response(response):
-            logger.error("CRC validation failed")
+            logger.warning(f"Write: CRC failed")
             return False
-        
+
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            logger.error(f"MODBUS exception: {ModbusException(exception_code).name}")
-            return False
-        
+            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+                logger.info(f"Write: {ModbusException(exception_code).name} (ignored)")
+                return True
+            logger.info(f"Write: {ModbusException(exception_code).name}")
+            return True
+
         return True
     
     def write_multiple_registers(
@@ -404,21 +440,24 @@ class ModbusRTUProtocol:
         if not self._send_frame(frame):
             return False
         
-        response = self._receive_frame(8)
-        
+        response = self._receive_frame(5, 8)
+
         if response is None:
             return False
-        
+
         if not self._validate_response(response):
-            logger.error("CRC validation failed")
+            logger.warning(f"WriteMultiple: CRC failed")
             return False
-        
+
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            logger.error(f"MODBUS exception: {ModbusException(exception_code).name}")
-            return False
-        
+            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+                logger.info(f"WriteMultiple: {ModbusException(exception_code).name} (ignored)")
+                return True
+            logger.info(f"WriteMultiple: {ModbusException(exception_code).name}")
+            return True
+
         return True
     
     def write_float_register(

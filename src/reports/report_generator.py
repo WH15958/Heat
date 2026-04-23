@@ -552,3 +552,251 @@ class ReportGenerator:
             },
             'alarm_count': alarm_count,
         }
+
+    COMBINED_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3498db;
+            padding-left: 10px;
+        }
+        h3 {
+            color: #2c3e50;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        .meta-info {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .meta-info p {
+            margin: 5px 0;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-card h3 {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 5px;
+            color: white;
+        }
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .stat-card .unit {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        .chart-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .chart-container img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .device-section {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .device-section h2 {
+            margin-top: 0;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            .container {
+                box-shadow: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{title}}</h1>
+        
+        <div class="meta-info">
+            <p><strong>报告生成时间:</strong> {{generated_time}}</p>
+            <p><strong>设备数量:</strong> {{device_count}}</p>
+            <p><strong>实验时长:</strong> {{duration}}</p>
+        </div>
+        
+        {{device_sections}}
+        
+        <div class="footer">
+            <p>自动化控制系统 - 实验汇总报告</p>
+            <p>Generated at {{generated_time}}</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+    def generate_combined_report(
+        self,
+        devices_data: Dict[str, List[Any]],
+        title: str = "Experiment Summary Report",
+        experiment_duration: Optional[float] = None,
+    ) -> str:
+        """
+        生成多设备汇总HTML报告（含曲线图）
+        
+        Args:
+            devices_data: {device_id: data_points} 字典
+            title: 报告标题
+            experiment_duration: 实验时长（秒）
+        
+        Returns:
+            str: 报告文件路径
+        """
+        if not devices_data:
+            raise ValueError("No device data to generate report")
+
+        device_sections_html = []
+
+        for device_id, data_points in devices_data.items():
+            if not data_points:
+                continue
+
+            pv_stats = calculate_statistics([dp.pv for dp in data_points])
+
+            temp_chart_b64 = ChartGenerator.generate_temperature_chart(
+                data_points,
+                title=f"{device_id} - Temperature"
+            )
+            temp_chart_html = ""
+            if temp_chart_b64:
+                temp_chart_html = f'<div class="chart-container"><img src="data:image/png;base64,{temp_chart_b64}" alt="{device_id} Temperature Chart"></div>'
+
+            output_chart_b64 = ChartGenerator.generate_output_chart(
+                data_points,
+                title=f"{device_id} - Output"
+            )
+            output_chart_html = ""
+            if output_chart_b64:
+                output_chart_html = f'<div class="chart-container"><img src="data:image/png;base64,{output_chart_b64}" alt="{device_id} Output Chart"></div>'
+
+            start_time = data_points[0].timestamp
+            end_time = data_points[-1].timestamp
+
+            section = f"""
+            <div class="device-section">
+                <h2>{device_id}</h2>
+                <div class="meta-info">
+                    <p><strong>数据点数量:</strong> {len(data_points)}</p>
+                    <p><strong>时间范围:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>平均温度</h3>
+                        <div class="value">{pv_stats.mean:.2f}</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>温度标准差</h3>
+                        <div class="value">{pv_stats.std:.2f}</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>最高温度</h3>
+                        <div class="value">{pv_stats.max:.2f}</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>最低温度</h3>
+                        <div class="value">{pv_stats.min:.2f}</div>
+                        <div class="unit">°C</div>
+                    </div>
+                </div>
+                <h3>温度曲线</h3>
+                {temp_chart_html}
+                <h3>输出曲线</h3>
+                {output_chart_html}
+            </div>
+            """
+            device_sections_html.append(section)
+
+        duration_str = ""
+        if experiment_duration is not None:
+            mins, secs = divmod(int(experiment_duration), 60)
+            duration_str = f"{mins}分{secs}秒"
+
+        html = self.COMBINED_HTML_TEMPLATE
+        html = html.replace("{{title}}", title)
+        html = html.replace("{{generated_time}}", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        html = html.replace("{{device_count}}", str(len(devices_data)))
+        html = html.replace("{{duration}}", duration_str)
+        html = html.replace("{{device_sections}}", "\n".join(device_sections_html))
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"report_summary_{timestamp}.html"
+        report_path = self.output_dir / filename
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        self._logger.info(f"Combined report generated: {report_path}")
+        return str(report_path)

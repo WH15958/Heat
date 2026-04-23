@@ -31,9 +31,9 @@ if _platform == 'win32':
         import win32api
         import psutil
         HAS_WIN32 = True
-    except ImportError:
+    except ImportError as e:
         HAS_WIN32 = False
-        logger.warning("win32file not available, force release disabled")
+        logger.warning(f"win32 extension not available ({e}), force release disabled")
 else:
     HAS_WIN32 = False
 

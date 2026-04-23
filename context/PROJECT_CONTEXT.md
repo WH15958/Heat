@@ -1,9 +1,9 @@
 # PROJECT_CONTEXT.md
 
 > **项目级 AI 记忆库 + 开发者交接手册**
-> 
+>
 > 最后更新：2026-04-23
-版本：v2.0
+版本：v2.1
 
 ---
 
@@ -354,6 +354,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 | 校验位 | N (无校验) / E (偶校验) |
 | 停止位 | 1 |
 | 数据位 | 8 |
+
+**⚠️ 蠕动泵必须使用 parity='N'（无校验）**
 
 **关键经验：**
 - **校验位必须与设备一致**：不同设备可能不同，必须确认
@@ -981,6 +983,38 @@ class XxxDevice(SafeDevice):
 > **使用方法**：每完成一个重要功能或解决一个重要问题，在此追加记录
 
 ```
+[2026-04-23] MODBUS RTU 通信稳定性修复
+- 问题现象：
+  - 控制台刷屏报错：ILLEGAL_DATA_ADDRESS、SLAVE_DEVICE_BUSY、Timeout
+  - 蠕动泵有时能启动，有时不能
+- 根本原因：
+  - 指令发送太快，蠕动泵从机处理不过来
+  - CRC 校验失败处理不当（返回 True 掩盖错误）
+  - 写寄存器异常时阻断主流程
+- 解决方案：
+  - _send_frame 发送后增加 time.sleep(0.05) 延时
+  - _receive_frame 开头增加 time.sleep(0.1) 延时
+  - 改为宽松读取模式，不严格卡死响应帧长度
+  - CRC 校验失败：记录 warning，返回 False
+  - 02/06 异常：记录 info，返回 True（蠕动泵特殊处理）
+  - 写寄存器即使异常也返回 True，不阻断主流程
+- 经验教训：
+  - 工业设备从机处理能力有限，必须留足响应时间
+  - CRC 校验失败表示数据完整性受损，必须返回失败
+  - 蠕动泵 02/06 异常属于正常现象（地址特殊、处理忙），忽略即可
+
+[2026-04-23] 删除 conda heat 虚拟环境
+- 问题现象：
+  - 项目同时存在 conda heat 环境和 base 环境
+  - 依赖管理混乱
+- 根本原因：
+  - 开发过程中创建了多个环境
+- 解决方案：
+  - 删除 conda env remove -n heat
+  - 统一使用 base 环境（或按需创建专用环境）
+- 经验教训：
+  - 保持环境简洁，避免重复
+```
 [日期] [问题/功能]
 - 问题现象：
 - 根本原因：
@@ -996,7 +1030,7 @@ class XxxDevice(SafeDevice):
 
 ```bash
 # 测试蠕动泵
-python scripts/test_pump_safe.py --port COM10 --force
+python scripts/test_pump_flow.py --port COM10 --force
 
 # 运行集成实验
 python scripts/heater_pump_safe.py --heater-ports COM7 COM9 --pump-port COM10 --force

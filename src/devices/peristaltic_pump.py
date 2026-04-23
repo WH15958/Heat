@@ -69,7 +69,7 @@ class PeristalticPumpConfig(DeviceConfig):
     channels: List[PumpChannelConfig] = field(default_factory=list)
     slave_address: int = 1
     baudrate: int = 9600
-    parity: str = 'E'
+    parity: str = 'N'
     stopbits: int = 1
     bytesize: int = 8
     default_run_mode: PumpRunMode = PumpRunMode.FLOW_MODE

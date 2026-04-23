@@ -40,7 +40,7 @@ from devices.peristaltic_pump import (
 )
 from protocols.pump_params import PumpRunMode, PumpDirection
 from utils import get_serial_manager, cleanup_all_serial_ports, CSVDataLogger, SimpleDataPoint
-from reports import ReportGenerator, ChartGenerator
+from reports import ReportGenerator
 
 # 全局变量
 _exp_instance = None
@@ -529,11 +529,11 @@ class ChemicalSynthesisExperiment:
             traceback.print_exc()
 
     def _generate_reports(self):
-        """生成实验报告"""
+        """生成实验汇总报告（单一报告，含所有设备曲线图）"""
         from utils import data_points_to_simple
-        
+
         self.logger.log("=" * 60)
-        self.logger.log("生成实验报告")
+        self.logger.log("生成实验汇总报告")
         self.logger.log("=" * 60)
 
         all_data = self._csv_logger.get_all_data()
@@ -543,55 +543,28 @@ class ChemicalSynthesisExperiment:
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        # 生成加热器1报告
+        devices_data = {}
+        for device_id, dicts in all_data.items():
+            if dicts:
+                devices_data[device_id] = data_points_to_simple(dicts)
+
+        if not devices_data:
+            self.logger.log("  [警告] 没有有效的设备数据，无法生成报告")
+            return
+
         try:
-            heater1_dicts = all_data.get("heater1", [])
-            if heater1_dicts:
-                heater1_data = data_points_to_simple(heater1_dicts)
-                report1_path = self._report_generator.generate(
-                    device_id="heater1",
-                    data_points=heater1_data,
-                    title=f"化学合成实验 - 加热器1 - {timestamp}",
-                    include_charts=True,
-                    include_data_table=True
-                )
-                self.logger.log(f"  [成功] 加热器1报告已生成: {report1_path}")
+            duration = None
+            if self.start_time and self.end_time:
+                duration = (self.end_time - self.start_time).total_seconds()
 
-                # 单独保存温度曲线图
-                chart1_path = self.output_dir / f"{self.experiment_name}_heater1_temp_{timestamp}.png"
-                ChartGenerator.generate_temperature_chart(
-                    heater1_data,
-                    title="加热器1 - 温度曲线",
-                    output_path=str(chart1_path)
-                )
-                self.logger.log(f"  [成功] 加热器1温度曲线图已保存: {chart1_path}")
+            report_path = self._report_generator.generate_combined_report(
+                devices_data=devices_data,
+                title=f"化学合成实验汇总报告 - {timestamp}",
+                experiment_duration=duration,
+            )
+            self.logger.log(f"  [成功] 汇总报告已生成: {report_path}")
         except Exception as e:
-            self.logger.log(f"  [错误] 生成加热器1报告失败: {e}")
-            traceback.print_exc()
-
-        # 生成加热器2报告
-        try:
-            heater2_dicts = all_data.get("heater2", [])
-            if heater2_dicts:
-                heater2_data = data_points_to_simple(heater2_dicts)
-                report2_path = self._report_generator.generate(
-                    device_id="heater2",
-                    data_points=heater2_data,
-                    title=f"化学合成实验 - 加热器2 - {timestamp}",
-                    include_charts=True,
-                    include_data_table=True
-                )
-                self.logger.log(f"  [成功] 加热器2报告已生成: {report2_path}")
-
-                chart2_path = self.output_dir / f"{self.experiment_name}_heater2_temp_{timestamp}.png"
-                ChartGenerator.generate_temperature_chart(
-                    heater2_data,
-                    title="加热器2 - 温度曲线",
-                    output_path=str(chart2_path)
-                )
-                self.logger.log(f"  [成功] 加热器2温度曲线图已保存: {chart2_path}")
-        except Exception as e:
-            self.logger.log(f"  [错误] 生成加热器2报告失败: {e}")
+            self.logger.log(f"  [错误] 生成汇总报告失败: {e}")
             traceback.print_exc()
 
         self.logger.log("")
