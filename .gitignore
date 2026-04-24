@@ -61,3 +61,10 @@ htmlcov/
 # Distribution
 *.manifest
 *.spec
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Web static (built from frontend)
+src/web/static/
