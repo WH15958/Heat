@@ -166,8 +166,8 @@ class LabSmartPumpDevice(BaseDevice):
     
     @property
     def channel_data(self) -> Dict[int, PumpChannelData]:
-        """获取通道数据"""
-        return self._channel_data
+        """获取通道数据（深拷贝）"""
+        return copy.deepcopy(self._channel_data)
     
     def get_serial_handle(self):
         """获取串口句柄"""
@@ -317,6 +317,30 @@ class LabSmartPumpDevice(BaseDevice):
                 address,
                 value
             )
+
+    def _write_float_with_unit(self, float_addr: int, float_val: float,
+                                unit_addr: int, unit_val: int) -> bool:
+        """原子操作：写浮点数和单位寄存器
+
+        Args:
+            float_addr: 浮点数寄存器地址
+            float_val: 浮点数值
+            unit_addr: 单位寄存器地址
+            unit_val: 单位值
+
+        Returns:
+            bool: 全部成功返回True
+        """
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return False
+            ok1 = self._protocol.write_float_register(
+                self._get_slave_address(), float_addr, float_val
+            )
+            ok2 = self._protocol.write_single_register(
+                self._get_slave_address(), unit_addr, unit_val
+            )
+            return ok1 and ok2
     
     def _read_registers(self, start_address: int, count: int) -> Optional[List[int]]:
         """
@@ -548,10 +572,7 @@ class LabSmartPumpDevice(BaseDevice):
         flow_addr = get_channel_address(110, channel)
         unit_addr = get_channel_address(112, channel)
         
-        if not self._write_float(flow_addr, flow_rate):
-            return False
-        
-        if not self._write_register(unit_addr, unit):
+        if not self._write_float_with_unit(flow_addr, flow_rate, unit_addr, unit):
             return False
         
         if channel in self._channel_data:
@@ -823,8 +844,8 @@ class LabSmartPumpDevice(BaseDevice):
             run_status = values[1]
             data.running = run_status == PumpRunStatus.START or run_status == PumpRunStatus.FULL_SPEED
             data.paused = run_status == PumpRunStatus.PAUSE
-            data.direction = PumpDirection(values[2])
-            data.run_mode = PumpRunMode(values[3])
+            data.direction = self._safe_enum(PumpDirection, values[2], PumpDirection.CLOCKWISE)
+            data.run_mode = self._safe_enum(PumpRunMode, values[3], PumpRunMode.FLOW_MODE)
             data.completed_repeats = values[14]
         
         data.remaining_time = self._read_float(remain_time_addr) or 0.0
@@ -901,6 +922,23 @@ class LabSmartPumpDevice(BaseDevice):
         
         return pump_data
     
+    @staticmethod
+    def _safe_enum(enum_cls, value, default):
+        """安全枚举转换，越界时返回默认值
+
+        Args:
+            enum_cls: 枚举类
+            value: 原始值
+            default: 默认值
+
+        Returns:
+            枚举值
+        """
+        try:
+            return enum_cls(value)
+        except (ValueError, KeyError):
+            return default
+
     def _validate_channel(self, channel: int) -> bool:
         """
         验证通道号

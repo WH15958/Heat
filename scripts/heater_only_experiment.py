@@ -516,7 +516,7 @@ class HeaterOnlyExperiment:
                 pv2 = self._read_temperature(self.heater2, "加热器2")
 
                 self.logger.log(f"  [{elapsed:.0f}s/{self.heat_hold_time:.0f}s] "
-                            f"加热器1: {pv1:.1f}°C, 加热器2: {pv2:.1f}°C "
+                            f"加热器1: {pv1:.1f if pv1 is not None else 'N/A'}°C, 加热器2: {pv2:.1f if pv2 is not None else 'N/A'}°C "
                             f"(剩余: {remaining:.0f}s)")
 
                 # 检查停止信号

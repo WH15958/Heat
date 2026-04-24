@@ -368,6 +368,9 @@ class AIHeaterDevice(BaseDevice):
         self._logger.warning("Emergency stop triggered!")
         
         with self._lock:
+            if self._protocol is None:
+                self._logger.warning("Emergency stop: protocol not initialized")
+                return False
             try:
                 self._protocol.write_parameter(
                     ParameterCode.SRUN, 

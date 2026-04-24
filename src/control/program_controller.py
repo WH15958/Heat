@@ -206,7 +206,7 @@ class ProgramController:
             return False
         
         self._stop_event.clear()
-        self._pause_event.clear()
+        self._pause_event.set()
         with self._status_lock:
             self._status.running = True
             self._status.paused = False
@@ -240,14 +240,14 @@ class ProgramController:
     
     def pause(self):
         """暂停程序执行"""
-        self._pause_event.set()
+        self._pause_event.clear()
         with self._status_lock:
             self._status.paused = True
         self._logger.info("Program paused")
     
     def resume(self):
         """恢复程序执行"""
-        self._pause_event.clear()
+        self._pause_event.set()
         with self._status_lock:
             self._status.paused = False
         self._logger.info("Program resumed")

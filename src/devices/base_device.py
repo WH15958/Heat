@@ -249,18 +249,21 @@ class BaseDevice(ABC):
             Exception: 所有重试失败后抛出最后一次异常
         """
         last_error = None
-        for attempt in range(self.config.retry_count):
+        retry_count = max(self.config.retry_count, 1)
+        for attempt in range(retry_count):
             try:
                 return operation()
             except Exception as e:
                 last_error = e
                 self._logger.warning(
-                    f"{operation_name} failed (attempt {attempt + 1}/{self.config.retry_count}): {e}"
+                    f"{operation_name} failed (attempt {attempt + 1}/{retry_count}): {e}"
                 )
-                if attempt < self.config.retry_count - 1:
+                if attempt < retry_count - 1:
                     time.sleep(self.config.retry_delay)
         
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{operation_name}: no attempts made")
     
     def __enter__(self):
         """上下文管理器入口"""

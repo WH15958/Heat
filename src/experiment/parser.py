@@ -9,6 +9,32 @@ from src.experiment.actions import (
     WaitType,
 )
 
+EXPERIMENTS_DIR = Path("experiments")
+
+
+def _validate_filename(filename: str) -> Path:
+    """验证文件名安全性，防止路径遍历
+
+    Args:
+        filename: 文件名
+
+    Returns:
+        Path: 安全的文件路径
+
+    Raises:
+        ValueError: 文件名包含非法字符
+    """
+    if not filename.endswith(".yaml") and not filename.endswith(".yml"):
+        raise ValueError(f"Invalid experiment file type: {filename}")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise ValueError(f"Invalid filename: {filename}")
+    path = EXPERIMENTS_DIR / filename
+    try:
+        path.resolve().relative_to(EXPERIMENTS_DIR.resolve())
+    except ValueError:
+        raise ValueError(f"Path traversal detected: {filename}")
+    return path
+
 ACTION_MAP = {
     "heater.set_temperature": ActionType.HEATER_SET_TEMP,
     "heater.start": ActionType.HEATER_START,
@@ -33,16 +59,16 @@ def parse_experiment(filepath: str) -> dict:
     """解析实验YAML文件
 
     Args:
-        filepath: YAML文件路径
+        filepath: YAML文件名或路径
 
     Returns:
         dict: 包含name, description, steps的字典
 
     Raises:
         FileNotFoundError: 文件不存在
-        ValueError: YAML格式错误
+        ValueError: YAML格式错误或文件名不安全
     """
-    path = Path(filepath)
+    path = _validate_filename(filepath) if not str(filepath).startswith("experiments/") else Path(filepath)
     if not path.exists():
         raise FileNotFoundError(f"Experiment file not found: {filepath}")
 

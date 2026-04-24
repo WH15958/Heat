@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-from src.experiment.parser import parse_experiment, list_experiments
+from src.experiment.parser import parse_experiment, list_experiments, _validate_filename
 from src.experiment.engine import ExperimentEngine
 from src.experiment.executor import StepExecutor
 from src.utils.logger import get_logger
@@ -73,6 +73,7 @@ async def start_experiment(filename: str, request: Request):
     """
     dm = request.app.state.device_manager
     try:
+        _validate_filename(filename)
         data = parse_experiment(f"experiments/{filename}")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Experiment not found")

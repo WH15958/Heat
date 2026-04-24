@@ -147,7 +147,7 @@ class ChemicalSynthesisExperiment:
         # 温度参数
         self.heater1_target_temp = heater1_target_temp
         self.heater2_target_temp = heater2_target_temp
-        self.heat_ramp_time = 300.0       # 强制5分钟升温
+        self.heat_ramp_time = heat_ramp_time
         self.heat_hold_time = heat_hold_time
 
         # 蠕动泵参数
