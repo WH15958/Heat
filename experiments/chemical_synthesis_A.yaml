@@ -1,0 +1,60 @@
+name: 化学合成实验A
+description: 两步加热 + 试剂泵入 + 保温 + 降温
+
+steps:
+  - id: heat_up
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 80.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 1.0
+      timeout: 600
+
+  - id: start_reagent
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 1
+      flow_rate: 15.0
+      mode: FLOW_MODE
+    wait:
+      type: duration
+      seconds: 300
+
+  - id: add_catalyst
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 2
+      flow_rate: 5.0
+      mode: TIME_QUANTITY
+      dispense_volume: 20.0
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 2
+      timeout: 120
+
+  - id: hold_reaction
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 600
+
+  - id: cool_down
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 25.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 2.0
+      timeout: 900
+
+  - id: stop_all
+    type: emergency_stop

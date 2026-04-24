@@ -50,7 +50,10 @@
                 {{ ch.running ? '运行中' : '停止' }}
               </el-tag>
               <span v-if="ch.running" class="channel-detail">
-                {{ ch.flow_rate }} mL/min
+                {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} mL/min
+              </span>
+              <span v-if="ch.running && ch.volume > 0" class="channel-detail">
+                已泵 {{ ch.volume?.toFixed(1) ?? '0.0' }} mL
               </span>
               <span v-if="ch.running && ch.direction" class="channel-detail">
                 {{ ch.direction === 'CLOCKWISE' ? '顺时针' : '逆时针' }}
@@ -61,17 +64,34 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="hover" style="margin-top: 20px">
-      <template #header>
-        <div class="card-header">
-          <span>实时温度曲线</span>
-          <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-            {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
-          </el-tag>
-        </div>
-      </template>
-      <div ref="chartRef" style="width: 100%; height: 400px"></div>
-    </el-card>
+    <el-row :gutter="20" style="margin-top: 20px">
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span>实时温度曲线</span>
+              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              </el-tag>
+            </div>
+          </template>
+          <div ref="tempChartRef" style="width: 100%; height: 350px"></div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span>实时流量曲线</span>
+              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              </el-tag>
+            </div>
+          </template>
+          <div ref="flowChartRef" style="width: 100%; height: 350px"></div>
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
@@ -81,25 +101,45 @@ import * as echarts from 'echarts'
 import { useWebSocket, type RealtimeData } from '../composables/useWebSocket'
 
 const { data: realtimeData, connected: wsConnected } = useWebSocket()
-const chartRef = ref<HTMLElement>()
-let chart: echarts.ECharts | null = null
+const tempChartRef = ref<HTMLElement>()
+const flowChartRef = ref<HTMLElement>()
+let tempChart: echarts.ECharts | null = null
+let flowChart: echarts.ECharts | null = null
 const maxPoints = 300
 
-interface SeriesData {
+interface HeaterSeriesData {
   pv: [number, number][]
   sv: [number, number][]
 }
-const seriesDataMap: Record<string, SeriesData> = {}
+const heaterDataMap: Record<string, HeaterSeriesData> = {}
+
+interface PumpSeriesData {
+  channels: Record<string, [number, number][]>
+}
+const pumpDataMap: Record<string, PumpSeriesData> = {}
+
+const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 
 onMounted(() => {
-  if (chartRef.value) {
-    chart = echarts.init(chartRef.value)
-    chart.setOption({
+  if (tempChartRef.value) {
+    tempChart = echarts.init(tempChartRef.value)
+    tempChart.setOption({
       tooltip: { trigger: 'axis' },
-      legend: { data: [] },
-      grid: { left: 60, right: 20, top: 40, bottom: 30 },
+      legend: { data: [], top: 0 },
+      grid: { left: 60, right: 20, top: 30, bottom: 30 },
       xAxis: { type: 'time' },
       yAxis: { type: 'value', name: '温度(°C)' },
+      series: [],
+    })
+  }
+  if (flowChartRef.value) {
+    flowChart = echarts.init(flowChartRef.value)
+    flowChart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: [], top: 0 },
+      grid: { left: 60, right: 20, top: 30, bottom: 30 },
+      xAxis: { type: 'time' },
+      yAxis: { type: 'value', name: '流量(mL/min)' },
       series: [],
     })
   }
@@ -107,38 +147,77 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  chart?.dispose()
+  tempChart?.dispose()
+  flowChart?.dispose()
   window.removeEventListener('resize', handleResize)
 })
 
 function handleResize() {
-  chart?.resize()
+  tempChart?.resize()
+  flowChart?.resize()
 }
 
 watch(realtimeData, (newData: RealtimeData | null) => {
-  if (!newData || !chart) return
+  if (!newData) return
   const now = Date.now()
 
-  for (const [id, heater] of Object.entries(newData.heaters)) {
-    if (heater.error) continue
-    if (!seriesDataMap[id]) seriesDataMap[id] = { pv: [], sv: [] }
-    seriesDataMap[id].pv.push([now, heater.pv])
-    seriesDataMap[id].sv.push([now, heater.sv])
-    seriesDataMap[id].pv = seriesDataMap[id].pv.slice(-maxPoints)
-    seriesDataMap[id].sv = seriesDataMap[id].sv.slice(-maxPoints)
+  // 温度图表
+  if (tempChart) {
+    for (const [id, heater] of Object.entries(newData.heaters)) {
+      if (heater.error) continue
+      if (!heaterDataMap[id]) heaterDataMap[id] = { pv: [], sv: [] }
+      heaterDataMap[id].pv.push([now, heater.pv])
+      heaterDataMap[id].sv.push([now, heater.sv])
+      heaterDataMap[id].pv = heaterDataMap[id].pv.slice(-maxPoints)
+      heaterDataMap[id].sv = heaterDataMap[id].sv.slice(-maxPoints)
+    }
+
+    const tempSeries: echarts.SeriesOption[] = []
+    const tempLegend: string[] = []
+    for (const [id, s] of Object.entries(heaterDataMap)) {
+      tempLegend.push(`${id} PV`, `${id} SV`)
+      tempSeries.push(
+        { name: `${id} PV`, type: 'line', data: s.pv, smooth: true, showSymbol: false },
+        { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
+      )
+    }
+    tempChart.setOption({ legend: { data: tempLegend }, series: tempSeries })
   }
 
-  const series: echarts.SeriesOption[] = []
-  const legendData: string[] = []
-  for (const [id, s] of Object.entries(seriesDataMap)) {
-    legendData.push(`${id} PV`, `${id} SV`)
-    series.push(
-      { name: `${id} PV`, type: 'line', data: s.pv, smooth: true, showSymbol: false },
-      { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
-    )
-  }
+  // 流量图表
+  if (flowChart) {
+    for (const [pumpId, pump] of Object.entries(newData.pumps)) {
+      if (pump.error) continue
+      if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
+      for (const [chId, chData] of Object.entries(pump.channels || {})) {
+        if (!pumpDataMap[pumpId].channels[chId]) pumpDataMap[pumpId].channels[chId] = []
+        const flowRate = chData.running ? chData.flow_rate : 0
+        pumpDataMap[pumpId].channels[chId].push([now, flowRate])
+        pumpDataMap[pumpId].channels[chId] = pumpDataMap[pumpId].channels[chId].slice(-maxPoints)
+      }
+    }
 
-  chart.setOption({ legend: { data: legendData }, series })
+    const flowSeries: echarts.SeriesOption[] = []
+    const flowLegend: string[] = []
+    for (const [pumpId, pData] of Object.entries(pumpDataMap)) {
+      for (const [chId, chSeries] of Object.entries(pData.channels)) {
+        const name = `${pumpId} CH${chId}`
+        flowLegend.push(name)
+        const colorIdx = (parseInt(chId) - 1) % channelColors.length
+        flowSeries.push({
+          name,
+          type: 'line',
+          data: chSeries,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { color: channelColors[colorIdx] },
+          itemStyle: { color: channelColors[colorIdx] },
+          areaStyle: { opacity: 0.1 },
+        })
+      }
+    }
+    flowChart.setOption({ legend: { data: flowLegend }, series: flowSeries })
+  }
 })
 </script>
 

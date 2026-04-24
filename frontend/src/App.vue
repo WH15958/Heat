@@ -7,6 +7,7 @@
       <el-menu mode="horizontal" router :default-active="$route.path" class="header-menu">
         <el-menu-item index="/">实时仪表盘</el-menu-item>
         <el-menu-item index="/control">设备控制</el-menu-item>
+        <el-menu-item index="/experiment">实验自动化</el-menu-item>
       </el-menu>
     </el-header>
     <el-main class="app-main">

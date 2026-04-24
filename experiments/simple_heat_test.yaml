@@ -1,0 +1,37 @@
+name: 简单加热测试
+description: 仅加热器升温测试，验证流程引擎
+
+steps:
+  - id: set_temp
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 50.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 1.0
+      timeout: 300
+
+  - id: hold
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 60
+
+  - id: cool_down
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 25.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 2.0
+      timeout: 600
+
+  - id: stop_heater
+    type: heater.stop
+    params:
+      device_id: heater1

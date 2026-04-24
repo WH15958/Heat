@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.utils.logger import get_logger
 from src.web.api.devices import router as devices_router
+from src.web.api.experiments import router as experiments_router
 from src.web.api.ws import router as ws_router
 from src.web.device_manager import DeviceManager
 
@@ -94,6 +95,7 @@ app.add_middleware(
 )
 
 app.include_router(devices_router, prefix="/api")
+app.include_router(experiments_router, prefix="/api")
 app.include_router(ws_router)
 
 if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
