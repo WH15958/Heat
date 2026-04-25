@@ -27,8 +27,11 @@ class BaseConfig:
     
     @classmethod
     def from_dict(cls: Type[T], data: Dict[str, Any]) -> T:
-        """从字典创建实例"""
-        return cls(**data)
+        """从字典创建实例，忽略多余键"""
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
     
     def validate(self) -> List[str]:
         """

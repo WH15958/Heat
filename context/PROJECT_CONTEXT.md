@@ -3,7 +3,7 @@
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
 > 最后更新：2026-04-24
-版本：v2.2
+版本：v2.3
 
 ---
 
@@ -53,6 +53,27 @@
 ### 2.1 分层架构
 
 ```
+┌─────────────────────────────────────────────────────────────┐
+│                 frontend/ (Web前端 - Vue 3)                   │
+│   Dashboard.vue, ControlPanel.vue, ExperimentPage.vue       │
+│   职责：数据可视化仪表盘、设备控制面板、实验自动化界面          │
+└─────────────────────────────────────────────────────────────┘
+                              │ WebSocket + REST API
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  web/ (Web服务层 - FastAPI)                    │
+│   app.py, device_manager.py, api/devices.py, api/ws.py      │
+│   职责：HTTP/WebSocket接口，桥接同步设备与异步框架             │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│               experiment/ (实验自动化引擎)                      │
+│   parser.py, engine.py, executor.py, actions.py             │
+│   职责：YAML实验定义解析、状态机调度、步骤执行                  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    scripts/ (实验脚本层)                      │
 │   chemical_synthesis_experiment.py, heater_only_experiment  │
@@ -130,8 +151,23 @@ Heat/
 │   └── PROJECT_CONTEXT.md      # AI记忆库+交接手册
 ├── docs/
 │   ├── images/                 # 文档图片
+│   ├── user_guide.md           # 用户使用教程
+│   ├── developer_guide.md      # 开发者维护教程
 │   ├── lock_cleanup_usage.md   # 锁文件清理说明
 │   └── presentation.md         # 演示文档
+├── experiments/
+│   ├── chemical_synthesis_A.yaml  # 化学合成实验定义
+│   └── simple_heat_test.yaml      # 简单加热测试定义
+├── frontend/
+│   ├── src/
+│   │   ├── api/devices.ts        # REST API封装
+│   │   ├── composables/useWebSocket.ts  # WebSocket封装
+│   │   ├── router/index.ts       # Vue Router
+│   │   └── views/
+│   │       ├── Dashboard.vue     # 实时仪表盘
+│   │       ├── ControlPanel.vue  # 设备控制面板
+│   │       └── ExperimentPage.vue # 实验自动化页面
+│   └── package.json
 ├── scripts/
 │   ├── chemical_synthesis_experiment.py  # 化学合成实验
 │   ├── heater_only_experiment.py         # 纯加热实验
@@ -145,6 +181,11 @@ Heat/
 │   │   ├── base_device.py          # 设备基类
 │   │   ├── heater.py               # 加热器驱动（纯同步）
 │   │   └── peristaltic_pump.py     # 蠕动泵驱动（纯同步）
+│   ├── experiment/
+│   │   ├── actions.py              # 实验动作定义
+│   │   ├── engine.py               # 实验状态机引擎
+│   │   ├── executor.py             # 步骤执行器
+│   │   └── parser.py               # YAML实验解析器
 │   ├── monitor/
 │   │   └── __init__.py             # 已废弃DataMonitor
 │   ├── protocols/
@@ -154,6 +195,13 @@ Heat/
 │   │   └── pump_params.py          # 泵参数定义
 │   ├── reports/
 │   │   └── report_generator.py     # 报告生成器
+│   ├── web/
+│   │   ├── app.py                  # FastAPI应用入口
+│   │   ├── device_manager.py       # 设备管理器
+│   │   └── api/
+│   │       ├── devices.py          # 设备REST API
+│   │       ├── ws.py               # WebSocket实时推送
+│   │       └── experiments.py      # 实验管理API
 │   └── utils/
 │       ├── config.py               # 配置管理
 │       ├── serial_manager.py       # 串口资源管理
@@ -166,6 +214,7 @@ Heat/
 │   ├── diagnose_pump.py            # 泵诊断
 │   └── diagnose_ttl.py             # TTL诊断
 ├── output/                         # 实验输出（报告/图表）
+├── run_server.py                   # Web服务器启动入口
 ├── environment.yml                 # Conda环境配置
 ├── requirements.txt                # pip依赖列表
 ├── pyproject.toml                  # Python项目配置
@@ -1155,3 +1204,71 @@ pumps:
 2. **AIBUS校验失败必须抛异常**：校验和错误意味着数据已损坏，静默通过会导致加热器温度被错误解析，可能造成误控
 3. **BaseDevice.status属性setter**：直接赋值 `self._status` 绕过了属性setter，状态变更回调永远不会触发，外部无法感知状态变化
 4. **锁范围最小化**：锁应仅保护共享资源（串口协议调用），纯计算逻辑（数据解析、对象构造）应在锁外执行，避免重试时长时间阻塞其他线程
+
+### 6.9 2026-04-24 Web远程控制与实验自动化（v2.3）
+
+**新增模块：**
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| Web服务层 | `src/web/` | FastAPI + WebSocket，桥接同步设备与异步框架 |
+| 实验自动化引擎 | `src/experiment/` | YAML实验定义 + 状态机调度 + 步骤执行 |
+| Vue前端 | `frontend/` | 仪表盘 + 控制面板 + 实验页面 |
+| 实验定义 | `experiments/` | YAML格式实验流程定义 |
+
+**Web架构关键设计：**
+- FastAPI通过 `run_in_executor` 桥接同步设备操作与异步Web框架
+- WebSocket 1Hz推送实时温度和流量数据
+- SPA路由：FastAPI catch-all路由返回index.html，支持Vue Router history模式
+- 路径遍历防护：实验API的filename参数校验，禁止`../`等路径穿越
+
+**实验自动化引擎架构：**
+- YAML定义实验步骤（9种动作 + 4种等待条件）
+- 状态机：IDLE → RUNNING → PAUSED/COMPLETED/FAILED/STOPPED
+- 通过DeviceManager调用设备，支持暂停/恢复/停止
+
+**全面代码审查修复（~70项）：**
+
+P0严重（3项）：
+- program_controller pause/resume逻辑反转（Event.set/clear语义）
+- chemical_synthesis heat_ramp_time硬编码300.0覆盖构造参数
+- heater_only_experiment pv1/pv2 None格式化崩溃
+
+P1重要（6项）：
+- Web实验API路径遍历漏洞
+- heater emergency_stop null protocol检查
+- base_device execute_with_retry retry_count=0崩溃
+- pump read_channel_status enum越界保护
+- pump set_flow_rate非原子操作
+- pump channel_data返回可变引用
+
+P2改进（16项）：
+- heater/pump connect/disconnect加锁保护
+- base_device callbacks锁保护
+- modbus_rtu _receive_frame不完整帧拒绝
+- aibus _send_and_receive写入后flush
+- config.py from_dict多余键过滤
+- csv_logger _data_points大小限制
+- serial_manager get_serial_manager线程安全
+- main.py emergency_stop停止CSV记录器
+- chemical_synthesis泵失败时清理加热器
+- pump _force_disconnect非阻塞锁获取
+- pump _read_float or语义修复（区分0.0和None）
+- heater read_data status锁保护
+- heater wait_for_temperature连接检查
+- heater write_command添加get_temperature分支
+- heater RunStatus枚举越界保护
+- connect方法锁范围缩小（协议通信在锁外）
+
+P3规范（3项）：
+- aibus close异常返回值修复
+- pump_params get_channel_address通道校验
+- base_device __exit__异常处理
+
+**关键经验：**
+
+1. **锁范围最小化**：connect方法中锁仅保护状态检查和设置，协议通信（串口I/O）在锁外执行，避免死锁
+2. **`or` vs `is not None`**：`_read_float() or 0.0` 无法区分0.0和None，必须用 `is not None` 判断
+3. **atexit回调非阻塞**：`_force_disconnect` 使用 `acquire(blocking=False)` 避免程序退出时阻塞
+4. **回调锁先于数据**：`_callback_lock` 必须在 `_callbacks` 之前初始化
+5. **Web层线程安全**：FastAPI通过 `run_in_executor` 调用同步设备方法，设备层RLock保证线程安全

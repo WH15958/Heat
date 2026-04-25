@@ -121,7 +121,6 @@ class AIHeaterDevice(BaseDevice):
         self._protocol: Optional[AIBUSProtocol] = None
         self._model_code: Optional[int] = None
         self._decimal_places: int = config.decimal_places
-        self._lock = threading.RLock()
         
     @property
     def protocol(self) -> Optional[AIBUSProtocol]:
@@ -145,18 +144,21 @@ class AIHeaterDevice(BaseDevice):
         Raises:
             ConnectionError: 连接失败
         """
-        if self.is_connected():
-            return True
+        with self._lock:
+            if self.is_connected():
+                return True
+            if self._status == DeviceStatus.CONNECTING:
+                raise ConnectionError("Connection already in progress")
+            self.status = DeviceStatus.CONNECTING
         
-        self.status = DeviceStatus.CONNECTING
-        
+        protocol = None
         try:
             port = self.config.connection_params.get("port", "COM1")
             baudrate = self.config.connection_params.get("baudrate", 9600)
             address = self.config.connection_params.get("address", 0)
             parity = self.config.connection_params.get("parity", "N")
             
-            self._protocol = AIBUSProtocol(
+            protocol = AIBUSProtocol(
                 port=port,
                 address=address,
                 baudrate=baudrate,
@@ -164,12 +166,24 @@ class AIHeaterDevice(BaseDevice):
                 parity=parity
             )
             
-            self._protocol.open()
+            protocol.open()
             
-            self._model_code = self._read_model_code()
-            self._decimal_places = self._detect_decimal_places()
+            if not protocol.is_open:
+                raise ConnectionError("Protocol open failed: serial port not available")
             
-            self.status = DeviceStatus.CONNECTED
+            model_code = self._read_model_code_with(protocol)
+            decimal_places = self._detect_decimal_places_with(protocol)
+            
+            with self._lock:
+                if self.is_connected():
+                    protocol.close()
+                    return True
+                self._protocol = protocol
+                self._model_code = model_code
+                self._decimal_places = decimal_places
+                self.status = DeviceStatus.CONNECTED
+                protocol = None
+            
             self._logger.info(
                 f"Connected to heater: {self.config.device_id}, "
                 f"model: {self.model_name}"
@@ -177,7 +191,13 @@ class AIHeaterDevice(BaseDevice):
             return True
             
         except Exception as e:
-            self.status = DeviceStatus.ERROR
+            if protocol is not None:
+                try:
+                    protocol.close()
+                except Exception as close_err:
+                    self._logger.warning(f"Failed to close protocol during error cleanup: {close_err}")
+            with self._lock:
+                self.status = DeviceStatus.ERROR
             self._logger.error(f"Failed to connect: {e}")
             raise ConnectionError(f"Failed to connect to heater: {e}")
     
@@ -188,16 +208,17 @@ class AIHeaterDevice(BaseDevice):
         Returns:
             bool: 断开成功返回True
         """
-        if self._protocol is not None:
-            try:
-                self._protocol.close()
-            except Exception as e:
-                self._logger.error(f"Error during disconnect: {e}")
-            finally:
-                self._protocol = None
-        
-        self.status = DeviceStatus.DISCONNECTED
-        return True
+        with self._lock:
+            if self._protocol is not None:
+                try:
+                    self._protocol.close()
+                except Exception as e:
+                    self._logger.error(f"Error during disconnect: {e}")
+                finally:
+                    self._protocol = None
+            
+            self.status = DeviceStatus.DISCONNECTED
+            return True
     
     def is_connected(self) -> bool:
         """
@@ -221,6 +242,29 @@ class AIHeaterDevice(BaseDevice):
         """检测小数位数设置"""
         try:
             dpt, _ = self._protocol.read_parameter(ParameterCode.D_P)
+            dpt_int = int(dpt)
+            if 0 <= dpt_int <= 3:
+                return dpt_int
+            else:
+                self._logger.warning(f"Invalid D_P value: {dpt}, using config value")
+                return self._heater_config.decimal_places
+        except Exception as e:
+            self._logger.warning(f"Failed to detect decimal places: {e}")
+            return self._heater_config.decimal_places
+    
+    def _read_model_code_with(self, protocol: AIBUSProtocol) -> int:
+        """使用指定协议读取仪表型号特征字"""
+        try:
+            model_value, _ = protocol.read_parameter(ParameterCode.MODEL_CODE)
+            return int(model_value)
+        except Exception as e:
+            self._logger.warning(f"Failed to read model code: {e}")
+            return None
+    
+    def _detect_decimal_places_with(self, protocol: AIBUSProtocol) -> int:
+        """使用指定协议检测小数位数设置"""
+        try:
+            dpt, _ = protocol.read_parameter(ParameterCode.D_P)
             dpt_int = int(dpt)
             if 0 <= dpt_int <= 3:
                 return dpt_int
@@ -263,6 +307,7 @@ class AIHeaterDevice(BaseDevice):
                     self._logger.debug(f"Could not read output status: {e}")
             
             alarms = self._parse_alarms(alarm_status)
+            current_status = self._status
             
             return HeaterData(
                 device_id=self.config.device_id,
@@ -273,12 +318,12 @@ class AIHeaterDevice(BaseDevice):
                     "mv": mv,
                     "alarm_status": alarm_status,
                 },
-                status=self.status,
+                status=current_status,
                 pv=pv / (10 ** self._decimal_places),
                 sv=sv / (10 ** self._decimal_places),
                 mv=mv,
                 alarm_status=alarm_status,
-                run_status=RunStatus(run_status_val),
+                run_status=self._safe_run_status(run_status_val),
                 is_manual=is_manual,
                 is_auto_tuning=is_auto_tuning,
                 alarms=alarms
@@ -303,6 +348,14 @@ class AIHeaterDevice(BaseDevice):
             alarms.append("输入超量程报警(orAL)")
         return alarms
     
+    @staticmethod
+    def _safe_run_status(value: int) -> RunStatus:
+        """安全转换RunStatus枚举，越界返回STOP"""
+        try:
+            return RunStatus(value)
+        except (ValueError, KeyError):
+            return RunStatus.STOP
+    
     def write_command(self, command: str, value: Any) -> bool:
         """
         执行设备命令
@@ -323,6 +376,8 @@ class AIHeaterDevice(BaseDevice):
         
         if command == "set_temperature":
             return self.set_temperature(float(value))
+        elif command == "get_temperature":
+            return self.get_temperature()
         elif command == "start":
             return self.start()
         elif command == "stop":
@@ -618,6 +673,10 @@ class AIHeaterDevice(BaseDevice):
         Returns:
             bool: 在超时前达到目标返回True
         """
+        if not self.is_connected():
+            self._logger.error("wait_for_temperature: device not connected")
+            return False
+        
         start_time = time.time()
         
         while time.time() - start_time < timeout:

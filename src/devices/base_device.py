@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import threading
 from typing import Any, Dict, List, Optional, Callable, TypeVar
 import logging
 import time
@@ -98,6 +99,8 @@ class BaseDevice(ABC):
             device_type=DeviceType.OTHER
         )
         self._status = DeviceStatus.DISCONNECTED
+        self._lock = threading.RLock()
+        self._callback_lock = threading.Lock()
         self._callbacks: List[Callable[[DeviceStatus], None]] = []
         self._last_data: Optional[DeviceData] = None
         self._logger = logging.getLogger(f"{__name__}.{config.device_id}")
@@ -128,7 +131,8 @@ class BaseDevice(ABC):
         Args:
             callback: 回调函数，接收DeviceStatus参数
         """
-        self._callbacks.append(callback)
+        with self._callback_lock:
+            self._callbacks.append(callback)
     
     def remove_status_callback(self, callback: Callable[[DeviceStatus], None]):
         """
@@ -137,12 +141,15 @@ class BaseDevice(ABC):
         Args:
             callback: 要移除的回调函数
         """
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
+        with self._callback_lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
     
     def _notify_status_change(self, status: DeviceStatus):
         """通知所有回调函数状态变化"""
-        for callback in self._callbacks:
+        with self._callback_lock:
+            callbacks = list(self._callbacks)
+        for callback in callbacks:
             try:
                 callback(status)
             except Exception as e:
@@ -272,7 +279,10 @@ class BaseDevice(ABC):
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器退出"""
-        self.disconnect()
+        try:
+            self.disconnect()
+        except Exception as e:
+            logger.error(f"Error during context exit disconnect: {e}")
         return False
     
     def __repr__(self) -> str:

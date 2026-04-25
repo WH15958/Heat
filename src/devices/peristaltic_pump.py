@@ -139,7 +139,6 @@ class LabSmartPumpDevice(BaseDevice):
             config: 蠕动泵配置对象
             info: 设备信息对象（可选）
         """
-        self._lock = threading.RLock()
         self._closed = False
         self._protocol: Optional[ModbusRTUProtocol] = None
         self._channel_data: Dict[int, PumpChannelData] = {}
@@ -182,11 +181,15 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 连接成功返回True
         """
-        if self.status == DeviceStatus.CONNECTED:
-            return True
+        with self._lock:
+            if self.status == DeviceStatus.CONNECTED:
+                return True
+            if self._status == DeviceStatus.CONNECTING:
+                self._logger.error("Connection already in progress")
+                return False
+            self.status = DeviceStatus.CONNECTING
         
-        self.status = DeviceStatus.CONNECTING
-        
+        protocol = None
         try:
             port = self.config.connection_params.get("port", "COM4")
             baudrate = self.config.connection_params.get("baudrate", 9600)
@@ -194,7 +197,7 @@ class LabSmartPumpDevice(BaseDevice):
             stopbits = self.config.connection_params.get("stopbits", 1)
             bytesize = self.config.connection_params.get("bytesize", 8)
             
-            self._protocol = ModbusRTUProtocol(
+            protocol = ModbusRTUProtocol(
                 port=port,
                 baudrate=baudrate,
                 parity=parity,
@@ -203,24 +206,38 @@ class LabSmartPumpDevice(BaseDevice):
                 timeout=self.config.timeout,
             )
             
-            if not self._protocol.connect():
-                self.status = DeviceStatus.ERROR
+            if not protocol.connect():
+                with self._lock:
+                    self.status = DeviceStatus.ERROR
                 return False
             
-            self.status = DeviceStatus.CONNECTED
+            if not protocol.is_connected:
+                protocol.disconnect()
+                with self._lock:
+                    self.status = DeviceStatus.ERROR
+                return False
+            
+            with self._lock:
+                if self.status == DeviceStatus.CONNECTED:
+                    protocol.disconnect()
+                    return True
+                self._protocol = protocol
+                self.status = DeviceStatus.CONNECTED
+                protocol = None
+            
             self._logger.info(f"Pump {self.config.device_id} connected on {port} ({baudrate}, {parity})")
             
             try:
                 self._initialize_channels()
-                # 验证连接：尝试读取通道1状态，确保设备真的在响应
                 try:
                     status = self.read_channel_status(1)
                     self._logger.info(f"Connection verified: channel 1 status = {status}")
                 except Exception as verify_err:
                     self._logger.error(f"Connection verification failed: {verify_err}")
-                    self._protocol.disconnect()
-                    self._protocol = None
-                    self.status = DeviceStatus.ERROR
+                    with self._lock:
+                        self._protocol.disconnect()
+                        self._protocol = None
+                        self.status = DeviceStatus.ERROR
                     return False
             except Exception as e:
                 self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
@@ -229,7 +246,13 @@ class LabSmartPumpDevice(BaseDevice):
             
         except Exception as e:
             self._logger.error(f"Failed to connect pump: {e}")
-            self.status = DeviceStatus.ERROR
+            if protocol is not None:
+                try:
+                    protocol.disconnect()
+                except Exception as close_err:
+                    self._logger.warning(f"Failed to disconnect protocol during error cleanup: {close_err}")
+            with self._lock:
+                self.status = DeviceStatus.ERROR
             return False
     
     def disconnect(self) -> bool:
@@ -250,12 +273,19 @@ class LabSmartPumpDevice(BaseDevice):
             return True
     
     def _force_disconnect(self):
-        """强制断开 - 用于atexit回调"""
+        """强制断开 - 用于atexit回调，非阻塞"""
         try:
-            if self._protocol is not None:
-                self._protocol.disconnect()
-                self._protocol = None
-            self._closed = True
+            if self._lock.acquire(blocking=False):
+                try:
+                    if self._protocol is not None:
+                        self._protocol.disconnect()
+                        self._protocol = None
+                    self._closed = True
+                finally:
+                    self._lock.release()
+            else:
+                self._closed = True
+                self._logger.warning("Force disconnect: lock unavailable, marked closed")
         except Exception:
             pass
     
@@ -839,7 +869,7 @@ class LabSmartPumpDevice(BaseDevice):
         repeat_addr = get_channel_address(314, channel)
         
         values = self._read_registers(enable_addr, 16)
-        if values is not None:
+        if values is not None and len(values) >= 15:
             data.enabled = bool(values[0])
             run_status = values[1]
             data.running = run_status == PumpRunStatus.START or run_status == PumpRunStatus.FULL_SPEED
@@ -848,11 +878,16 @@ class LabSmartPumpDevice(BaseDevice):
             data.run_mode = self._safe_enum(PumpRunMode, values[3], PumpRunMode.FLOW_MODE)
             data.completed_repeats = values[14]
         
-        data.remaining_time = self._read_float(remain_time_addr) or 0.0
-        data.remaining_volume = self._read_float(remain_vol_addr) or 0.0
-        data.flow_rate = self._read_float(current_flow_addr) or 0.0
-        data.current_speed = self._read_float(current_speed_addr) or 0.0
-        data.dispensed_volume = self._read_float(dispensed_vol_addr) or 0.0
+        _remaining_time = self._read_float(remain_time_addr)
+        _remaining_volume = self._read_float(remain_vol_addr)
+        _flow_rate = self._read_float(current_flow_addr)
+        _current_speed = self._read_float(current_speed_addr)
+        _dispensed_volume = self._read_float(dispensed_vol_addr)
+        data.remaining_time = _remaining_time if _remaining_time is not None else 0.0
+        data.remaining_volume = _remaining_volume if _remaining_volume is not None else 0.0
+        data.flow_rate = _flow_rate if _flow_rate is not None else 0.0
+        data.current_speed = _current_speed if _current_speed is not None else 0.0
+        data.dispensed_volume = _dispensed_volume if _dispensed_volume is not None else 0.0
         
         self._channel_data[channel] = data
         return data

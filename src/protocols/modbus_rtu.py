@@ -271,7 +271,8 @@ class ModbusRTUProtocol:
                 return None
 
             if len(response) < min_length:
-                logger.debug(f"Received partial frame: {len(response)} bytes")
+                logger.debug(f"Received partial frame: {len(response)} bytes (min: {min_length})")
+                return None
 
             return bytes(response)
         except Exception as e:

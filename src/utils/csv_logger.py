@@ -22,6 +22,8 @@ class CSVDataLogger:
     用于记录实验数据到CSV文件，支持多设备数据记录。
     """
     
+    MAX_DATA_POINTS_PER_DEVICE = 100000
+
     def __init__(self, output_dir: str, filename_prefix: str = "data"):
         """
         初始化CSV数据记录器
@@ -107,6 +109,8 @@ class CSVDataLogger:
                 "device_id": device_id
             }
             self._data_points[device_id].append(data_point)
+            if len(self._data_points[device_id]) > self.MAX_DATA_POINTS_PER_DEVICE:
+                self._data_points[device_id] = self._data_points[device_id][-self.MAX_DATA_POINTS_PER_DEVICE:]
         except Exception as e:
             _logger.warning(f"Failed to write CSV record: {e}")
     
@@ -151,6 +155,8 @@ class CSVDataLogger:
                 "running": running
             }
             self._data_points[device_id].append(data_point)
+            if len(self._data_points[device_id]) > self.MAX_DATA_POINTS_PER_DEVICE:
+                self._data_points[device_id] = self._data_points[device_id][-self.MAX_DATA_POINTS_PER_DEVICE:]
         except Exception as e:
             _logger.warning(f"Failed to write pump CSV record: {e}")
     

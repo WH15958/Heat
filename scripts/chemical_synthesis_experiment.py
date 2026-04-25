@@ -273,6 +273,8 @@ class ChemicalSynthesisExperiment:
 
         except Exception as e:
             self.logger.log(f"  [错误] 蠕动泵连接异常: {e}")
+            self._disconnect_heater(self.heater1, self.heater1_port)
+            self._disconnect_heater(self.heater2, self.heater2_port)
             return False
 
         self.logger.log("")
@@ -284,13 +286,12 @@ class ChemicalSynthesisExperiment:
             try:
                 heater.stop()
                 heater.disconnect()
-            except Exception:
-                pass
-        # 忽略串口锁删除失败，不报错
+            except Exception as e:
+                self.logger.log(f"  [警告] 断开加热器异常: {e}")
         try:
             self._serial_manager.release_port(port)
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.log(f"  [警告] 释放串口锁异常: {e}")
 
     def disconnect_devices(self):
         """

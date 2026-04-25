@@ -572,12 +572,14 @@ class SerialPortManager:
 
 
 _global_manager = None
+_global_manager_lock = threading.Lock()
 
 def get_serial_manager() -> SerialPortManager:
-    """获取全局串口管理器"""
+    """获取全局串口管理器（线程安全）"""
     global _global_manager
-    if _global_manager is None:
-        _global_manager = SerialPortManager()
+    with _global_manager_lock:
+        if _global_manager is None:
+            _global_manager = SerialPortManager()
     return _global_manager
 
 

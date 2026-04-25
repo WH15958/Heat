@@ -202,6 +202,7 @@ class AIBUSProtocol:
                 self._logger.info("Serial port closed")
             except Exception as e:
                 self._logger.error(f"Error closing serial port: {e}")
+                return False
             finally:
                 self._serial = None
         return True
@@ -391,6 +392,7 @@ class AIBUSProtocol:
         self._serial.reset_output_buffer()
         
         self._serial.write(command)
+        self._serial.flush()
         self._logger.debug(f"Sent: {command.hex().upper()}")
         
         response = self._serial.read(10)

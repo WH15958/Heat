@@ -137,7 +137,12 @@ def get_channel_address(base_address: int, channel: int) -> int:
     
     Returns:
         int: 实际寄存器地址
+    
+    Raises:
+        ValueError: 通道号不在1-4范围内
     """
+    if not 1 <= channel <= 4:
+        raise ValueError(f"Channel must be 1-4, got {channel}")
     return channel * 1000 + base_address
 
 

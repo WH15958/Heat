@@ -285,6 +285,7 @@ class AutomationController:
             for pump in self._pumps.values():
                 pump.stop_all()
         
+        self.stop_recording()
         self._logger.warning("Emergency stop executed")
     
     def connect_pump(self, device_id: str) -> bool:
