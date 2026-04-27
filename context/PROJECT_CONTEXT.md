@@ -3,7 +3,7 @@
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
 > 最后更新：2026-04-24
-版本：v2.3
+版本：v2.4
 
 ---
 
@@ -56,7 +56,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                 frontend/ (Web前端 - Vue 3)                   │
 │   Dashboard.vue, ControlPanel.vue, ExperimentPage.vue       │
-│   职责：数据可视化仪表盘、设备控制面板、实验自动化界面          │
+│   HistoryPage.vue                                            │
+│   职责：数据可视化仪表盘、设备控制面板、实验自动化界面、历史记录 │
 └─────────────────────────────────────────────────────────────┘
                               │ WebSocket + REST API
                               ▼
@@ -70,7 +71,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │               experiment/ (实验自动化引擎)                      │
 │   parser.py, engine.py, executor.py, actions.py             │
-│   职责：YAML实验定义解析、状态机调度、步骤执行                  │
+│   experiment_logger.py                                      │
+│   职责：YAML实验定义解析、状态机调度、步骤执行、日志记录        │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -166,7 +168,8 @@ Heat/
 │   │   └── views/
 │   │       ├── Dashboard.vue     # 实时仪表盘
 │   │       ├── ControlPanel.vue  # 设备控制面板
-│   │       └── ExperimentPage.vue # 实验自动化页面
+│   │       ├── ExperimentPage.vue # 实验自动化页面+实时日志
+│   │       └── HistoryPage.vue   # 实验历史记录
 │   └── package.json
 ├── scripts/
 │   ├── chemical_synthesis_experiment.py  # 化学合成实验
@@ -185,6 +188,7 @@ Heat/
 │   │   ├── actions.py              # 实验动作定义
 │   │   ├── engine.py               # 实验状态机引擎
 │   │   ├── executor.py             # 步骤执行器
+│   │   ├── experiment_logger.py    # 实验日志记录器
 │   │   └── parser.py               # YAML实验解析器
 │   ├── monitor/
 │   │   └── __init__.py             # 已废弃DataMonitor
@@ -199,9 +203,9 @@ Heat/
 │   │   ├── app.py                  # FastAPI应用入口
 │   │   ├── device_manager.py       # 设备管理器
 │   │   └── api/
-│   │       ├── devices.py          # 设备REST API
+│   │   ├── api/devices.py          # 设备REST API
 │   │       ├── ws.py               # WebSocket实时推送
-│   │       └── experiments.py      # 实验管理API
+│   │       └── experiments.py      # 实验管理API + 日志API
 │   └── utils/
 │       ├── config.py               # 配置管理
 │       ├── serial_manager.py       # 串口资源管理
@@ -1272,3 +1276,60 @@ P3规范（3项）：
 3. **atexit回调非阻塞**：`_force_disconnect` 使用 `acquire(blocking=False)` 避免程序退出时阻塞
 4. **回调锁先于数据**：`_callback_lock` 必须在 `_callbacks` 之前初始化
 5. **Web层线程安全**：FastAPI通过 `run_in_executor` 调用同步设备方法，设备层RLock保证线程安全
+
+### 6.10 2026-04-24 实验日志可追溯系统 + 竞态条件修复（v2.4）
+
+**实验日志系统（新增）：**
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 实验日志记录器 | `src/experiment/experiment_logger.py` | 记录每个步骤的执行状态、耗时、错误信息 |
+| 实时日志推送 | WebSocket `experiment_log` 事件 | 前端实时显示实验运行日志 |
+| 历史记录页面 | `frontend/src/views/HistoryPage.vue` | 查看/导出历史实验记录 |
+| 日志持久化 | `output/experiment_logs/*.json` | 每次运行自动保存JSON格式日志 |
+
+**日志系统架构：**
+
+```
+实验运行 → ExperimentLogger → 双通道输出
+                ├── WebSocket 实时推送 → 前端日志面板（终端风格）
+                └── JSON 文件持久化   → 历史记录查询/导出
+```
+
+**日志记录内容：**
+- Run ID：时间戳+随机码，唯一标识每次运行
+- 每个步骤：step_id、动作类型、参数、状态(pending/running/completed/failed/skipped)、耗时、错误信息
+- 运行级别：实验名称、开始/结束时间、总耗时、完成/失败步骤数
+
+**新增API端点：**
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/experiments/{filename}/logs` | GET | 获取当前运行日志 |
+| `/api/experiments/history/runs` | GET | 列出所有历史运行 |
+| `/api/experiments/history/runs/{run_id}` | GET | 获取指定运行详情 |
+
+**前端功能：**
+- 实验页面：终端风格实时日志面板 + 步骤状态标签 + 日志导出为.txt
+- 历史页面：历史运行列表 + 详情弹窗（步骤表格）+ 单条记录导出
+- WebSocket断线自动重连（5s间隔）+ onerror处理
+
+**竞态条件修复：**
+
+heater.py / peristaltic_pump.py connect方法3层防护：
+
+| 防护层 | 位置 | 作用 |
+|--------|------|------|
+| CONNECTING状态拒绝 | 第一个锁块 | 检测到CONNECTING时拒绝新的连接请求 |
+| 临时变量+二次检查 | 第二个锁块 | 赋值前再次检查is_connected()，已被其他线程连接则清理临时protocol |
+| protocol=None标记+异常清理 | 赋值后+except | 成功赋值后置None防止误清理；异常时清理未移交的protocol |
+
+**其他修复：**
+- 协议关闭异常日志：`except Exception: pass` → `except Exception as close_err: self._logger.warning(...)`
+- 异步日志广播异常日志：`except Exception: pass` → `except Exception as e: logger.error(...)`
+
+**关键经验：**
+
+1. **实验可追溯性**：化学合成实验必须记录完整执行日志，包括每步的参数、耗时、成功/失败状态，用于事后分析和复现
+2. **connect竞态条件**：协议对象在锁外创建但状态在锁内更新，多线程并发connect可能导致protocol泄漏。解决方案：临时变量+二次状态检查+异常清理
+3. **WebSocket健壮性**：前端必须处理onerror和onclose，自动重连；后端广播异常必须记录日志

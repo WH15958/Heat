@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from src.experiment.parser import parse_experiment, list_experiments, _validate_filename
 from src.experiment.engine import ExperimentEngine
 from src.experiment.executor import StepExecutor
+from src.experiment.experiment_logger import ExperimentLogger, list_experiment_runs, get_experiment_run
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,30 +16,16 @@ _engines: dict = {}
 
 
 class StartExperimentRequest(BaseModel):
-    """启动实验请求"""
     filename: str
 
 
 @router.get("/")
 async def list_exp():
-    """列出所有可用实验
-
-    Returns:
-        list: 实验摘要列表
-    """
     return list_experiments()
 
 
 @router.get("/{filename}")
 async def get_experiment(filename: str):
-    """获取实验详情
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 实验详情
-    """
     try:
         data = parse_experiment(f"experiments/{filename}")
         return {
@@ -63,14 +50,6 @@ async def get_experiment(filename: str):
 
 @router.post("/{filename}/start")
 async def start_experiment(filename: str, request: Request):
-    """启动实验
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 启动结果
-    """
     dm = request.app.state.device_manager
     try:
         _validate_filename(filename)
@@ -84,8 +63,19 @@ async def start_experiment(filename: str, request: Request):
         raise HTTPException(status_code=409, detail="Experiment already running")
 
     executor = StepExecutor(dm)
-    engine = ExperimentEngine(executor)
-    engine.load_steps(data["steps"])
+    exp_logger = ExperimentLogger()
+
+    def on_log_event(event_type: str, event_data: dict):
+        try:
+            loop = asyncio.get_event_loop()
+            loop.create_task(_broadcast_log(filename, event_type, event_data))
+        except Exception as e:
+            logger.error(f"Failed to broadcast log event ({event_type}): {e}")
+
+    exp_logger.on_log(on_log_event)
+
+    engine = ExperimentEngine(executor, exp_logger=exp_logger)
+    engine.load_steps(data["steps"], name=data["name"], filename=filename)
 
     def on_progress(progress):
         try:
@@ -98,19 +88,11 @@ async def start_experiment(filename: str, request: Request):
     _engines[filename] = engine
 
     await engine.start()
-    return {"success": True, "experiment": data["name"]}
+    return {"success": True, "experiment": data["name"], "run_id": exp_logger.active_run.run_id if exp_logger.active_run else None}
 
 
 @router.post("/{filename}/pause")
 async def pause_experiment(filename: str):
-    """暂停实验
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 操作结果
-    """
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
@@ -120,14 +102,6 @@ async def pause_experiment(filename: str):
 
 @router.post("/{filename}/resume")
 async def resume_experiment(filename: str):
-    """恢复实验
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 操作结果
-    """
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
@@ -137,14 +111,6 @@ async def resume_experiment(filename: str):
 
 @router.post("/{filename}/stop")
 async def stop_experiment(filename: str):
-    """停止实验
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 操作结果
-    """
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
@@ -154,14 +120,6 @@ async def stop_experiment(filename: str):
 
 @router.get("/{filename}/progress")
 async def get_progress(filename: str):
-    """查询实验进度
-
-    Args:
-        filename: 实验文件名
-
-    Returns:
-        dict: 进度信息
-    """
     engine = _engines.get(filename)
     if engine is None:
         return {"state": "idle"}
@@ -175,13 +133,29 @@ async def get_progress(filename: str):
     }
 
 
-async def _broadcast_progress(filename: str, progress):
-    """通过WebSocket广播实验进度
+@router.get("/{filename}/logs")
+async def get_current_logs(filename: str):
+    engine = _engines.get(filename)
+    if engine is None or engine.exp_logger.active_run is None:
+        return {"steps": [], "run_id": None}
+    run = engine.exp_logger.active_run
+    return run.to_dict()
 
-    Args:
-        filename: 实验文件名
-        progress: 进度对象
-    """
+
+@router.get("/history/runs")
+async def get_history_runs():
+    return list_experiment_runs()
+
+
+@router.get("/history/runs/{run_id}")
+async def get_history_run(run_id: str):
+    data = get_experiment_run(run_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return data
+
+
+async def _broadcast_progress(filename: str, progress):
     from src.web.api.ws import manager
 
     await manager.broadcast(
@@ -193,5 +167,18 @@ async def _broadcast_progress(filename: str, progress):
             "total_steps": progress.total_steps,
             "step_id": progress.step_id,
             "elapsed": round(progress.elapsed, 1),
+        }
+    )
+
+
+async def _broadcast_log(filename: str, event_type: str, event_data: dict):
+    from src.web.api.ws import manager
+
+    await manager.broadcast(
+        {
+            "type": "experiment_log",
+            "filename": filename,
+            "event": event_type,
+            "data": event_data,
         }
     )

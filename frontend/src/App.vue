@@ -8,6 +8,7 @@
         <el-menu-item index="/">实时仪表盘</el-menu-item>
         <el-menu-item index="/control">设备控制</el-menu-item>
         <el-menu-item index="/experiment">实验自动化</el-menu-item>
+        <el-menu-item index="/history">实验历史</el-menu-item>
       </el-menu>
     </el-header>
     <el-main class="app-main">
