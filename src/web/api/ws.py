@@ -77,12 +77,18 @@ async def data_push_loop(app):
     dm = app.state.device_manager
     logger.info("WebSocket data push loop started")
 
+    from src.utils.serial_manager import get_serial_manager
+    serial_mgr = get_serial_manager()
+
     while True:
         try:
+            serial_mgr.feed_watchdog()
+
             payload = {"type": "realtime", "heaters": {}, "pumps": {}}
             loop = asyncio.get_event_loop()
 
-            for did, heater in dm._heaters.items():
+            heaters = dm.get_all_heaters()
+            for did, heater in heaters.items():
                 if heater.is_connected():
                     try:
                         data = await loop.run_in_executor(None, heater.read_data)
@@ -96,7 +102,8 @@ async def data_push_loop(app):
                     except Exception:
                         payload["heaters"][did] = {"error": "read_failed"}
 
-            for did, pump in dm._pumps.items():
+            pumps = dm.get_all_pumps()
+            for did, pump in pumps.items():
                 if pump.is_connected():
                     try:
                         status = await loop.run_in_executor(

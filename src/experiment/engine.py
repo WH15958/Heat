@@ -43,6 +43,7 @@ class ExperimentEngine:
         self._pause_event.set()
         self._stop_flag = False
         self._on_progress: Optional[Callable] = None
+        self._on_complete: Optional[Callable] = None
         self._task: Optional[asyncio.Task] = None
         self._experiment_name: str = ""
         self._experiment_file: str = ""
@@ -74,6 +75,9 @@ class ExperimentEngine:
     def on_progress(self, callback: Callable):
         self._on_progress = callback
 
+    def on_complete(self, callback: Callable):
+        self._on_complete = callback
+
     def load_steps(self, steps: List[ExperimentStep], name: str = "", filename: str = ""):
         self._steps = [s for s in steps if s.enabled]
         self._current_step = 0
@@ -102,6 +106,7 @@ class ExperimentEngine:
                 self._state = ExperimentState.STOPPED
                 self._exp_logger.finish_run(RunStatus.STOPPED.value)
                 self._notify()
+                self._notify_complete()
                 return
 
             await self._pause_event.wait()
@@ -109,6 +114,7 @@ class ExperimentEngine:
                 self._state = ExperimentState.STOPPED
                 self._exp_logger.finish_run(RunStatus.STOPPED.value)
                 self._notify()
+                self._notify_complete()
                 return
 
             self._current_step = i
@@ -133,6 +139,7 @@ class ExperimentEngine:
                     self._state = ExperimentState.FAILED
                     self._exp_logger.finish_run(RunStatus.FAILED.value)
                     self._notify()
+                    self._notify_complete()
                     return
                 elif step.on_error == "skip":
                     self._exp_logger.skip_step(i, reason="Skipped due to error")
@@ -145,6 +152,7 @@ class ExperimentEngine:
         self._state = ExperimentState.COMPLETED
         self._exp_logger.finish_run(RunStatus.COMPLETED.value)
         self._notify()
+        self._notify_complete()
 
     async def pause(self):
         if self._state == ExperimentState.RUNNING:
@@ -167,3 +175,10 @@ class ExperimentEngine:
     def _notify(self):
         if self._on_progress:
             self._on_progress(self.progress)
+
+    def _notify_complete(self):
+        if self._on_complete:
+            try:
+                self._on_complete()
+            except Exception as e:
+                logger.error(f"on_complete callback error: {e}")

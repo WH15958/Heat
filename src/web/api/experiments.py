@@ -15,6 +15,12 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 _engines: dict = {}
 
 
+def _cleanup_engine(filename: str):
+    if filename in _engines:
+        del _engines[filename]
+        logger.info(f"Cleaned up engine for: {filename}")
+
+
 class StartExperimentRequest(BaseModel):
     filename: str
 
@@ -62,13 +68,26 @@ async def start_experiment(filename: str, request: Request):
     if filename in _engines and _engines[filename].state.value == "running":
         raise HTTPException(status_code=409, detail="Experiment already running")
 
+    if filename in _engines:
+        _cleanup_engine(filename)
+
     executor = StepExecutor(dm)
     exp_logger = ExperimentLogger()
 
+    loop = asyncio.get_running_loop()
+
     def on_log_event(event_type: str, event_data: dict):
         try:
-            loop = asyncio.get_event_loop()
-            loop.create_task(_broadcast_log(filename, event_type, event_data))
+            asyncio.create_task(
+                _broadcast_log(filename, event_type, event_data)
+            )
+        except RuntimeError:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _broadcast_log(filename, event_type, event_data), loop
+                )
+            except Exception as e:
+                logger.error(f"Failed to broadcast log event ({event_type}): {e}")
         except Exception as e:
             logger.error(f"Failed to broadcast log event ({event_type}): {e}")
 
@@ -79,12 +98,24 @@ async def start_experiment(filename: str, request: Request):
 
     def on_progress(progress):
         try:
-            loop = asyncio.get_event_loop()
-            loop.create_task(_broadcast_progress(filename, progress))
+            asyncio.create_task(
+                _broadcast_progress(filename, progress)
+            )
+        except RuntimeError:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _broadcast_progress(filename, progress), loop
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 
+    def on_complete():
+        _cleanup_engine(filename)
+
     engine.on_progress(on_progress)
+    engine.on_complete(on_complete)
     _engines[filename] = engine
 
     await engine.start()
@@ -115,6 +146,7 @@ async def stop_experiment(filename: str):
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
     await engine.stop()
+    _cleanup_engine(filename)
     return {"success": True}
 
 

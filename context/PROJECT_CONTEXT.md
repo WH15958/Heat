@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-04-24
-版本：v2.4
+> 最后更新：2026-04-27
+版本：v2.5
 
 ---
 
@@ -1333,3 +1333,61 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 1. **实验可追溯性**：化学合成实验必须记录完整执行日志，包括每步的参数、耗时、成功/失败状态，用于事后分析和复现
 2. **connect竞态条件**：协议对象在锁外创建但状态在锁内更新，多线程并发connect可能导致protocol泄漏。解决方案：临时变量+二次状态检查+异常清理
 3. **WebSocket健壮性**：前端必须处理onerror和onclose，自动重连；后端广播异常必须记录日志
+
+### 6.11 2026-04-27 全面代码质量审查与修复（v2.5）
+
+**审查范围：** 项目全部源代码文件，按优先级发现20个问题，全部修复。
+
+**P0 高优先级（5项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| data_push_loop竞态条件 | app.py / run_server.py | 将data_push_loop启动移入lifespan上下文管理器，确保device_manager先初始化 |
+| DeviceManager私有属性直接访问 | device_manager.py + api/ | 添加get_heater/get_pump/get_all_heaters/get_all_pumps公共方法，API层改用公共方法 |
+| ProgramController使用threading | program_controller.py | 从threading重构为asyncio架构，使用asyncio.Event和run_in_executor |
+| test_connections.py裸except | test_connections.py | 改为`except Exception` |
+| parameters.py枚举值冲突 | parameters.py | 移除重复的MV_EXT=80（与SP1=80冲突） |
+
+**P1 中优先级（7项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| SLAVE_DEVICE_BUSY静默忽略 | modbus_rtu.py | 读操作改为warning日志+返回None；写操作返回False（不再静默返回True） |
+| csv_logger频繁flush | csv_logger.py | 添加_maybe_flush()定时刷新（1秒间隔），stop()时强制flush |
+| csv_logger channel类型不一致 | csv_logger.py | heater行channel字段从空字符串改为0 |
+| _engines资源泄漏 | experiments.py | 添加_cleanup_engine() + on_complete回调，实验结束/停止时自动清理 |
+| on_log_event线程安全 | experiments.py | 从loop.create_task改为asyncio.run_coroutine_threadsafe |
+| CORS安全配置 | app.py | allow_origins从["*"]改为限定4个已知来源 |
+| parser.py路径验证绕过 | parser.py | 移除startswith("experiments/")的绕过条件，强制所有路径走验证 |
+
+**P2 低优先级（6项）：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| aibus.py小数位转换 | aibus.py | read_pv_sv添加decimal_places参数，PV/SV按小数位转换 |
+| report_generator.py XSS | report_generator.py | 对device_id、title、alarms等用户可控数据使用html_escape() |
+| serial_manager.py看门狗误触发 | serial_manager.py | 在data_push_loop中调用feed_watchdog()，防止120秒超时误触发cleanup |
+| device_manager.py add_pump硬编码 | device_manager.py | 添加channels参数，支持dict/PumpChannelConfig/int三种格式 |
+| ExperimentPage.vue WebSocket泄漏 | ExperimentPage.vue | 添加wsClosed标志位，onUnmounted时阻止自动重连 |
+| HistoryPage.vue onUnmounted缺失 | HistoryPage.vue | 添加onUnmounted关闭残留弹窗 |
+
+**后续增量修复：**
+
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| stop_pump_channel缺少参数验证 | device_manager.py | 添加channel范围验证(1-4)，start_pump_channel同步添加 |
+| _get_event_loop竞态条件 | experiments.py | 移除全局_event_loop缓存，改用asyncio.get_running_loop()；回调优先create_task，RuntimeError时降级run_coroutine_threadsafe |
+| start()缺少task清理 | program_controller.py | start()启动前取消残留task；_run_program() finally中置_task=None |
+| start_pump_channel缺少返回值检查 | device_manager.py | 每个配置步骤(set_direction/set_run_mode等)检查返回值，任一失败返回False |
+| 写操作缺少连接检查 | device_manager.py | set_temperature/start_heater/stop_heater/start_pump_channel/stop_pump_channel添加is_connected()检查 |
+| peristaltic_pump atexit无锁 | peristaltic_pump.py | 添加_atexit_lock保护_atexit_refs列表 |
+| csv_logger import time位置 | csv_logger.py | import time从方法内部移到文件顶部 |
+
+**关键经验：**
+
+1. **DeviceManager封装原则**：API层不应直接访问_device_manager._heaters等私有属性，必须通过公共方法。公共方法内部用锁保护，返回快照副本
+2. **asyncio协作式调度无数据竞争**：所有async方法运行在同一个事件循环线程，协程间不会在属性赋值中间被抢占，不需要asyncio.Lock保护_status等状态
+3. **CORS安全**：allow_origins=["*"] + allow_credentials=True违反规范；改为限定来源 + allow_credentials=False
+4. **设备操作返回值必须检查**：底层方法(如set_direction)在通信失败时返回False而非抛异常，上层必须检查返回值，否则设备可能以错误参数运转
+5. **连接检查分层设计**：读操作检查连接抛IOError（明确告知调用方），写操作检查连接返回False+warning日志（不中断紧急停止等场景）
+6. **两级降级回调策略**：create_task（同线程快路径）→ RuntimeError降级 → run_coroutine_threadsafe（跨线程慢路径），是有意的防御性设计而非冗余

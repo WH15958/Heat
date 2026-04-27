@@ -169,6 +169,7 @@ const stepStatusMap = ref<Record<number, string>>({})
 const logContainer = ref<HTMLElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let ws: WebSocket | null = null
+let wsClosed = false
 
 const isRunning = computed(() => progress.value?.state === 'running')
 const isPaused = computed(() => progress.value?.state === 'paused')
@@ -296,6 +297,7 @@ function handleWsMessage(event: MessageEvent) {
 }
 
 function connectWs() {
+  if (wsClosed) return
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const url = `${protocol}//${location.host}/ws`
   try {
@@ -306,11 +308,15 @@ function connectWs() {
       ElMessage.warning({ message: '实验日志实时推送连接失败，正在重连...', duration: 3000 })
     }
     ws.onclose = () => {
-      setTimeout(connectWs, 5000)
+      if (!wsClosed) {
+        setTimeout(connectWs, 5000)
+      }
     }
   } catch (error) {
     console.error('Failed to connect WebSocket:', error)
-    setTimeout(connectWs, 5000)
+    if (!wsClosed) {
+      setTimeout(connectWs, 5000)
+    }
   }
 }
 
@@ -411,6 +417,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  wsClosed = true
   if (pollTimer) clearInterval(pollTimer)
   if (ws) ws.close()
 })

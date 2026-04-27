@@ -32,29 +32,17 @@ class StepExecutor:
             loop = asyncio.get_event_loop()
 
             if step.type == ActionType.HEATER_SET_TEMP:
-                heater = self._dm._heaters.get(step.params["device_id"])
-                if heater is None:
-                    raise ValueError(f"Heater not found: {step.params['device_id']}")
                 await loop.run_in_executor(
-                    None, heater.set_temperature, step.params["temperature"]
+                    None, self._dm.set_temperature, step.params["device_id"], step.params["temperature"]
                 )
 
             elif step.type == ActionType.HEATER_START:
-                heater = self._dm._heaters.get(step.params["device_id"])
-                if heater is None:
-                    raise ValueError(f"Heater not found: {step.params['device_id']}")
-                await loop.run_in_executor(None, heater.start)
+                await loop.run_in_executor(None, self._dm.start_heater, step.params["device_id"])
 
             elif step.type == ActionType.HEATER_STOP:
-                heater = self._dm._heaters.get(step.params["device_id"])
-                if heater is None:
-                    raise ValueError(f"Heater not found: {step.params['device_id']}")
-                await loop.run_in_executor(None, heater.stop)
+                await loop.run_in_executor(None, self._dm.stop_heater, step.params["device_id"])
 
             elif step.type == ActionType.PUMP_START:
-                pump = self._dm._pumps.get(step.params["device_id"])
-                if pump is None:
-                    raise ValueError(f"Pump not found: {step.params['device_id']}")
                 from protocols.pump_params import PumpRunMode, PumpDirection
 
                 ch = step.params["channel"]
@@ -70,45 +58,26 @@ class StepExecutor:
                 mode = mode_map.get(
                     step.params.get("mode", "FLOW_MODE"), PumpRunMode.FLOW_MODE
                 )
-                await loop.run_in_executor(None, pump.set_direction, ch, direction)
-                await loop.run_in_executor(None, pump.set_run_mode, ch, mode)
-                await loop.run_in_executor(
-                    None,
-                    pump.set_flow_rate,
-                    ch,
-                    step.params.get("flow_rate", 10.0),
-                )
-                if step.params.get("run_time") and mode in (
+                run_time = step.params.get("run_time") if mode in (
                     PumpRunMode.TIME_QUANTITY,
                     PumpRunMode.TIME_SPEED,
-                ):
-                    await loop.run_in_executor(
-                        None, pump.set_run_time, ch, step.params["run_time"]
-                    )
-                if step.params.get("dispense_volume") and mode in (
+                ) else None
+                dispense_volume = step.params.get("dispense_volume") if mode in (
                     PumpRunMode.TIME_QUANTITY,
                     PumpRunMode.QUANTITY_SPEED,
-                ):
-                    await loop.run_in_executor(
-                        None,
-                        pump.set_dispense_volume,
-                        ch,
-                        step.params["dispense_volume"],
-                    )
-                await loop.run_in_executor(None, pump.start_channel, ch)
+                ) else None
+                await loop.run_in_executor(
+                    None, self._dm.start_pump_channel, step.params["device_id"],
+                    ch, step.params.get("flow_rate", 10.0), direction, mode,
+                    run_time, dispense_volume,
+                )
 
             elif step.type == ActionType.PUMP_STOP:
-                pump = self._dm._pumps.get(step.params["device_id"])
-                if pump is None:
-                    raise ValueError(f"Pump not found: {step.params['device_id']}")
-                await loop.run_in_executor(None, pump.stop_all)
+                await loop.run_in_executor(None, self._dm.stop_pump_channel, step.params["device_id"])
 
             elif step.type == ActionType.PUMP_STOP_CHANNEL:
-                pump = self._dm._pumps.get(step.params["device_id"])
-                if pump is None:
-                    raise ValueError(f"Pump not found: {step.params['device_id']}")
                 await loop.run_in_executor(
-                    None, pump.stop_channel, step.params["channel"]
+                    None, self._dm.stop_pump_channel, step.params["device_id"], step.params["channel"]
                 )
 
             elif step.type == ActionType.WAIT:

@@ -55,6 +55,7 @@ class DeviceManager:
         port: str,
         baudrate: int = 9600,
         slave_address: int = 1,
+        channels: Optional[list] = None,
     ) -> str:
         """添加蠕动泵配置
 
@@ -63,10 +64,32 @@ class DeviceManager:
             port: 串口
             baudrate: 波特率
             slave_address: 从站地址
+            channels: 通道配置列表，每项为dict含channel/enabled/pump_head等，为None时默认4通道
 
         Returns:
             str: 设备ID
         """
+        if channels is None:
+            channel_configs = [
+                PumpChannelConfig(channel=i, enabled=True)
+                for i in range(1, 5)
+            ]
+        else:
+            channel_configs = []
+            for ch in channels:
+                if isinstance(ch, dict):
+                    channel_configs.append(PumpChannelConfig(
+                        channel=ch.get("channel", 1),
+                        enabled=ch.get("enabled", True),
+                        pump_head=ch.get("pump_head", 5),
+                        tube_model=ch.get("tube_model", 0),
+                        suck_back_angle=ch.get("suck_back_angle", 0),
+                    ))
+                elif isinstance(ch, PumpChannelConfig):
+                    channel_configs.append(ch)
+                else:
+                    channel_configs.append(PumpChannelConfig(channel=int(ch), enabled=True))
+
         config = PeristalticPumpConfig(
             device_id=device_id,
             connection_params={
@@ -77,12 +100,7 @@ class DeviceManager:
                 "bytesize": 8,
             },
             slave_address=slave_address,
-            channels=[
-                PumpChannelConfig(channel=1, enabled=True),
-                PumpChannelConfig(channel=2, enabled=True),
-                PumpChannelConfig(channel=3, enabled=True),
-                PumpChannelConfig(channel=4, enabled=True),
-            ],
+            channels=channel_configs,
         )
         self._pumps[device_id] = LabSmartPumpDevice(config)
         logger.info(f"Registered pump: {device_id} on {port}")
@@ -258,6 +276,183 @@ class DeviceManager:
                 "status": p.status.name,
             }
         return {"heaters": heaters, "pumps": pumps}
+
+    def get_heater(self, device_id: str) -> Optional[AIHeaterDevice]:
+        """获取加热器设备实例
+
+        Args:
+            device_id: 设备ID
+
+        Returns:
+            Optional[AIHeaterDevice]: 加热器实例，不存在返回None
+        """
+        with self._lock:
+            return self._heaters.get(device_id)
+
+    def get_pump(self, device_id: str) -> Optional[LabSmartPumpDevice]:
+        """获取蠕动泵设备实例
+
+        Args:
+            device_id: 设备ID
+
+        Returns:
+            Optional[LabSmartPumpDevice]: 蠕动泵实例，不存在返回None
+        """
+        with self._lock:
+            return self._pumps.get(device_id)
+
+    def get_all_heaters(self) -> Dict[str, AIHeaterDevice]:
+        """获取所有加热器（快照）
+
+        Returns:
+            Dict[str, AIHeaterDevice]: 设备ID到加热器实例的映射
+        """
+        with self._lock:
+            return dict(self._heaters)
+
+    def get_all_pumps(self) -> Dict[str, LabSmartPumpDevice]:
+        """获取所有蠕动泵（快照）
+
+        Returns:
+            Dict[str, LabSmartPumpDevice]: 设备ID到蠕动泵实例的映射
+        """
+        with self._lock:
+            return dict(self._pumps)
+
+    def set_temperature(self, device_id: str, temperature: float) -> bool:
+        """设置加热器目标温度
+
+        Args:
+            device_id: 设备ID
+            temperature: 目标温度
+
+        Returns:
+            bool: 设置成功返回True
+
+        Raises:
+            ValueError: 设备不存在
+        """
+        heater = self._heaters.get(device_id)
+        if heater is None:
+            raise ValueError(f"Heater not found: {device_id}")
+        if not heater.is_connected():
+            logger.warning(f"Heater {device_id} not connected")
+            return False
+        return heater.set_temperature(temperature)
+
+    def start_heater(self, device_id: str) -> bool:
+        """启动加热器
+
+        Args:
+            device_id: 设备ID
+
+        Returns:
+            bool: 启动成功返回True
+
+        Raises:
+            ValueError: 设备不存在
+        """
+        heater = self._heaters.get(device_id)
+        if heater is None:
+            raise ValueError(f"Heater not found: {device_id}")
+        if not heater.is_connected():
+            logger.warning(f"Heater {device_id} not connected")
+            return False
+        return heater.start()
+
+    def stop_heater(self, device_id: str) -> bool:
+        """停止加热器
+
+        Args:
+            device_id: 设备ID
+
+        Returns:
+            bool: 停止成功返回True
+
+        Raises:
+            ValueError: 设备不存在
+        """
+        heater = self._heaters.get(device_id)
+        if heater is None:
+            raise ValueError(f"Heater not found: {device_id}")
+        if not heater.is_connected():
+            logger.warning(f"Heater {device_id} not connected")
+            return False
+        return heater.stop()
+
+    def start_pump_channel(
+        self,
+        device_id: str,
+        channel: int,
+        flow_rate: float,
+        direction: "PumpDirection",
+        mode: "PumpRunMode",
+        run_time: Optional[float] = None,
+        dispense_volume: Optional[float] = None,
+    ) -> bool:
+        """启动蠕动泵通道
+
+        Args:
+            device_id: 设备ID
+            channel: 通道号
+            flow_rate: 流速
+            direction: 方向
+            mode: 运行模式
+            run_time: 运行时间（秒）
+            dispense_volume: 定量体积（mL）
+
+        Returns:
+            bool: 启动成功返回True
+
+        Raises:
+            ValueError: 设备不存在
+        """
+        pump = self._pumps.get(device_id)
+        if pump is None:
+            raise ValueError(f"Pump not found: {device_id}")
+        if not (1 <= channel <= 4):
+            raise ValueError(f"Invalid channel: {channel}, must be 1-4")
+        if not pump.is_connected():
+            logger.warning(f"Pump {device_id} not connected")
+            return False
+        if not pump.set_direction(channel, direction):
+            return False
+        if not pump.set_run_mode(channel, mode):
+            return False
+        if not pump.set_flow_rate(channel, flow_rate):
+            return False
+        if run_time is not None:
+            if not pump.set_run_time(channel, run_time):
+                return False
+        if dispense_volume is not None:
+            if not pump.set_dispense_volume(channel, dispense_volume):
+                return False
+        return pump.start_channel(channel)
+
+    def stop_pump_channel(self, device_id: str, channel: Optional[int] = None) -> bool:
+        """停止蠕动泵
+
+        Args:
+            device_id: 设备ID
+            channel: 通道号，为None时停止所有通道
+
+        Returns:
+            bool: 停止成功返回True
+
+        Raises:
+            ValueError: 设备不存在或通道号无效
+        """
+        pump = self._pumps.get(device_id)
+        if pump is None:
+            raise ValueError(f"Pump not found: {device_id}")
+        if not pump.is_connected():
+            logger.warning(f"Pump {device_id} not connected")
+            return False
+        if channel is None:
+            return pump.stop_all()
+        if not (1 <= channel <= 4):
+            raise ValueError(f"Invalid channel: {channel}, must be 1-4")
+        return pump.stop_channel(channel)
 
     def cleanup(self):
         """清理所有设备资源"""

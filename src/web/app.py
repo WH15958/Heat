@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from src.utils.logger import get_logger
 from src.web.api.devices import router as devices_router
 from src.web.api.experiments import router as experiments_router
-from src.web.api.ws import router as ws_router
+from src.web.api.ws import router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
 
 logger = get_logger(__name__)
@@ -74,8 +75,14 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Starting Heat Web Server...")
     app.state.device_manager = create_device_manager()
+    push_task = asyncio.create_task(data_push_loop(app))
     yield
     logger.info("Shutting down...")
+    push_task.cancel()
+    try:
+        await push_task
+    except asyncio.CancelledError:
+        pass
     app.state.device_manager.cleanup()
 
 
@@ -86,10 +93,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

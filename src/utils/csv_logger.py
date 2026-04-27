@@ -7,6 +7,7 @@ CSV数据记录器
 
 import csv
 import os
+import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Any
@@ -27,18 +28,18 @@ class CSVDataLogger:
     def __init__(self, output_dir: str, filename_prefix: str = "data"):
         """
         初始化CSV数据记录器
-        
+
         Args:
             output_dir: 输出目录
             filename_prefix: 文件名前缀
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.filename = f"{filename_prefix}_{timestamp}.csv"
         self.filepath = self.output_dir / self.filename
-        
+
         self._file = None
         self._writer = None
         self._fieldnames = [
@@ -56,9 +57,10 @@ class CSVDataLogger:
             "direction",
             "running"
         ]
-        
-        # 内存缓存的数据点，用于报告生成
+
         self._data_points: Dict[str, List[Dict]] = {}
+        self._last_flush_time = 0.0
+        self._flush_interval = 1.0
     
     def start(self):
         """开始记录"""
@@ -67,6 +69,13 @@ class CSVDataLogger:
             self._writer = csv.DictWriter(self._file, fieldnames=self._fieldnames)
             self._writer.writeheader()
             self._file.flush()
+            self._last_flush_time = time.time()
+
+    def _maybe_flush(self):
+        now = time.time()
+        if now - self._last_flush_time >= self._flush_interval:
+            self._file.flush()
+            self._last_flush_time = now
     
     def record(self, device_id: str, pv: float, sv: float, mv: float = 0.0, 
                alarm_status: int = 0, alarms: List[str] = None):
@@ -85,7 +94,7 @@ class CSVDataLogger:
                 "mv": mv,
                 "alarm_status": alarm_status,
                 "alarms": ",".join(alarms) if alarms else "",
-                "channel": "",
+                "channel": 0,
                 "flow_rate": "",
                 "volume": "",
                 "direction": "",
@@ -93,7 +102,7 @@ class CSVDataLogger:
             }
             
             self._writer.writerow(row)
-            self._file.flush()
+            self._maybe_flush()
             
             if device_id not in self._data_points:
                 self._data_points[device_id] = []
@@ -139,7 +148,7 @@ class CSVDataLogger:
             }
             
             self._writer.writerow(row)
-            self._file.flush()
+            self._maybe_flush()
             
             if device_id not in self._data_points:
                 self._data_points[device_id] = []
@@ -184,6 +193,7 @@ class CSVDataLogger:
     def stop(self):
         """停止记录"""
         if self._file is not None:
+            self._file.flush()
             self._file.close()
             self._file = None
             self._writer = None

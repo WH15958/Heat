@@ -17,6 +17,7 @@ import time
 import threading
 import copy
 import atexit
+import weakref
 
 from devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
@@ -130,7 +131,10 @@ class LabSmartPumpDevice(BaseDevice):
     ]
     
     MAX_CHANNELS = 4
-    
+    _atexit_refs: List[weakref.ref] = []
+    _atexit_registered = False
+    _atexit_lock = threading.Lock()
+
     def __init__(self, config: PeristalticPumpConfig, info: Optional[DeviceInfo] = None):
         """
         初始化蠕动泵设备
@@ -156,7 +160,22 @@ class LabSmartPumpDevice(BaseDevice):
         for ch_config in config.channels:
             self._channel_data[ch_config.channel] = PumpChannelData(channel=ch_config.channel)
         
-        atexit.register(self._force_disconnect)
+        self._weak_self = weakref.ref(self)
+        with LabSmartPumpDevice._atexit_lock:
+            LabSmartPumpDevice._atexit_refs.append(self._weak_self)
+            if not LabSmartPumpDevice._atexit_registered:
+                atexit.register(LabSmartPumpDevice._atexit_cleanup)
+                LabSmartPumpDevice._atexit_registered = True
+    
+    @classmethod
+    def _atexit_cleanup(cls):
+        with cls._atexit_lock:
+            refs = list(cls._atexit_refs)
+            cls._atexit_refs.clear()
+        for ref in refs:
+            obj = ref()
+            if obj is not None:
+                obj._force_disconnect()
     
     @property
     def protocol(self) -> Optional[ModbusRTUProtocol]:

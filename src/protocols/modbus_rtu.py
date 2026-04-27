@@ -340,7 +340,10 @@ class ModbusRTUProtocol:
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+            if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
+                logger.warning(f"Read: slave device busy, will need retry")
+                return None
+            if exception_code == ModbusException.ILLEGAL_DATA_ADDRESS:
                 logger.info(f"Read: {ModbusException(exception_code).name} (ignored)")
                 return None
             logger.error(f"Read: {ModbusException(exception_code).name}")
@@ -398,8 +401,8 @@ class ModbusRTUProtocol:
         if func_code >= 0x80:
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
-                logger.info(f"Write: {ModbusException(exception_code).name} (ignored)")
-                return True
+                logger.warning(f"Write: slave device busy, write may not have succeeded")
+                return False
             logger.warning(f"Write: {ModbusException(exception_code).name}")
             return False
 
@@ -454,8 +457,8 @@ class ModbusRTUProtocol:
         if func_code >= 0x80:
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
-                logger.info(f"WriteMultiple: {ModbusException(exception_code).name} (ignored)")
-                return True
+                logger.warning(f"WriteMultiple: slave device busy, write may not have succeeded")
+                return False
             logger.warning(f"WriteMultiple: {ModbusException(exception_code).name}")
             return False
 

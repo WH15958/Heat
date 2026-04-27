@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
@@ -198,6 +198,10 @@ function exportRunLog() {
 
 onMounted(() => {
   loadRuns()
+})
+
+onUnmounted(() => {
+  detailVisible.value = false
 })
 </script>
 

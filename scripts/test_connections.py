@@ -118,13 +118,13 @@ print("\n正在断开连接...")
 for _, heater in heaters:
     try:
         heater.disconnect()
-    except:
+    except Exception:
         pass
 
 if pump:
     try:
         pump.disconnect()
-    except:
+    except Exception:
         pass
 
 cleanup_all_serial_ports()

@@ -68,7 +68,7 @@ def parse_experiment(filepath: str) -> dict:
         FileNotFoundError: 文件不存在
         ValueError: YAML格式错误或文件名不安全
     """
-    path = _validate_filename(filepath) if not str(filepath).startswith("experiments/") else Path(filepath)
+    path = _validate_filename(filepath)
     if not path.exists():
         raise FileNotFoundError(f"Experiment file not found: {filepath}")
 

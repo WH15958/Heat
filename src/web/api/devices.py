@@ -127,15 +127,12 @@ async def set_temperature(
         dict: 设置结果
     """
     dm = get_dm(request)
-    heater = dm._heaters.get(device_id)
-    if heater is None:
-        raise HTTPException(status_code=404, detail=f"Heater not found: {device_id}")
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, heater.set_temperature, body.temperature
-        )
+        result = await loop.run_in_executor(None, dm.set_temperature, device_id, body.temperature)
         return {"success": result, "temperature": body.temperature}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -151,12 +148,14 @@ async def start_heater(device_id: str, request: Request):
         dict: 启动结果
     """
     dm = get_dm(request)
-    heater = dm._heaters.get(device_id)
-    if heater is None:
-        raise HTTPException(status_code=404, detail=f"Heater not found: {device_id}")
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, heater.start)
-    return {"success": result}
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.start_heater, device_id)
+        return {"success": result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/heater/{device_id}/stop")
@@ -170,12 +169,14 @@ async def stop_heater(device_id: str, request: Request):
         dict: 停止结果
     """
     dm = get_dm(request)
-    heater = dm._heaters.get(device_id)
-    if heater is None:
-        raise HTTPException(status_code=404, detail=f"Heater not found: {device_id}")
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, heater.stop)
-    return {"success": result}
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.stop_heater, device_id)
+        return {"success": result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/pump/{device_id}/connect")
@@ -251,9 +252,6 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
         dict: 启动结果
     """
     dm = get_dm(request)
-    pump = dm._pumps.get(device_id)
-    if pump is None:
-        raise HTTPException(status_code=404, detail=f"Pump not found: {device_id}")
     try:
         direction = (
             PumpDirection.CLOCKWISE
@@ -268,32 +266,26 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
         }
         run_mode = mode_map.get(body.mode, PumpRunMode.FLOW_MODE)
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, pump.set_direction, body.channel, direction)
-        await loop.run_in_executor(None, pump.set_run_mode, body.channel, run_mode)
-        await loop.run_in_executor(
-            None, pump.set_flow_rate, body.channel, body.flow_rate
-        )
-        if body.run_time is not None and run_mode in (
+        run_time = body.run_time if run_mode in (
             PumpRunMode.TIME_QUANTITY,
             PumpRunMode.TIME_SPEED,
-        ):
-            await loop.run_in_executor(
-                None, pump.set_run_time, body.channel, body.run_time
-            )
-        if body.dispense_volume is not None and run_mode in (
+        ) else None
+        dispense_volume = body.dispense_volume if run_mode in (
             PumpRunMode.TIME_QUANTITY,
             PumpRunMode.QUANTITY_SPEED,
-        ):
-            await loop.run_in_executor(
-                None, pump.set_dispense_volume, body.channel, body.dispense_volume
-            )
-        await loop.run_in_executor(None, pump.start_channel, body.channel)
+        ) else None
+        result = await loop.run_in_executor(
+            None, dm.start_pump_channel, device_id, body.channel,
+            body.flow_rate, direction, run_mode, run_time, dispense_volume,
+        )
         return {
-            "success": True,
+            "success": result,
             "channel": body.channel,
             "flow_rate": body.flow_rate,
             "mode": body.mode,
         }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -310,16 +302,12 @@ async def stop_pump(device_id: str, body: StopPumpRequest, request: Request):
         dict: 停止结果
     """
     dm = get_dm(request)
-    pump = dm._pumps.get(device_id)
-    if pump is None:
-        raise HTTPException(status_code=404, detail=f"Pump not found: {device_id}")
     try:
         loop = asyncio.get_event_loop()
-        if body.channel is not None:
-            await loop.run_in_executor(None, pump.stop_channel, body.channel)
-        else:
-            await loop.run_in_executor(None, pump.stop_all)
-        return {"success": True}
+        result = await loop.run_in_executor(None, dm.stop_pump_channel, device_id, body.channel)
+        return {"success": result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
