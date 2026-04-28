@@ -69,11 +69,13 @@ class ExperimentRun:
 
 
 class ExperimentLogger:
-    def __init__(self):
+    def __init__(self, save_log: bool = True):
         self._active_run: Optional[ExperimentRun] = None
         self._step_logs: dict[int, StepLog] = {}
         self._on_log: Optional[Callable] = None
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        self._save_log = save_log
+        if save_log:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     @property
     def active_run(self) -> Optional[ExperimentRun]:
@@ -169,7 +171,7 @@ class ExperimentLogger:
         logger.info(f"Experiment run {status}: {self._active_run.run_id}")
 
     def _save_to_file(self):
-        if not self._active_run:
+        if not self._save_log or not self._active_run:
             return
         try:
             filename = f"{self._active_run.run_id}_{self._active_run.experiment_name}.json"
@@ -214,3 +216,32 @@ def get_experiment_run(run_id: str) -> Optional[dict]:
             except Exception:
                 return None
     return None
+
+
+def delete_experiment_run(run_id: str) -> bool:
+    if not LOGS_DIR.exists():
+        return False
+    for filepath in LOGS_DIR.glob("*.json"):
+        if filepath.name.startswith(run_id + "_"):
+            try:
+                filepath.unlink(missing_ok=True)
+                logger.info(f"Experiment log deleted: {filepath}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete experiment log: {e}")
+                return False
+    return False
+
+
+def delete_all_experiment_runs() -> int:
+    if not LOGS_DIR.exists():
+        return 0
+    count = 0
+    for filepath in LOGS_DIR.glob("*.json"):
+        try:
+            filepath.unlink(missing_ok=True)
+            count += 1
+        except Exception as e:
+            logger.error(f"Failed to delete experiment log {filepath}: {e}")
+    logger.info(f"Deleted {count} experiment logs")
+    return count

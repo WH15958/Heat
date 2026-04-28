@@ -290,7 +290,9 @@ class AIHeaterDevice(BaseDevice):
         
         def _read():
             with self._lock:
-                pv, sv, mv, alarm_status = self._protocol.read_pv_sv()
+                pv, sv, mv, alarm_status = self._protocol.read_pv_sv(
+                    decimal_places=self._decimal_places
+                )
                 
                 run_status_val = 0
                 is_manual = False
@@ -313,14 +315,14 @@ class AIHeaterDevice(BaseDevice):
                 device_id=self.config.device_id,
                 timestamp=datetime.now(),
                 data={
-                    "pv": pv / (10 ** self._decimal_places),
-                    "sv": sv / (10 ** self._decimal_places),
+                    "pv": pv,
+                    "sv": sv,
                     "mv": mv,
                     "alarm_status": alarm_status,
                 },
                 status=current_status,
-                pv=pv / (10 ** self._decimal_places),
-                sv=sv / (10 ** self._decimal_places),
+                pv=pv,
+                sv=sv,
                 mv=mv,
                 alarm_status=alarm_status,
                 run_status=self._safe_run_status(run_status_val),

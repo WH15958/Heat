@@ -59,7 +59,7 @@ def parse_experiment(filepath: str) -> dict:
     """解析实验YAML文件
 
     Args:
-        filepath: YAML文件名或路径
+        filepath: YAML文件名或路径，会自动提取文件名部分
 
     Returns:
         dict: 包含name, description, steps的字典
@@ -68,7 +68,8 @@ def parse_experiment(filepath: str) -> dict:
         FileNotFoundError: 文件不存在
         ValueError: YAML格式错误或文件名不安全
     """
-    path = _validate_filename(filepath)
+    filename = Path(filepath).name
+    path = _validate_filename(filename)
     if not path.exists():
         raise FileNotFoundError(f"Experiment file not found: {filepath}")
 

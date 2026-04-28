@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import { useWebSocket, type RealtimeData } from '../composables/useWebSocket'
 
@@ -120,33 +120,55 @@ const pumpDataMap: Record<string, PumpSeriesData> = {}
 
 const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 
-onMounted(() => {
-  if (tempChartRef.value) {
-    tempChart = echarts.init(tempChartRef.value)
-    tempChart.setOption({
-      tooltip: { trigger: 'axis' },
-      legend: { data: [], top: 0 },
-      grid: { left: 60, right: 20, top: 30, bottom: 30 },
-      xAxis: { type: 'time' },
-      yAxis: { type: 'value', name: '温度(°C)' },
-      series: [],
-    })
+let resizeObserver: ResizeObserver | null = null
+
+function initCharts() {
+  try {
+    if (tempChartRef.value) {
+      if (tempChart) tempChart.dispose()
+      tempChart = echarts.init(tempChartRef.value)
+      tempChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: [], top: 0 },
+        grid: { left: 60, right: 20, top: 30, bottom: 30 },
+        xAxis: { type: 'time' },
+        yAxis: { type: 'value', name: '温度(°C)' },
+        series: [],
+      })
+    }
+    if (flowChartRef.value) {
+      if (flowChart) flowChart.dispose()
+      flowChart = echarts.init(flowChartRef.value)
+      flowChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: [], top: 0 },
+        grid: { left: 60, right: 20, top: 30, bottom: 30 },
+        xAxis: { type: 'time' },
+        yAxis: { type: 'value', name: '流量(mL/min)' },
+        series: [],
+      })
+    }
+  } catch (error) {
+    console.error('图表初始化失败:', error)
   }
-  if (flowChartRef.value) {
-    flowChart = echarts.init(flowChartRef.value)
-    flowChart.setOption({
-      tooltip: { trigger: 'axis' },
-      legend: { data: [], top: 0 },
-      grid: { left: 60, right: 20, top: 30, bottom: 30 },
-      xAxis: { type: 'time' },
-      yAxis: { type: 'value', name: '流量(mL/min)' },
-      series: [],
-    })
-  }
+}
+
+onMounted(async () => {
+  await nextTick()
+  initCharts()
+
+  resizeObserver = new ResizeObserver(() => {
+    tempChart?.resize()
+    flowChart?.resize()
+  })
+  if (tempChartRef.value) resizeObserver.observe(tempChartRef.value)
+  if (flowChartRef.value) resizeObserver.observe(flowChartRef.value)
+
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  resizeObserver?.disconnect()
   tempChart?.dispose()
   flowChart?.dispose()
   window.removeEventListener('resize', handleResize)
@@ -161,7 +183,6 @@ watch(realtimeData, (newData: RealtimeData | null) => {
   if (!newData) return
   const now = Date.now()
 
-  // 温度图表
   if (tempChart) {
     for (const [id, heater] of Object.entries(newData.heaters)) {
       if (heater.error) continue
@@ -181,10 +202,12 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
       )
     }
-    tempChart.setOption({ legend: { data: tempLegend }, series: tempSeries })
+    tempChart.setOption(
+      { legend: { data: tempLegend }, series: tempSeries },
+      { replaceMerge: ['series'] }
+    )
   }
 
-  // 流量图表
   if (flowChart) {
     for (const [pumpId, pump] of Object.entries(newData.pumps)) {
       if (pump.error) continue
@@ -216,7 +239,10 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         })
       }
     }
-    flowChart.setOption({ legend: { data: flowLegend }, series: flowSeries })
+    flowChart.setOption(
+      { legend: { data: flowLegend }, series: flowSeries },
+      { replaceMerge: ['series'] }
+    )
   }
 })
 </script>

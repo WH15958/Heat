@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-04-27
-版本：v2.5
+> 最后更新：2026-04-28
+版本：v2.6
 
 ---
 
@@ -1391,3 +1391,60 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 4. **设备操作返回值必须检查**：底层方法(如set_direction)在通信失败时返回False而非抛异常，上层必须检查返回值，否则设备可能以错误参数运转
 5. **连接检查分层设计**：读操作检查连接抛IOError（明确告知调用方），写操作检查连接返回False+warning日志（不中断紧急停止等场景）
 6. **两级降级回调策略**：create_task（同线程快路径）→ RuntimeError降级 → run_coroutine_threadsafe（跨线程慢路径），是有意的防御性设计而非冗余
+
+### 6.12 2026-04-28 前端稳定性与实验日志管理增强（v2.6）
+
+**温度显示修复：**
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 30℃显示为3.0℃ | heater.py read_data()对PV/SV做了重复除法 | 移除heater.py中的重复除法，确认aibus.py read_pv_sv()内部已通过decimal_places参数完成转换 |
+
+数据流确认：AIBUS原始值300 → read_pv_sv(decimal_places=1) → 300/10=30.0 → heater.py直接使用 → 30.0
+
+**实验日志保存开关：**
+
+| 模块 | 变更 |
+|------|------|
+| experiment_logger.py | ExperimentLogger构造函数添加save_log: bool=True参数，_save_to_file()检查该开关 |
+| experiments.py | StartExperimentRequest添加save_log字段，start_experiment传递给ExperimentLogger |
+| ExperimentPage.vue | 启动按钮旁添加"保存日志"开关（el-switch），启动实验时传递save_log参数 |
+
+**实验自动化加载修复：**
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| Invalid filename: experiments/chemical_synthesis_A.yaml | _validate_filename拒绝含/的路径 | parse_experiment用Path(filepath).name提取纯文件名再验证 |
+| 启动失败: [object Object] | StartExperimentRequest含多余filename必填字段，FastAPI返回422验证错误；前端错误处理未JSON.stringify | 移除StartExperimentRequest.filename字段；前端错误处理改为JSON.stringify |
+
+**实验日志删除功能：**
+
+| 模块 | 变更 |
+|------|------|
+| experiment_logger.py | 新增delete_experiment_run()和delete_all_experiment_runs()，使用missing_ok=True防止竞态异常 |
+| experiments.py | 新增DELETE /history/runs/{run_id}和DELETE /history/runs端点 |
+| HistoryPage.vue | 表格操作列添加删除按钮、详情弹窗添加删除按钮、顶部添加清空全部按钮，均带确认对话框和deleting loading状态 |
+
+**前端稳定性增强：**
+
+| 模块 | 变更 |
+|------|------|
+| Dashboard.vue | initCharts()添加try-catch错误处理，防止echarts.init()异常导致页面崩溃 |
+| Dashboard.vue | ECharts setOption使用replaceMerge避免series残留；ResizeObserver监听容器变化 |
+| index.html | 添加Cache-Control/Pragma/Expires禁用缓存meta标签，防止浏览器缓存旧版本 |
+| vite.config.ts | 添加build.outDir配置，构建产物直接输出到src/web/static/ |
+
+**前端错误处理改进：**
+
+| 位置 | 变更 |
+|------|------|
+| ExperimentPage.vue | 启动实验错误处理从`${detail}`改为JSON.stringify，避免[object Object] |
+| HistoryPage.vue | 删除操作添加deleting ref防重复点击，所有删除按钮绑定:loading="deleting" |
+
+**关键经验：**
+
+1. **AIBUS小数位转换在协议层完成**：read_pv_sv(decimal_places=1)内部已执行pv/(10**decimal_places)，heater.py不需要再除。在_read()内部加try-except会吞掉异常导致execute_with_retry无法重试
+2. **FastAPI body参数与路径参数不要重复**：StartExperimentRequest中的filename字段与URL路径参数filename冲突，前端只传{save_log:true}导致422验证错误
+3. **前端错误对象必须JSON.stringify**：FastAPI验证错误返回的detail是数组/对象，直接模板字符串拼接显示为[object Object]
+4. **浏览器缓存问题**：Vite构建后JS文件名含hash（如index-CnyeLZ9u.js），但index.html可能被缓存导致加载旧JS。添加no-cache meta标签解决
+5. **删除操作防重复点击**：deleting ref + if(deleting.value)return + finally重置，按钮绑定:loading

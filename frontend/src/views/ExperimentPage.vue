@@ -26,7 +26,13 @@
           <template #header>
             <div class="card-header">
               <span>{{ selectedExp.name }}</span>
-              <div>
+              <div class="card-header-actions">
+                <el-switch
+                  v-model="saveLog"
+                  active-text="保存日志"
+                  inactive-text=""
+                  style="margin-right: 12px"
+                />
                 <el-button type="success" @click="startExperiment" :disabled="isRunning" :loading="starting">
                   启动实验
                 </el-button>
@@ -163,6 +169,7 @@ const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
 const progress = ref<ExperimentProgress | null>(null)
 const starting = ref(false)
+const saveLog = ref(true)
 const currentRunId = ref('')
 const logEntries = ref<LogEntry[]>([])
 const stepStatusMap = ref<Record<number, string>>({})
@@ -351,12 +358,16 @@ async function startExperiment() {
 
   starting.value = true
   try {
-    const res = await axios.post(`/api/experiments/${selectedFilename.value}/start`)
+    const res = await axios.post(`/api/experiments/${selectedFilename.value}/start`, {
+      save_log: saveLog.value,
+    })
     currentRunId.value = res.data.run_id || ''
     ElMessage.success('实验已启动')
     startPolling()
   } catch (e: any) {
-    ElMessage.error(`启动失败: ${e.response?.data?.detail || e.message}`)
+    const detail = e.response?.data?.detail
+    const msg = typeof detail === 'string' ? detail : JSON.stringify(detail || e.message)
+    ElMessage.error(`启动失败: ${msg}`)
   } finally {
     starting.value = false
   }
@@ -426,6 +437,7 @@ onUnmounted(() => {
 <style scoped>
 .experiment-page { padding: 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header-actions { display: flex; align-items: center; }
 .exp-item {
   padding: 12px;
   border: 1px solid #ebeef5;

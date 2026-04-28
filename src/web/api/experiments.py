@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from src.experiment.parser import parse_experiment, list_experiments, _validate_filename
 from src.experiment.engine import ExperimentEngine
 from src.experiment.executor import StepExecutor
-from src.experiment.experiment_logger import ExperimentLogger, list_experiment_runs, get_experiment_run
+from src.experiment.experiment_logger import ExperimentLogger, list_experiment_runs, get_experiment_run, delete_experiment_run, delete_all_experiment_runs
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,7 +22,7 @@ def _cleanup_engine(filename: str):
 
 
 class StartExperimentRequest(BaseModel):
-    filename: str
+    save_log: bool = True
 
 
 @router.get("/")
@@ -55,7 +55,7 @@ async def get_experiment(filename: str):
 
 
 @router.post("/{filename}/start")
-async def start_experiment(filename: str, request: Request):
+async def start_experiment(filename: str, body: StartExperimentRequest, request: Request):
     dm = request.app.state.device_manager
     try:
         _validate_filename(filename)
@@ -72,7 +72,7 @@ async def start_experiment(filename: str, request: Request):
         _cleanup_engine(filename)
 
     executor = StepExecutor(dm)
-    exp_logger = ExperimentLogger()
+    exp_logger = ExperimentLogger(save_log=body.save_log)
 
     loop = asyncio.get_running_loop()
 
@@ -185,6 +185,20 @@ async def get_history_run(run_id: str):
     if data is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return data
+
+
+@router.delete("/history/runs/{run_id}")
+async def delete_history_run(run_id: str):
+    success = delete_experiment_run(run_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"success": True, "deleted": run_id}
+
+
+@router.delete("/history/runs")
+async def delete_all_history_runs():
+    count = delete_all_experiment_runs()
+    return {"success": True, "deleted_count": count}
 
 
 async def _broadcast_progress(filename: str, progress):

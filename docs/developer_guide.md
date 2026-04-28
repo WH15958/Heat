@@ -133,9 +133,11 @@ conda activate heat
 ```bash
 cd frontend
 npm install
-npm run dev      # 开发模式（热重载）
+npm run dev      # 开发模式（热重载，端口5173）
 npm run build    # 生产构建 → src/web/static/
 ```
+
+> **注意**：`vite.config.ts` 已配置 `build.outDir` 指向 `src/web/static/`，构建产物直接输出到后端静态文件目录。构建后重启Web服务器，浏览器按 `Ctrl+Shift+R` 强制刷新。
 
 ### 验证环境
 
@@ -211,12 +213,14 @@ class LabSmartPumpDevice(BaseDevice):
 | `device_manager.py` | 设备实例管理、桥接Web与设备 |
 | `api/devices.py` | REST API：连接/控制/数据 |
 | `api/ws.py` | WebSocket：1Hz实时数据推送 |
-| `api/experiments.py` | 实验管理API（含路径遍历防护） |
+| `api/experiments.py` | 实验管理API（含路径遍历防护、日志保存开关、历史记录删除） |
 
 **Web层关键点**：
 - SPA路由：所有非 `/api/` 路径返回 `index.html`
 - `run_in_executor`：所有设备操作通过线程池执行
 - 路径遍历防护：`_validate_filename()` 校验文件名
+- 实验启动：`StartExperimentRequest` 包含 `save_log` 字段控制日志保存
+- 历史记录：支持 DELETE 单条/全部删除
 
 ### 实验引擎 (`src/experiment/`)
 

@@ -4,7 +4,10 @@
       <template #header>
         <div class="card-header">
           <span>实验历史记录</span>
-          <el-button size="small" @click="loadRuns" :loading="loading">刷新</el-button>
+          <div>
+            <el-button size="small" type="danger" @click="deleteAll" :disabled="runs.length === 0" :loading="deleting">清空全部</el-button>
+            <el-button size="small" @click="loadRuns" :loading="loading">刷新</el-button>
+          </div>
         </div>
       </template>
 
@@ -41,6 +44,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="experiment_file" label="文件" />
+        <el-table-column label="操作" width="80" fixed="right">
+          <template #default="{ row }">
+            <el-button type="danger" size="small" link @click.stop="deleteRun(row)" :loading="deleting">删除</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -88,6 +96,7 @@
         </el-table>
 
         <div style="margin-top: 16px; text-align: right">
+          <el-button type="danger" size="small" @click="deleteFromDetail" :loading="deleting">删除此记录</el-button>
           <el-button type="primary" size="small" @click="exportRunLog">导出此记录</el-button>
         </div>
       </div>
@@ -98,7 +107,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 interface RunData {
   run_id: string
@@ -117,6 +126,7 @@ interface RunData {
 
 const runs = ref<RunData[]>([])
 const loading = ref(false)
+const deleting = ref(false)
 const detailVisible = ref(false)
 const detailData = ref<RunData | null>(null)
 const detailTitle = ref('')
@@ -194,6 +204,73 @@ function exportRunLog() {
   a.download = `experiment_${data.run_id}.txt`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+async function deleteRun(row: RunData) {
+  if (deleting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除实验记录 "${row.experiment_name}" (${row.run_id}) 吗？`,
+      '确认删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+
+  deleting.value = true
+  try {
+    await axios.delete(`/api/experiments/history/runs/${row.run_id}`)
+    ElMessage.success('已删除')
+    loadRuns()
+  } catch (e: any) {
+    ElMessage.error(`删除失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function deleteFromDetail() {
+  if (!detailData.value || deleting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除此实验记录 (${detailData.value.run_id}) 吗？`,
+      '确认删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+
+  deleting.value = true
+  try {
+    await axios.delete(`/api/experiments/history/runs/${detailData.value.run_id}`)
+    detailVisible.value = false
+    ElMessage.success('已删除')
+    loadRuns()
+  } catch (e: any) {
+    ElMessage.error(`删除失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function deleteAll() {
+  if (deleting.value) return
+  try {
+    await ElMessageBox.confirm(
+      '确定要清空所有实验历史记录吗？此操作不可恢复！',
+      '确认清空',
+      { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+
+  deleting.value = true
+  try {
+    await axios.delete('/api/experiments/history/runs')
+    ElMessage.success('已清空全部记录')
+    loadRuns()
+  } catch (e: any) {
+    ElMessage.error(`清空失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    deleting.value = false
+  }
 }
 
 onMounted(() => {

@@ -16,6 +16,7 @@
 | 实验自动化 | ✅ 完成 | YAML实验定义 + 状态机引擎 + 日志追溯 |
 | 实验日志 | ✅ 完成 | 实时日志推送 + JSON持久化 + 历史记录查询 |
 | 代码质量审查 | ✅ 完成 | v2.5 全面审查修复（20+问题，含安全/竞态/封装） |
+| 前端稳定性增强 | ✅ 完成 | v2.6 温度显示修复、日志保存开关、历史记录删除、浏览器缓存处理 |
 | 主控制器 | ✅ 完成 | main.py 支持加热器+蠕动泵交互控制 |
 
 ## 核心架构
@@ -59,6 +60,8 @@ FastAPI 服务层（run_in_executor 桥接同步设备）
 - **9种动作类型**：set_temperature, start_heater, stop_heater, set_flow_rate, start_pump, stop_pump, wait, wait_temperature, wait_time
 - **状态机引擎**：IDLE → RUNNING → PAUSED/COMPLETED/FAILED/STOPPED
 - **暂停/恢复**：实验运行中可随时暂停恢复
+- **日志保存开关**：启动实验时可选择是否保存日志到文件
+- **历史记录管理**：查看、删除、导出实验历史记录
 
 ### 通信协议
 - **AIBUS协议**：宇电仪表通信协议（自主实现，不依赖厂商DLL）
@@ -109,7 +112,8 @@ Heat/
 │   │   ├── views/
 │   │   │   ├── Dashboard.vue   # 实时仪表盘
 │   │   │   ├── ControlPanel.vue # 设备控制
-│   │   │   └── ExperimentPage.vue # 实验自动化
+│   │   │   ├── ExperimentPage.vue # 实验自动化
+│   │   │   └── HistoryPage.vue   # 实验历史记录
 │   │   └── router/index.ts
 │   └── package.json
 ├── src/                        # 源代码
@@ -123,6 +127,7 @@ Heat/
 │   │   ├── actions.py         # 动作定义
 │   │   ├── engine.py          # 状态机引擎
 │   │   ├── executor.py        # 步骤执行器
+│   │   ├── experiment_logger.py # 实验日志记录器
 │   │   └── parser.py          # YAML解析器
 │   ├── protocols/             # 通信协议
 │   │   ├── aibus.py
