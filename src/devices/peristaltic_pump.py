@@ -18,6 +18,7 @@ import threading
 import copy
 import atexit
 import weakref
+import struct
 
 from devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
@@ -40,7 +41,7 @@ class PumpChannelConfig:
     channel: int
     enabled: bool = True
     pump_head: int = 5
-    tube_model: int = 0
+    tube_model: int = 1
     suck_back_angle: int = 0
     default_direction: PumpDirection = PumpDirection.CLOCKWISE
     max_flow_rate: float = 100.0
@@ -146,6 +147,8 @@ class LabSmartPumpDevice(BaseDevice):
         self._closed = False
         self._protocol: Optional[ModbusRTUProtocol] = None
         self._channel_data: Dict[int, PumpChannelData] = {}
+        self._consecutive_failures = 0
+        self._max_failures_before_reconnect = 5
         
         if info is None:
             info = DeviceInfo(
@@ -248,16 +251,6 @@ class LabSmartPumpDevice(BaseDevice):
             
             try:
                 self._initialize_channels()
-                try:
-                    status = self.read_channel_status(1)
-                    self._logger.info(f"Connection verified: channel 1 status = {status}")
-                except Exception as verify_err:
-                    self._logger.error(f"Connection verification failed: {verify_err}")
-                    with self._lock:
-                        self._protocol.disconnect()
-                        self._protocol = None
-                        self.status = DeviceStatus.ERROR
-                    return False
             except Exception as e:
                 self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
             
@@ -317,11 +310,15 @@ class LabSmartPumpDevice(BaseDevice):
         for ch_config in self.config.channels:
             channel = ch_config.channel
             if ch_config.enabled:
-                self.enable_channel(channel, True)
-                self.set_pump_head(channel, ch_config.pump_head)
                 self.set_tube_model(channel, ch_config.tube_model)
+                time.sleep(0.3)
+                self.set_direction(channel, ch_config.default_direction)
+                time.sleep(0.3)
+                self.set_run_mode(channel, PumpRunMode.FLOW_MODE)
+                time.sleep(0.3)
                 if ch_config.suck_back_angle > 0:
                     self.set_suck_back_angle(channel, ch_config.suck_back_angle)
+                    time.sleep(0.3)
     
     def _get_slave_address(self) -> int:
         """获取从站地址"""
@@ -394,23 +391,68 @@ class LabSmartPumpDevice(BaseDevice):
     def _read_registers(self, start_address: int, count: int) -> Optional[List[int]]:
         """
         读多个寄存器
-        
+
         Args:
             start_address: 起始地址
             count: 寄存器数量
-        
+
         Returns:
             Optional[List[int]]: 寄存器值列表
         """
         with self._lock:
             if self._closed or self._protocol is None:
                 return None
-            return self._protocol.read_holding_registers(
+            result = self._protocol.read_holding_registers(
                 self._get_slave_address(),
                 start_address,
                 count
             )
-    
+            if result is not None:
+                self._consecutive_failures = 0
+            else:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self._max_failures_before_reconnect:
+                    logger.warning(f"Pump {self.config.device_id}: reconnecting after {self._consecutive_failures} failures")
+                    self._try_reconnect_locked()
+            return result
+
+    def _try_reconnect_locked(self):
+        """尝试重新连接串口（在锁内调用）"""
+        if self._protocol is not None:
+            try:
+                self._protocol.disconnect()
+            except Exception:
+                pass
+            self._protocol = None
+
+        try:
+            port = self.config.connection_params.get("port", "COM4")
+            baudrate = self.config.connection_params.get("baudrate", 9600)
+            parity = self.config.connection_params.get("parity", "N")
+            stopbits = self.config.connection_params.get("stopbits", 1)
+            bytesize = self.config.connection_params.get("bytesize", 8)
+
+            protocol = ModbusRTUProtocol(
+                port=port,
+                baudrate=baudrate,
+                parity=parity,
+                stopbits=stopbits,
+                bytesize=bytesize,
+                timeout=self.config.timeout,
+            )
+
+            if protocol.connect():
+                self._protocol = protocol
+                self._consecutive_failures = 0
+                self.status = DeviceStatus.CONNECTED
+                logger.info(f"Pump {self.config.device_id} reconnected successfully")
+            else:
+                self.status = DeviceStatus.ERROR
+                logger.error(f"Pump {self.config.device_id} reconnect failed")
+        except Exception as e:
+            self.status = DeviceStatus.ERROR
+            logger.error(f"Pump {self.config.device_id} reconnect error: {e}")
+
     def _read_float(self, address: int) -> Optional[float]:
         """
         读浮点数寄存器
@@ -455,45 +497,57 @@ class LabSmartPumpDevice(BaseDevice):
     def start_channel(self, channel: int) -> bool:
         """
         启动通道
-        
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
+
         address = get_channel_address(1, channel)
-        result = self._write_register(address, PumpRunStatus.START)
-        
+        max_retries = 5
+        for attempt in range(max_retries):
+            result = self._write_register(address, PumpRunStatus.START)
+            if result:
+                break
+            if attempt < max_retries - 1:
+                time.sleep(1.0)
+
         if result and channel in self._channel_data:
             self._channel_data[channel].running = True
             self._channel_data[channel].paused = False
-        
+
         return result
-    
+
     def stop_channel(self, channel: int) -> bool:
         """
         停止通道
-        
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
+
         address = get_channel_address(1, channel)
-        result = self._write_register(address, PumpRunStatus.STOP)
-        
+        max_retries = 5
+        for attempt in range(max_retries):
+            result = self._write_register(address, PumpRunStatus.STOP)
+            if result:
+                break
+            if attempt < max_retries - 1:
+                time.sleep(1.0)
+
         if result and channel in self._channel_data:
             self._channel_data[channel].running = False
             self._channel_data[channel].paused = False
-        
+
         return result
     
     def pause_channel(self, channel: int) -> bool:
@@ -864,52 +918,78 @@ class LabSmartPumpDevice(BaseDevice):
     def read_channel_status(self, channel: int) -> Optional[PumpChannelData]:
         """
         读取通道状态
-        
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             Optional[PumpChannelData]: 通道数据的深拷贝
         """
         if not self._validate_channel(channel):
             return None
-        
+
         data = copy.deepcopy(self._channel_data.get(channel, PumpChannelData(channel=channel)))
-        
+
         enable_addr = get_channel_address(300, channel)
-        run_addr = get_channel_address(301, channel)
-        dir_addr = get_channel_address(302, channel)
-        mode_addr = get_channel_address(303, channel)
-        remain_time_addr = get_channel_address(304, channel)
-        remain_vol_addr = get_channel_address(306, channel)
-        current_flow_addr = get_channel_address(308, channel)
-        current_speed_addr = get_channel_address(310, channel)
-        dispensed_vol_addr = get_channel_address(312, channel)
-        repeat_addr = get_channel_address(314, channel)
-        
-        values = self._read_registers(enable_addr, 16)
-        if values is not None and len(values) >= 15:
-            data.enabled = bool(values[0])
-            run_status = values[1]
-            data.running = run_status == PumpRunStatus.START or run_status == PumpRunStatus.FULL_SPEED
+        float_addr = get_channel_address(304, channel)
+
+        int_values = self._read_registers(enable_addr, 4)
+        if int_values is not None and len(int_values) >= 4:
+            data.enabled = bool(int_values[0])
+            run_status = int_values[1]
+            data.running = run_status in (PumpRunStatus.START, PumpRunStatus.FULL_SPEED)
             data.paused = run_status == PumpRunStatus.PAUSE
-            data.direction = self._safe_enum(PumpDirection, values[2], PumpDirection.CLOCKWISE)
-            data.run_mode = self._safe_enum(PumpRunMode, values[3], PumpRunMode.FLOW_MODE)
-            data.completed_repeats = values[14]
-        
-        _remaining_time = self._read_float(remain_time_addr)
-        _remaining_volume = self._read_float(remain_vol_addr)
-        _flow_rate = self._read_float(current_flow_addr)
-        _current_speed = self._read_float(current_speed_addr)
-        _dispensed_volume = self._read_float(dispensed_vol_addr)
-        data.remaining_time = _remaining_time if _remaining_time is not None else 0.0
-        data.remaining_volume = _remaining_volume if _remaining_volume is not None else 0.0
-        data.flow_rate = _flow_rate if _flow_rate is not None else 0.0
-        data.current_speed = _current_speed if _current_speed is not None else 0.0
-        data.dispensed_volume = _dispensed_volume if _dispensed_volume is not None else 0.0
-        
+            data.direction = self._safe_enum(PumpDirection, int_values[2], PumpDirection.CLOCKWISE)
+            data.run_mode = self._safe_enum(PumpRunMode, int_values[3], PumpRunMode.FLOW_MODE)
+        else:
+            logger.debug(f"CH{channel} status read failed")
+            self._channel_data[channel] = data
+            return data
+
+        float_values = self._read_registers(float_addr, 11)
+        if float_values is not None and len(float_values) >= 10:
+            data.remaining_time = self._parse_float_from_registers(float_values[0], float_values[1])
+            data.remaining_volume = self._parse_float_from_registers(float_values[2], float_values[3])
+            data.flow_rate = self._parse_float_from_registers(float_values[4], float_values[5])
+            data.current_speed = self._parse_float_from_registers(float_values[6], float_values[7])
+            data.dispensed_volume = self._parse_float_from_registers(float_values[8], float_values[9])
+            if len(float_values) >= 11:
+                data.completed_repeats = float_values[10]
+        else:
+            logger.debug(f"CH{channel} float read failed, trying key fields only")
+            current_flow_addr = get_channel_address(308, channel)
+            dispensed_vol_addr = get_channel_address(312, channel)
+            _flow_rate = self._read_float(current_flow_addr)
+            _dispensed_volume = self._read_float(dispensed_vol_addr)
+            if _flow_rate is not None:
+                data.flow_rate = _flow_rate
+            if _dispensed_volume is not None:
+                data.dispensed_volume = _dispensed_volume
+
         self._channel_data[channel] = data
         return data
+
+    @staticmethod
+    def _parse_float_from_registers(reg_high: int, reg_low: int) -> float:
+        """从两个MODBUS寄存器解析IEEE754浮点数
+
+        Args:
+            reg_high: 高位寄存器值
+            reg_low: 低位寄存器值
+
+        Returns:
+            float: 解析后的浮点数
+        """
+        try:
+            float_bytes = bytes([
+                (reg_high >> 8) & 0xFF,
+                reg_high & 0xFF,
+                (reg_low >> 8) & 0xFF,
+                reg_low & 0xFF,
+            ])
+            return struct.unpack('>f', float_bytes)[0]
+        except Exception:
+            return 0.0
     
     def is_connected(self) -> bool:
         """

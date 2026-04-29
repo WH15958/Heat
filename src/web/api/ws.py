@@ -1,11 +1,14 @@
 import asyncio
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+DEVICE_READ_TIMEOUT = 5.0
+PUMP_READ_TIMEOUT = 10.0
 
 
 class ConnectionManager:
@@ -13,6 +16,7 @@ class ConnectionManager:
 
     def __init__(self):
         self.active: list[WebSocket] = []
+        self.last_payload: dict = {}
 
     async def connect(self, ws: WebSocket):
         """接受WebSocket连接
@@ -40,6 +44,7 @@ class ConnectionManager:
         Args:
             data: 要广播的数据
         """
+        self.last_payload = data
         disconnected = []
         for ws in self.active:
             try:
@@ -51,6 +56,29 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+@router.get("/ws/status")
+async def ws_status(request: Request):
+    """WebSocket推送状态检查
+
+    Returns:
+        dict: 推送状态信息
+    """
+    dm = request.app.state.device_manager
+    heaters = dm.get_all_heaters()
+    pumps = dm.get_all_pumps()
+    return {
+        "ws_clients": len(manager.active),
+        "heaters_registered": list(heaters.keys()),
+        "heaters_connected": [did for did, h in heaters.items() if h.is_connected()],
+        "pumps_registered": list(pumps.keys()),
+        "pumps_connected": [did for did, p in pumps.items() if p.is_connected()],
+        "last_payload_keys": {
+            "heaters": list(manager.last_payload.get("heaters", {}).keys()),
+            "pumps": list(manager.last_payload.get("pumps", {}).keys()),
+        },
+    }
 
 
 @router.websocket("/ws")
@@ -85,13 +113,16 @@ async def data_push_loop(app):
             serial_mgr.feed_watchdog()
 
             payload = {"type": "realtime", "heaters": {}, "pumps": {}}
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             heaters = dm.get_all_heaters()
             for did, heater in heaters.items():
                 if heater.is_connected():
                     try:
-                        data = await loop.run_in_executor(None, heater.read_data)
+                        data = await asyncio.wait_for(
+                            loop.run_in_executor(None, heater.read_data),
+                            timeout=DEVICE_READ_TIMEOUT,
+                        )
                         payload["heaters"][did] = {
                             "pv": data.pv,
                             "sv": data.sv,
@@ -99,18 +130,27 @@ async def data_push_loop(app):
                             "alarms": data.alarms,
                             "run_status": data.run_status.name,
                         }
-                    except Exception:
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Heater {did} read timeout")
+                        payload["heaters"][did] = {"error": "read_timeout"}
+                    except Exception as e:
+                        logger.warning(f"Heater {did} read failed: {e}")
                         payload["heaters"][did] = {"error": "read_failed"}
 
             pumps = dm.get_all_pumps()
             for did, pump in pumps.items():
                 if pump.is_connected():
                     try:
-                        status = await loop.run_in_executor(
-                            None, dm.read_pump_status, did
+                        status = await asyncio.wait_for(
+                            loop.run_in_executor(None, dm.read_pump_status, did),
+                            timeout=PUMP_READ_TIMEOUT,
                         )
                         payload["pumps"][did] = status
-                    except Exception:
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Pump {did} read timeout")
+                        payload["pumps"][did] = {"error": "read_timeout"}
+                    except Exception as e:
+                        logger.warning(f"Pump {did} read failed: {e}")
                         payload["pumps"][did] = {"error": "read_failed"}
 
             if manager.active:

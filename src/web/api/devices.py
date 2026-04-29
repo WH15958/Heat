@@ -323,3 +323,44 @@ async def emergency_stop(request: Request):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, dm.emergency_stop_all)
     return {"success": True}
+
+
+@router.get("/pump/{device_id}/diagnose")
+async def pump_diagnose(device_id: str, request: Request):
+    """蠕动泵MODBUS通信诊断
+
+    Returns:
+        dict: 诊断结果
+    """
+    dm = get_dm(request)
+    pump = dm.get_pump(device_id)
+    if pump is None:
+        raise HTTPException(status_code=404, detail=f"Pump not found: {device_id}")
+
+    result = {
+        "device_id": device_id,
+        "status": pump.status.name,
+        "connected": pump.is_connected(),
+    }
+
+    if pump.is_connected():
+        loop = asyncio.get_event_loop()
+        channel_tests = {}
+        for ch in range(1, 5):
+            try:
+                ch_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, pump.read_channel_status, ch),
+                    timeout=5.0,
+                )
+                channel_tests[f"CH{ch}"] = {
+                    "success": True,
+                    "running": ch_data.running,
+                    "flow_rate": ch_data.flow_rate,
+                }
+            except asyncio.TimeoutError:
+                channel_tests[f"CH{ch}"] = {"success": False, "error": "timeout"}
+            except Exception as e:
+                channel_tests[f"CH{ch}"] = {"success": False, "error": str(e)}
+        result["channel_tests"] = channel_tests
+
+    return result

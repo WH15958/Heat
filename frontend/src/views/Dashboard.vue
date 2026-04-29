@@ -149,7 +149,7 @@ function initCharts() {
       })
     }
   } catch (error) {
-    console.error('图表初始化失败:', error)
+    console.error('[Dashboard] 图表初始化失败:', error)
   }
 }
 
@@ -171,6 +171,8 @@ onUnmounted(() => {
   resizeObserver?.disconnect()
   tempChart?.dispose()
   flowChart?.dispose()
+  tempChart = null
+  flowChart = null
   window.removeEventListener('resize', handleResize)
 })
 
@@ -183,9 +185,14 @@ watch(realtimeData, (newData: RealtimeData | null) => {
   if (!newData) return
   const now = Date.now()
 
+  const heaterKeys = Object.keys(newData.heaters || {})
+  const pumpKeys = Object.keys(newData.pumps || {})
+  if (heaterKeys.length === 0 && pumpKeys.length === 0) return
+
   if (tempChart) {
     for (const [id, heater] of Object.entries(newData.heaters)) {
       if (heater.error) continue
+      if (typeof heater.pv !== 'number' || typeof heater.sv !== 'number') continue
       if (!heaterDataMap[id]) heaterDataMap[id] = { pv: [], sv: [] }
       heaterDataMap[id].pv.push([now, heater.pv])
       heaterDataMap[id].sv.push([now, heater.sv])
@@ -196,25 +203,30 @@ watch(realtimeData, (newData: RealtimeData | null) => {
     const tempSeries: echarts.SeriesOption[] = []
     const tempLegend: string[] = []
     for (const [id, s] of Object.entries(heaterDataMap)) {
+      if (s.pv.length === 0) continue
       tempLegend.push(`${id} PV`, `${id} SV`)
       tempSeries.push(
         { name: `${id} PV`, type: 'line', data: s.pv, smooth: true, showSymbol: false },
         { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
       )
     }
-    tempChart.setOption(
-      { legend: { data: tempLegend }, series: tempSeries },
-      { replaceMerge: ['series'] }
-    )
+    if (tempSeries.length > 0) {
+      tempChart.setOption(
+        { legend: { data: tempLegend }, series: tempSeries },
+        { replaceMerge: ['series'] }
+      )
+    }
   }
 
   if (flowChart) {
     for (const [pumpId, pump] of Object.entries(newData.pumps)) {
       if (pump.error) continue
+      if (!pump.channels) continue
       if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
-      for (const [chId, chData] of Object.entries(pump.channels || {})) {
+      for (const [chId, chData] of Object.entries(pump.channels)) {
         if (!pumpDataMap[pumpId].channels[chId]) pumpDataMap[pumpId].channels[chId] = []
         const flowRate = chData.running ? chData.flow_rate : 0
+        if (typeof flowRate !== 'number') continue
         pumpDataMap[pumpId].channels[chId].push([now, flowRate])
         pumpDataMap[pumpId].channels[chId] = pumpDataMap[pumpId].channels[chId].slice(-maxPoints)
       }
@@ -224,6 +236,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
     const flowLegend: string[] = []
     for (const [pumpId, pData] of Object.entries(pumpDataMap)) {
       for (const [chId, chSeries] of Object.entries(pData.channels)) {
+        if (chSeries.length === 0) continue
         const name = `${pumpId} CH${chId}`
         flowLegend.push(name)
         const colorIdx = (parseInt(chId) - 1) % channelColors.length
@@ -239,10 +252,12 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         })
       }
     }
-    flowChart.setOption(
-      { legend: { data: flowLegend }, series: flowSeries },
-      { replaceMerge: ['series'] }
-    )
+    if (flowSeries.length > 0) {
+      flowChart.setOption(
+        { legend: { data: flowLegend }, series: flowSeries },
+        { replaceMerge: ['series'] }
+      )
+    }
   }
 })
 </script>

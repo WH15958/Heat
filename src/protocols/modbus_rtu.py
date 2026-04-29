@@ -217,10 +217,9 @@ class ModbusRTUProtocol:
 
         try:
             self._serial.reset_input_buffer()
-            self._serial.reset_output_buffer()
             self._serial.write(full_frame)
             self._serial.flush()
-            time.sleep(0.05)
+            time.sleep(0.1)
             return True
         except Exception as e:
             logger.error(f"Failed to send frame: {e}")
@@ -240,8 +239,6 @@ class ModbusRTUProtocol:
         if not self.is_connected:
             return None
 
-        time.sleep(0.1)
-
         try:
             response = bytearray()
             deadline = time.time() + self.timeout
@@ -257,7 +254,7 @@ class ModbusRTUProtocol:
                 response.extend(chunk)
 
                 if len(response) >= min_length:
-                    time.sleep(0.05)
+                    time.sleep(0.03)
                     remaining = self._serial.in_waiting
                     if remaining > 0:
                         continue
@@ -306,12 +303,12 @@ class ModbusRTUProtocol:
     ) -> Optional[List[int]]:
         """
         读保持寄存器（功能码0x03）
-        
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
             count: 寄存器数量
-        
+
         Returns:
             Optional[List[int]]: 寄存器值列表，失败返回None
         """
@@ -323,18 +320,19 @@ class ModbusRTUProtocol:
             (count >> 8) & 0xFF,
             count & 0xFF,
         ])
-        
+
         if not self._send_frame(frame):
             return None
-        
+
         expected_length = 3 + count * 2 + 2
         response = self._receive_frame(5, expected_length)
-        
+
         if response is None:
+            logger.debug(f"MODBUS read no response: slave={slave_address}, addr={start_address}, count={count}")
             return None
-        
+
         if not self._validate_response(response):
-            logger.debug(f"CRC validation failed")
+            logger.warning(f"MODBUS CRC failed: slave={slave_address}, addr={start_address}")
             return None
 
         func_code = response[1]
@@ -348,15 +346,15 @@ class ModbusRTUProtocol:
                 return None
             logger.error(f"Read: {ModbusException(exception_code).name}")
             return None
-        
+
         byte_count = response[2]
         data = response[3:3 + byte_count]
-        
+
         values = []
         for i in range(0, len(data), 2):
             value = (data[i] << 8) | data[i + 1]
             values.append(value)
-        
+
         return values
     
     def write_single_register(

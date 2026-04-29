@@ -28,48 +28,74 @@ export interface RealtimeData {
   pumps: Record<string, PumpRealtimeData>
 }
 
-export function useWebSocket() {
-  const data = ref<RealtimeData | null>(null)
-  const connected = ref(false)
-  let ws: WebSocket | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+const sharedData = ref<RealtimeData | null>(null)
+const sharedConnected = ref(false)
+let ws: WebSocket | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let refCount = 0
 
-  function connect() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    ws = new WebSocket(`${protocol}//${location.host}/ws`)
+function connect() {
+  if (ws && ws.readyState !== WebSocket.CLOSED) {
+    return
+  }
 
-    ws.onopen = () => {
-      connected.value = true
-      console.log('WebSocket connected')
-    }
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  ws = new WebSocket(`${protocol}//${location.host}/ws`)
 
-    ws.onclose = () => {
-      connected.value = false
-      console.log('WebSocket disconnected, reconnecting in 3s...')
+  ws.onopen = () => {
+    sharedConnected.value = true
+  }
+
+  ws.onclose = () => {
+    sharedConnected.value = false
+    ws = null
+    if (refCount > 0) {
       reconnectTimer = setTimeout(connect, 3000)
-    }
-
-    ws.onerror = () => {
-      ws?.close()
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        data.value = JSON.parse(event.data)
-      } catch (e) {
-        console.error('Failed to parse WebSocket data:', e)
-      }
     }
   }
 
+  ws.onerror = (err) => {
+    console.error('[WS] error', err)
+    ws?.close()
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      sharedData.value = JSON.parse(event.data)
+    } catch (e) {
+      console.error('[WS] parse error:', e)
+    }
+  }
+}
+
+function disconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (ws) {
+    ws.onclose = null
+    ws.close()
+    ws = null
+  }
+  sharedConnected.value = false
+}
+
+export function useWebSocket() {
   onMounted(() => {
-    connect()
+    refCount++
+    if (refCount === 1) {
+      connect()
+    }
   })
 
   onUnmounted(() => {
-    ws?.close()
-    if (reconnectTimer) clearTimeout(reconnectTimer)
+    refCount--
+    if (refCount <= 0) {
+      refCount = 0
+      disconnect()
+    }
   })
 
-  return { data, connected }
+  return { data: sharedData, connected: sharedConnected }
 }
