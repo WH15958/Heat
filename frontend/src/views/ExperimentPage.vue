@@ -36,13 +36,13 @@
                 <el-button type="success" @click="startExperiment" :disabled="isRunning" :loading="starting">
                   启动实验
                 </el-button>
-                <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning">
+                <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning" :loading="pausing">
                   暂停
                 </el-button>
-                <el-button type="primary" @click="resumeExperiment" :disabled="!isPaused">
+                <el-button type="primary" @click="resumeExperiment" :disabled="!isPaused" :loading="resuming">
                   恢复
                 </el-button>
-                <el-button type="danger" @click="stopExperiment" :disabled="!isRunning && !isPaused">
+                <el-button type="danger" @click="stopExperiment" :disabled="!isRunning && !isPaused" :loading="stopping">
                   停止
                 </el-button>
               </div>
@@ -169,6 +169,9 @@ const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
 const progress = ref<ExperimentProgress | null>(null)
 const starting = ref(false)
+const pausing = ref(false)
+const resuming = ref(false)
+const stopping = ref(false)
 const saveLog = ref(true)
 const currentRunId = ref('')
 const logEntries = ref<LogEntry[]>([])
@@ -374,20 +377,26 @@ async function startExperiment() {
 }
 
 async function pauseExperiment() {
+  pausing.value = true
   try {
     await axios.post(`/api/experiments/${selectedFilename.value}/pause`)
     ElMessage.warning('实验已暂停')
   } catch (e: any) {
     ElMessage.error(`暂停失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    pausing.value = false
   }
 }
 
 async function resumeExperiment() {
+  resuming.value = true
   try {
     await axios.post(`/api/experiments/${selectedFilename.value}/resume`)
     ElMessage.success('实验已恢复')
   } catch (e: any) {
     ElMessage.error(`恢复失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    resuming.value = false
   }
 }
 
@@ -398,11 +407,14 @@ async function stopExperiment() {
     })
   } catch { return }
 
+  stopping.value = true
   try {
     await axios.post(`/api/experiments/${selectedFilename.value}/stop`)
     ElMessage.info('实验已停止')
   } catch (e: any) {
     ElMessage.error(`停止失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    stopping.value = false
   }
 }
 

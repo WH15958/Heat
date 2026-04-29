@@ -27,8 +27,8 @@
               </el-button>
             </el-form-item>
             <el-form-item label="运行控制">
-              <el-button type="success" @click="startHeater(id)" :disabled="!heater.connected">启动</el-button>
-              <el-button type="warning" @click="stopHeater(id)" :disabled="!heater.connected">停止</el-button>
+              <el-button type="success" @click="startHeater(id)" :disabled="!heater.connected" :loading="heater.starting">启动</el-button>
+              <el-button type="warning" @click="stopHeater(id)" :disabled="!heater.connected" :loading="heater.stopping">停止</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -99,17 +99,17 @@
               <span v-if="needsDispenseVolume(pump.channels[ch].mode)" class="unit-label">mL</span>
             </div>
             <div class="channel-row" style="margin-top: 6px">
-              <el-button type="success" size="small" @click="startPumpChannel(pumpId, ch)" :disabled="!pump.connected">
+              <el-button type="success" size="small" @click="startPumpChannel(pumpId, ch)" :disabled="!pump.connected" :loading="pump.channels[ch].starting">
                 启动
               </el-button>
-              <el-button type="warning" size="small" @click="stopPumpChannel(pumpId, ch)" :disabled="!pump.connected">
+              <el-button type="warning" size="small" @click="stopPumpChannel(pumpId, ch)" :disabled="!pump.connected" :loading="pump.channels[ch].stopping">
                 停止
               </el-button>
             </div>
           </div>
 
           <div style="margin-top: 12px; text-align: center">
-            <el-button type="danger" size="small" @click="stopPumpAll(pumpId)" :disabled="!pump.connected">
+            <el-button type="danger" size="small" @click="stopPumpAll(pumpId)" :disabled="!pump.connected" :loading="pump.stoppingAll">
               停止所有通道
             </el-button>
           </div>
@@ -138,11 +138,14 @@ interface ChannelConfig {
   mode: PumpMode
   runTime: number
   dispenseVolume: number
+  starting: boolean
+  stopping: boolean
 }
 
 interface PumpDeviceState {
   connected: boolean
   loading: boolean
+  stoppingAll: boolean
   channels: Record<number, ChannelConfig>
 }
 
@@ -150,6 +153,8 @@ interface HeaterDeviceState {
   connected: boolean
   loading: boolean
   targetTemp: number
+  starting: boolean
+  stopping: boolean
 }
 
 const devices = reactive<{
@@ -177,7 +182,7 @@ function needsDispenseVolume(mode: PumpMode): boolean {
 function createPumpChannels(): Record<number, ChannelConfig> {
   const channels: Record<number, ChannelConfig> = {}
   for (let i = 1; i <= 4; i++) {
-    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, dispenseVolume: 10.0 }
+    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, dispenseVolume: 10.0, starting: false, stopping: false }
   }
   return channels
 }
@@ -188,13 +193,13 @@ async function refreshDevices() {
     const data = res.data
     for (const [id, info] of Object.entries(data.heaters || {})) {
       if (!devices.heaters[id]) {
-        devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0 }
+        devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false }
       }
       devices.heaters[id].connected = (info as any).connected
     }
     for (const [id, info] of Object.entries(data.pumps || {})) {
       if (!devices.pumps[id]) {
-        devices.pumps[id] = { connected: false, loading: false, channels: createPumpChannels() }
+        devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels() }
       }
       devices.pumps[id].connected = (info as any).connected
     }
@@ -243,20 +248,26 @@ async function setTemp(id: string, temp: number) {
 }
 
 async function startHeater(id: string) {
+  devices.heaters[id].starting = true
   try {
     await devicesApi.startHeater(id)
     ElMessage.success(`加热器 ${id} 已启动`)
   } catch (e: any) {
     ElMessage.error(`启动失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    devices.heaters[id].starting = false
   }
 }
 
 async function stopHeater(id: string) {
+  devices.heaters[id].stopping = true
   try {
     await devicesApi.stopHeater(id)
     ElMessage.info(`加热器 ${id} 已停止`)
   } catch (e: any) {
     ElMessage.error(`停止失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    devices.heaters[id].stopping = false
   }
 }
 
@@ -288,6 +299,7 @@ async function disconnectPump(id: string) {
 
 async function startPumpChannel(pumpId: string, channel: number) {
   const ch = devices.pumps[pumpId].channels[channel]
+  ch.starting = true
   try {
     await devicesApi.startPump(
       pumpId,
@@ -302,19 +314,26 @@ async function startPumpChannel(pumpId: string, channel: number) {
     ElMessage.success(`通道 ${channel} 已启动 [${modeLabel}]，流量 ${ch.flowRate} mL/min`)
   } catch (e: any) {
     ElMessage.error(`通道 ${channel} 启动失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    ch.starting = false
   }
 }
 
 async function stopPumpChannel(pumpId: string, channel: number) {
+  const ch = devices.pumps[pumpId].channels[channel]
+  ch.stopping = true
   try {
     await devicesApi.stopPump(pumpId, channel)
     ElMessage.info(`通道 ${channel} 已停止`)
   } catch (e: any) {
     ElMessage.error(`通道 ${channel} 停止失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    ch.stopping = false
   }
 }
 
 async function stopPumpAll(pumpId: string) {
+  devices.pumps[pumpId].stoppingAll = true
   try {
     await ElMessageBox.confirm('确定要停止所有通道吗？', '确认', {
       confirmButtonText: '确认',
@@ -325,6 +344,8 @@ async function stopPumpAll(pumpId: string) {
     ElMessage.info('所有通道已停止')
   } catch {
     // 用户取消
+  } finally {
+    devices.pumps[pumpId].stoppingAll = false
   }
 }
 

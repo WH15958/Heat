@@ -19,6 +19,8 @@ class DeviceManager:
         self._heaters: Dict[str, AIHeaterDevice] = {}
         self._pumps: Dict[str, LabSmartPumpDevice] = {}
         self._lock = threading.Lock()
+        self._pump_channel_index: Dict[str, int] = {}
+        self._pump_channel_cache: Dict[str, Dict[str, dict]] = {}
 
     def add_heater(
         self,
@@ -205,7 +207,7 @@ class DeviceManager:
         }
 
     def read_pump_status(self, device_id: str) -> dict:
-        """读取蠕动泵状态
+        """读取蠕动泵状态（通道轮询，每次读2个通道）
 
         Args:
             device_id: 设备ID
@@ -222,26 +224,39 @@ class DeviceManager:
             raise ValueError(f"Pump not found: {device_id}")
         if not pump.is_connected():
             raise IOError("Device not connected")
-        channels = {}
-        for ch in range(1, 5):
-            try:
-                ch_data = pump.read_channel_status(ch)
-                channels[str(ch)] = {
-                    "running": ch_data.running,
-                    "flow_rate": ch_data.flow_rate,
-                    "volume": ch_data.volume,
-                    "direction": ch_data.direction.name
-                    if ch_data.direction
-                    else None,
-                }
-            except Exception:
-                channels[str(ch)] = {
+
+        idx = self._pump_channel_index.get(device_id, 0)
+        channels_to_read = [idx % 4 + 1, (idx + 1) % 4 + 1]
+        self._pump_channel_index[device_id] = (idx + 2) % 4
+
+        if device_id not in self._pump_channel_cache:
+            self._pump_channel_cache[device_id] = {}
+            for ch in range(1, 5):
+                self._pump_channel_cache[device_id][str(ch)] = {
                     "running": False,
                     "flow_rate": 0.0,
                     "volume": 0.0,
                     "direction": None,
                 }
-        return {"device_id": device_id, "channels": channels}
+
+        for ch in channels_to_read:
+            try:
+                ch_data = pump.read_channel_status(ch)
+                self._pump_channel_cache[device_id][str(ch)] = {
+                    "running": ch_data.running,
+                    "flow_rate": ch_data.flow_rate,
+                    "volume": ch_data.dispensed_volume,
+                    "direction": ch_data.direction.name
+                    if ch_data.direction
+                    else None,
+                }
+            except Exception as e:
+                logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
+
+        return {
+            "device_id": device_id,
+            "channels": dict(self._pump_channel_cache[device_id]),
+        }
 
     def emergency_stop_all(self):
         """紧急停止所有设备"""
