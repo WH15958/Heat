@@ -84,7 +84,7 @@ class ModbusRTUProtocol:
     实现标准的MODBUS RTU通信协议，支持读写保持寄存器操作。
     
     Example:
-        >>> protocol = ModbusRTUProtocol(port="COM3", baudrate=9600)
+        >>> protocol = ModbusRTUProtocol(port="COM3", baudrate=19200)
         >>> protocol.connect()
         >>> values = protocol.read_holding_registers(slave_address=1, start_address=0, count=10)
         >>> protocol.write_single_register(slave_address=1, address=0, value=100)
@@ -96,8 +96,8 @@ class ModbusRTUProtocol:
     def __init__(
         self,
         port: str,
-        baudrate: int = 9600,
-        parity: str = 'N',
+        baudrate: int = 19200,
+        parity: str = 'E',
         stopbits: int = 1,
         bytesize: int = 8,
         timeout: float = 2.0,
@@ -384,11 +384,13 @@ class ModbusRTUProtocol:
         ])
         
         if not self._send_frame(frame):
+            logger.warning(f"WriteSingle: send failed addr={address} value={value}")
             return False
         
         response = self._receive_frame(5, 8)
         
         if response is None:
+            logger.warning(f"WriteSingle: no response addr={address} value={value}")
             return False
         
         if not self._validate_response(response):
@@ -457,7 +459,7 @@ class ModbusRTUProtocol:
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.warning(f"WriteMultiple: slave device busy, write may not have succeeded")
                 return False
-            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name}")
+            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name} addr={start_address} count={count} values={values}")
             return False
 
         return True
@@ -470,21 +472,26 @@ class ModbusRTUProtocol:
     ) -> bool:
         """
         写浮点数到寄存器（占用2个寄存器，4字节）
-        
+
+        协议规定功能码10H用于写long/float型到保持寄存器，浮点数必须使用0x10批量写入。
+        使用0x06单写浮点数的第二个寄存器会返回ILLEGAL_DATA_ADDRESS，
+        因为浮点数的低字寄存器不是独立寄存器，必须与高字寄存器原子写入。
+
+        浮点数使用大端序（高字节在前）发送。
+        例如 5.0 的 IEEE754 表示为 0x40A00000，发送为寄存器 [0x40A0, 0x0000]。
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
             value: 浮点数值
-        
+
         Returns:
             bool: 写入成功返回True
         """
         float_bytes = struct.pack('>f', value)
-        values = [
-            (float_bytes[0] << 8) | float_bytes[1],
-            (float_bytes[2] << 8) | float_bytes[3],
-        ]
-        return self.write_multiple_registers(slave_address, start_address, values)
+        reg_high = (float_bytes[0] << 8) | float_bytes[1]
+        reg_low = (float_bytes[2] << 8) | float_bytes[3]
+        return self.write_multiple_registers(slave_address, start_address, [reg_high, reg_low])
     
     def read_float_register(
         self,
@@ -493,23 +500,25 @@ class ModbusRTUProtocol:
     ) -> Optional[float]:
         """
         读浮点数寄存器（占用2个寄存器，4字节）
-        
+
+        寄存器字序为ABCD（大端序，高字在前）：第一个寄存器=高字，第二个寄存器=低字。
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
-        
+
         Returns:
             Optional[float]: 浮点数值，失败返回None
         """
         values = self.read_holding_registers(slave_address, start_address, 2)
         if values is None or len(values) < 2:
             return None
-        
+
         float_bytes = bytes([
             (values[0] >> 8) & 0xFF,
             values[0] & 0xFF,
             (values[1] >> 8) & 0xFF,
             values[1] & 0xFF,
         ])
-        
+
         return struct.unpack('>f', float_bytes)[0]

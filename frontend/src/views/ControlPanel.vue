@@ -65,14 +65,32 @@
               <el-select v-model="pump.channels[ch].mode" size="small" style="width: 120px" :disabled="!pump.connected">
                 <el-option v-for="m in PUMP_MODES" :key="m.value" :label="m.label" :value="m.value" />
               </el-select>
-              <el-input-number
-                v-model="pump.channels[ch].flowRate"
-                :min="0.1" :max="100" :step="0.5" :precision="1"
-                size="small"
-                style="width: 120px"
-                :disabled="!pump.connected"
-              />
-              <span class="unit-label">mL/min</span>
+              <el-select v-model="pump.channels[ch].tubeModel" size="small" style="width: 130px" :disabled="!pump.connected" @change="onTubeModelChange(pump.channels[ch])">
+                <el-option v-for="t in TUBE_MODELS" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" />
+              </el-select>
+              <template v-if="pump.channels[ch].mode === 'TIME_QUANTITY'">
+                <el-input-number
+                  :model-value="calcFlowRate(pump.channels[ch])"
+                  size="small"
+                  style="width: 100px"
+                  disabled
+                  :precision="2"
+                />
+                <span class="unit-label">mL/min</span>
+                <span class="unit-label" style="color: #909399; font-size: 11px">(自动)</span>
+              </template>
+              <template v-else>
+                <el-input-number
+                  v-model="pump.channels[ch].flowRate"
+                  :min="0.1" :max="pump.channels[ch].flowUnit === 3 ? 150 : pump.channels[ch].maxFlowRate" :step="0.5" :precision="1"
+                  size="small"
+                  style="width: 100px"
+                  :disabled="!pump.connected"
+                />
+                <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px" :disabled="!pump.connected">
+                  <el-option v-for="u in FLOW_UNITS" :key="u.value" :label="u.label" :value="u.value" />
+                </el-select>
+              </template>
             </div>
             <div class="channel-row" style="margin-top: 6px">
               <el-radio-group v-model="pump.channels[ch].direction" size="small" :disabled="!pump.connected">
@@ -125,10 +143,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive } from 'vue'
-import { devicesApi, PUMP_MODES, type PumpMode } from '../api/devices'
+import { onMounted, reactive, watch } from 'vue'
+import { devicesApi, PUMP_MODES, TUBE_MODELS, FLOW_UNITS, type PumpMode } from '../api/devices'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket } from '../composables/useWebSocket'
+
+const STORAGE_KEY = 'heat_control_params'
 
 const { data: realtimeData } = useWebSocket()
 
@@ -138,6 +158,9 @@ interface ChannelConfig {
   mode: PumpMode
   runTime: number
   dispenseVolume: number
+  tubeModel: number
+  maxFlowRate: number
+  flowUnit: number
   starting: boolean
   stopping: boolean
 }
@@ -179,13 +202,88 @@ function needsDispenseVolume(mode: PumpMode): boolean {
   return mode === 'TIME_QUANTITY' || mode === 'QUANTITY_SPEED'
 }
 
+function calcFlowRate(ch: ChannelConfig): number {
+  if (ch.mode === 'TIME_QUANTITY' && ch.runTime > 0) {
+    return ch.dispenseVolume / (ch.runTime / 60)
+  }
+  return ch.flowRate
+}
+
 function createPumpChannels(): Record<number, ChannelConfig> {
   const channels: Record<number, ChannelConfig> = {}
   for (let i = 1; i <= 4; i++) {
-    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, dispenseVolume: 10.0, starting: false, stopping: false }
+    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, dispenseVolume: 10.0, tubeModel: 11, maxFlowRate: 22.0, flowUnit: 1, starting: false, stopping: false }
   }
   return channels
 }
+
+function getMaxFlowRate(tubeModel: number): number {
+  const found = TUBE_MODELS.find(t => t.value === tubeModel)
+  return found ? found.maxFlow : 7.55
+}
+
+function onTubeModelChange(ch: ChannelConfig) {
+  ch.maxFlowRate = getMaxFlowRate(ch.tubeModel)
+  if (ch.flowRate > ch.maxFlowRate) {
+    ch.flowRate = ch.maxFlowRate
+  }
+}
+
+function saveParams() {
+  const params: Record<string, any> = {}
+  for (const [pumpId, pump] of Object.entries(devices.pumps)) {
+    params[pumpId] = {}
+    for (const [ch, cfg] of Object.entries(pump.channels)) {
+      params[pumpId][ch] = {
+        flowRate: cfg.flowRate,
+        direction: cfg.direction,
+        mode: cfg.mode,
+        runTime: cfg.runTime,
+        dispenseVolume: cfg.dispenseVolume,
+        tubeModel: cfg.tubeModel,
+        flowUnit: cfg.flowUnit,
+      }
+    }
+  }
+  for (const [heaterId, heater] of Object.entries(devices.heaters)) {
+    params[heaterId] = { targetTemp: heater.targetTemp }
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
+}
+
+function restoreParams() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const params = JSON.parse(raw)
+    for (const [pumpId, pump] of Object.entries(params)) {
+      if (!devices.pumps[pumpId]) continue
+      for (const [ch, cfg] of Object.entries(pump as Record<string, any>)) {
+        const channel = devices.pumps[pumpId].channels[Number(ch)]
+        if (!channel) continue
+        if (cfg.flowRate !== undefined) channel.flowRate = cfg.flowRate
+        if (cfg.direction !== undefined) channel.direction = cfg.direction
+        if (cfg.mode !== undefined) channel.mode = cfg.mode
+        if (cfg.runTime !== undefined) channel.runTime = cfg.runTime
+        if (cfg.dispenseVolume !== undefined) channel.dispenseVolume = cfg.dispenseVolume
+        if (cfg.tubeModel !== undefined) {
+          channel.tubeModel = cfg.tubeModel
+          channel.maxFlowRate = getMaxFlowRate(cfg.tubeModel)
+        }
+        if (cfg.flowUnit !== undefined) channel.flowUnit = cfg.flowUnit
+      }
+    }
+    for (const [heaterId, heater] of Object.entries(params)) {
+      if (!devices.heaters[heaterId]) continue
+      const cfg = heater as any
+      if (cfg.targetTemp !== undefined) devices.heaters[heaterId].targetTemp = cfg.targetTemp
+    }
+  } catch {
+    // ignore parse errors
+  }
+}
+
+watch(devices, saveParams, { deep: true })
 
 async function refreshDevices() {
   try {
@@ -209,7 +307,7 @@ async function refreshDevices() {
 }
 
 onMounted(() => {
-  refreshDevices()
+  refreshDevices().then(restoreParams)
 })
 
 async function connectHeater(id: string) {
@@ -301,17 +399,24 @@ async function startPumpChannel(pumpId: string, channel: number) {
   const ch = devices.pumps[pumpId].channels[channel]
   ch.starting = true
   try {
-    await devicesApi.startPump(
+    const effectiveFlowRate = ch.mode === 'TIME_QUANTITY' ? calcFlowRate(ch) : ch.flowRate
+    const res = await devicesApi.startPump(
       pumpId,
       channel,
-      ch.flowRate,
+      effectiveFlowRate,
       ch.direction,
       ch.mode,
       needsRunTime(ch.mode) ? ch.runTime : undefined,
       needsDispenseVolume(ch.mode) ? ch.dispenseVolume : undefined,
+      ch.tubeModel,
+      ch.mode === 'TIME_QUANTITY' ? 1 : ch.flowUnit,
     )
+    if (!res.data.success) {
+      ElMessage.error(`通道 ${channel} 启动失败: 泵设备返回失败`)
+      return
+    }
     const modeLabel = PUMP_MODES.find(m => m.value === ch.mode)?.label || ch.mode
-    ElMessage.success(`通道 ${channel} 已启动 [${modeLabel}]，流量 ${ch.flowRate} mL/min`)
+    ElMessage.success(`通道 ${channel} 已启动 [${modeLabel}]，流量 ${effectiveFlowRate.toFixed(2)} mL/min`)
   } catch (e: any) {
     ElMessage.error(`通道 ${channel} 启动失败: ${e.response?.data?.detail || e.message}`)
   } finally {

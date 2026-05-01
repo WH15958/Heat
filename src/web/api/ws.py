@@ -94,6 +94,15 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)
+    finally:
+        dm = ws.app.state.device_manager
+        for did, pump in dm.get_all_pumps().items():
+            if pump.is_connected():
+                try:
+                    pump.stop_all()
+                    logger.info(f"WebSocket断开，自动停止泵 {did}")
+                except Exception as e:
+                    logger.warning(f"WebSocket断开时停止泵 {did} 失败: {e}")
 
 
 async def data_push_loop(app):

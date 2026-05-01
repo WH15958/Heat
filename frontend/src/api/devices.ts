@@ -9,6 +9,28 @@ export const PUMP_MODES = [
   { value: 'QUANTITY_SPEED', label: '定量定速', desc: '设定总量后定速运行' },
 ] as const
 
+export const TUBE_MODELS = [
+  { value: 0, label: '1×1', maxFlow: 7.55 },
+  { value: 1, label: '2×1', maxFlow: 27.52 },
+  { value: 2, label: '2.4×0.86', maxFlow: 38.13 },
+  { value: 3, label: '3×1', maxFlow: 48.38 },
+  { value: 4, label: '0.13×0.86', maxFlow: 0.29 },
+  { value: 5, label: '0.19×0.86', maxFlow: 0.44 },
+  { value: 6, label: '0.25×0.86', maxFlow: 0.76 },
+  { value: 7, label: '0.51×0.86', maxFlow: 2.00 },
+  { value: 8, label: '0.89×0.86', maxFlow: 4.47 },
+  { value: 9, label: '1.14×0.86', maxFlow: 9.16 },
+  { value: 10, label: '1.42×0.86', maxFlow: 18.75 },
+  { value: 11, label: '1.52×0.86', maxFlow: 22.0 },
+  { value: 12, label: '2.06×0.86', maxFlow: 29.60 },
+  { value: 13, label: '2.79×0.86', maxFlow: 42.86 },
+] as const
+
+export const FLOW_UNITS = [
+  { value: 1, label: 'mL/min' },
+  { value: 3, label: 'RPM' },
+] as const
+
 export type PumpMode = typeof PUMP_MODES[number]['value']
 
 export const devicesApi = {
@@ -33,6 +55,8 @@ export const devicesApi = {
     mode: PumpMode = 'FLOW_MODE',
     runTime?: number,
     dispenseVolume?: number,
+    tubeModel?: number,
+    flowUnit?: number,
   ) =>
     api.post(`/pump/${id}/start`, {
       channel,
@@ -41,6 +65,8 @@ export const devicesApi = {
       mode,
       run_time: runTime ?? null,
       dispense_volume: dispenseVolume ?? null,
+      tube_model: tubeModel ?? null,
+      flow_unit: flowUnit ?? null,
     }),
   stopPump: (id: string, channel?: number) =>
     api.post(`/pump/${id}/stop`, { channel: channel ?? null }),

@@ -43,8 +43,8 @@ pumps:
     name: "蠕动泵"
     connection:
       port: "COM10"
-      baudrate: 9600
-      parity: "N"
+      baudrate: 19200
+      parity: "E"
       stopbits: 1
       bytesize: 8
     slave_address: 1
@@ -57,27 +57,27 @@ pumps:
       - channel: 1
         enabled: true
         pump_head: 5
-        tube_model: 0
+        tube_model: 11
         suck_back_angle: 0
-        max_flow_rate: 100.0
+        max_flow_rate: 18.75
       - channel: 2
         enabled: true
         pump_head: 5
-        tube_model: 0
+        tube_model: 11
         suck_back_angle: 0
-        max_flow_rate: 100.0
+        max_flow_rate: 18.75
       - channel: 3
         enabled: true
         pump_head: 5
-        tube_model: 0
+        tube_model: 11
         suck_back_angle: 0
-        max_flow_rate: 100.0
+        max_flow_rate: 18.75
       - channel: 4
         enabled: true
         pump_head: 5
-        tube_model: 0
+        tube_model: 11
         suck_back_angle: 0
-        max_flow_rate: 100.0
+        max_flow_rate: 18.75
 
 monitor:
   enabled: true

@@ -185,11 +185,24 @@ class AIHeaterDevice(BaseDevice):
 
 ```python
 class LabSmartPumpDevice(BaseDevice):
-    _write_float_with_unit()  # 原子操作：浮点+单位同时写入
+    _write_float_with_unit()  # 先写单位(0x06)，再写浮点数(0x10)
     _safe_enum()              # 枚举越界保护
     channel_data              # 返回deepcopy，防止外部修改
     _force_disconnect()       # 非阻塞锁获取（atexit安全）
+    set_tube_model()          # 验证范围0-13，防止无效型号损坏寄存器
 ```
+
+**Pump 运行模式参数规则（重要）**：
+
+| 参数 | 可设置的模式 | 不可设置的模式 |
+|------|-------------|---------------|
+| 流速(n110) | 仅流量模式(0) | 定时定量/定时定速/定量定速 ❌ |
+| 运行时间(n107) | 定时定量(1)/定时定速(2) | 流量模式 ❌ |
+| 分装液量(n104) | 定时定量(1)/定量定速(3) | 流量模式 ❌ |
+
+非流量模式启动流程：先切流量模式设流速 → 再切目标模式设其他参数 → 启动。
+
+流速单位(n112)仅接受 1(mL/min) 和 3(RPM)，0 和 2 返回 ILLEGAL_DATA_VALUE。
 
 ### 协议层 (`src/protocols/`)
 

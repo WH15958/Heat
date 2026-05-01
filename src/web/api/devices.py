@@ -22,6 +22,8 @@ class StartPumpRequest(BaseModel):
     mode: str = "FLOW_MODE"
     run_time: Optional[float] = None
     dispense_volume: Optional[float] = None
+    tube_model: Optional[int] = None
+    flow_unit: Optional[int] = None
 
 
 class StopPumpRequest(BaseModel):
@@ -277,6 +279,7 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
         result = await loop.run_in_executor(
             None, dm.start_pump_channel, device_id, body.channel,
             body.flow_rate, direction, run_mode, run_time, dispense_volume,
+            body.tube_model, body.flow_unit,
         )
         return {
             "success": result,
@@ -364,3 +367,29 @@ async def pump_diagnose(device_id: str, request: Request):
         result["channel_tests"] = channel_tests
 
     return result
+
+
+@router.get("/pump/{device_id}/settings")
+async def get_pump_settings(device_id: str, request: Request):
+    """获取蠕动泵当前设置参数
+
+    Returns:
+        dict: 各通道的设置参数
+    """
+    dm = get_dm(request)
+    pump = dm.get_pump(device_id)
+    if pump is None:
+        raise HTTPException(status_code=404, detail=f"Pump not found: {device_id}")
+
+    settings = {"device_id": device_id, "channels": {}}
+    for ch in range(1, 5):
+        ch_data = pump.channel_data.get(ch)
+        if ch_data:
+            settings["channels"][str(ch)] = {
+                "enabled": ch_data.enabled,
+                "running": ch_data.running,
+                "flow_rate": ch_data.flow_rate,
+                "direction": ch_data.direction.name if ch_data.direction else "CW",
+                "run_mode": ch_data.run_mode.name if ch_data.run_mode else "FLOW_MODE",
+            }
+    return settings

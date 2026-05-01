@@ -355,7 +355,7 @@ class WatchdogThread(threading.Thread):
     """看门狗线程 - 监控主进程状态"""
     
     def __init__(self, callback=None, interval=1.0, parent_pid=None, check_parent: bool = False):
-        super().__init__(daemon=False, name="WatchdogThread")
+        super().__init__(daemon=True, name="WatchdogThread")
         self._stop_event = threading.Event()
         self._callback = callback
         self._interval = interval
@@ -440,7 +440,6 @@ class SerialPortManager:
             atexit.register(self.cleanup)
             try:
                 signal.signal(signal.SIGTERM, self._signal_handler)
-                signal.signal(signal.SIGINT, self._signal_handler)
             except (OSError, ValueError):
                 pass
             self._cleanup_registered = True
@@ -449,6 +448,7 @@ class SerialPortManager:
         """信号处理器"""
         logger.info(f"Received signal {signum}, cleaning up...")
         self.cleanup()
+        os._exit(0)
     
     def acquire_port(self, port: str, force: bool = False) -> bool:
         """

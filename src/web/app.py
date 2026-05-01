@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, setup_logging
 from src.web.api.devices import router as devices_router
 from src.web.api.experiments import router as experiments_router
 from src.web.api.ws import router as ws_router, data_push_loop
@@ -56,8 +56,9 @@ def create_device_manager() -> DeviceManager:
             dm.add_pump(
                 device_id=p_cfg["device_id"],
                 port=conn.get("port", "COM1"),
-                baudrate=conn.get("baudrate", 9600),
+                baudrate=conn.get("baudrate", 19200),
                 slave_address=p_cfg.get("slave_address", 1),
+                channels=p_cfg.get("channels"),
             )
             logger.info(f"Registered pump: {p_cfg['device_id']}")
 
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
         app: FastAPI应用实例
     """
     logger.info("Starting Heat Web Server...")
+    setup_logging(level="INFO", console_output=True, file_output=True)
     app.state.device_manager = create_device_manager()
     push_task = asyncio.create_task(data_push_loop(app))
     yield

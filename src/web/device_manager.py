@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import Dict, Optional
 
 from devices.heater import AIHeaterDevice, HeaterConfig
@@ -19,6 +20,7 @@ class DeviceManager:
         self._heaters: Dict[str, AIHeaterDevice] = {}
         self._pumps: Dict[str, LabSmartPumpDevice] = {}
         self._lock = threading.Lock()
+        self._pump_locks: Dict[str, threading.Lock] = {}
         self._pump_channel_index: Dict[str, int] = {}
         self._pump_channel_cache: Dict[str, Dict[str, dict]] = {}
 
@@ -55,7 +57,7 @@ class DeviceManager:
         self,
         device_id: str,
         port: str,
-        baudrate: int = 9600,
+        baudrate: int = 19200,
         slave_address: int = 1,
         channels: Optional[list] = None,
     ) -> str:
@@ -97,7 +99,7 @@ class DeviceManager:
             connection_params={
                 "port": port,
                 "baudrate": baudrate,
-                "parity": "N",
+                "parity": "E",
                 "stopbits": 1,
                 "bytesize": 8,
             },
@@ -105,6 +107,7 @@ class DeviceManager:
             channels=channel_configs,
         )
         self._pumps[device_id] = LabSmartPumpDevice(config)
+        self._pump_locks[device_id] = threading.Lock()
         logger.info(f"Registered pump: {device_id} on {port}")
         return device_id
 
@@ -207,7 +210,7 @@ class DeviceManager:
         }
 
     def read_pump_status(self, device_id: str) -> dict:
-        """读取蠕动泵状态（通道轮询，每次读2个通道）
+        """读取蠕动泵状态（读取所有4个通道）
 
         Args:
             device_id: 设备ID
@@ -225,10 +228,6 @@ class DeviceManager:
         if not pump.is_connected():
             raise IOError("Device not connected")
 
-        idx = self._pump_channel_index.get(device_id, 0)
-        channels_to_read = [idx % 4 + 1, (idx + 1) % 4 + 1]
-        self._pump_channel_index[device_id] = (idx + 2) % 4
-
         if device_id not in self._pump_channel_cache:
             self._pump_channel_cache[device_id] = {}
             for ch in range(1, 5):
@@ -239,17 +238,18 @@ class DeviceManager:
                     "direction": None,
                 }
 
-        for ch in channels_to_read:
+        for ch in range(1, 5):
             try:
                 ch_data = pump.read_channel_status(ch)
-                self._pump_channel_cache[device_id][str(ch)] = {
-                    "running": ch_data.running,
-                    "flow_rate": ch_data.flow_rate,
-                    "volume": ch_data.dispensed_volume,
-                    "direction": ch_data.direction.name
-                    if ch_data.direction
-                    else None,
-                }
+                if ch_data is not None:
+                    self._pump_channel_cache[device_id][str(ch)] = {
+                        "running": ch_data.running,
+                        "flow_rate": ch_data.flow_rate,
+                        "volume": ch_data.dispensed_volume,
+                        "direction": ch_data.direction.name
+                        if ch_data.direction
+                        else None,
+                    }
             except Exception as e:
                 logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
 
@@ -404,6 +404,8 @@ class DeviceManager:
         mode: "PumpRunMode",
         run_time: Optional[float] = None,
         dispense_volume: Optional[float] = None,
+        tube_model: Optional[int] = None,
+        flow_unit: Optional[int] = None,
     ) -> bool:
         """启动蠕动泵通道
 
@@ -415,6 +417,8 @@ class DeviceManager:
             mode: 运行模式
             run_time: 运行时间（秒）
             dispense_volume: 定量体积（mL）
+            tube_model: 软管型号（覆盖配置）
+            flow_unit: 流速单位 (0=uL/min, 1=mL/min, 2=L/min, 3=RPM)
 
         Returns:
             bool: 启动成功返回True
@@ -430,19 +434,129 @@ class DeviceManager:
         if not pump.is_connected():
             logger.warning(f"Pump {device_id} not connected")
             return False
+        pump_lock = self._pump_locks.get(device_id)
+        if pump_lock:
+            pump_lock.acquire()
+        try:
+            return self._start_pump_channel_inner(pump, device_id, channel, flow_rate, direction, mode, run_time, dispense_volume, tube_model, flow_unit)
+        finally:
+            if pump_lock:
+                pump_lock.release()
+
+    def _start_pump_channel_inner(self, pump: LabSmartPumpDevice, device_id: str,
+                                   channel: int, flow_rate: float, direction, mode,
+                                   run_time, dispense_volume, tube_model=None, flow_unit=None) -> bool:
+        from src.protocols.pump_params import FlowUnit, PumpRunMode
+
+        if not pump.enable_channel(channel, True):
+            logger.warning(f"Pump {device_id} CH{channel} enable failed")
+            return False
+        logger.info(f"Pump {device_id} CH{channel}: enable OK")
+        pump.stop_channel(channel)
+        time.sleep(0.2)
+
+        effective_tube_model = tube_model
+        if effective_tube_model is None:
+            current_tube = pump.get_tube_model(channel)
+            if current_tube is None or current_tube == 0:
+                ch_config = pump.get_channel_config(channel)
+                if ch_config and ch_config.tube_model > 0:
+                    effective_tube_model = ch_config.tube_model
+        if effective_tube_model is not None and effective_tube_model > 0:
+            if not pump.set_tube_model(channel, effective_tube_model):
+                logger.warning(f"Pump {device_id} CH{channel} set_tube_model({effective_tube_model}) failed")
+                return False
+            time.sleep(0.3)
+            readback = pump.get_tube_model(channel)
+            logger.info(f"Pump {device_id} CH{channel}: tube_model={effective_tube_model} written, readback={readback}")
+            if readback is not None and readback != effective_tube_model:
+                logger.warning(f"Pump {device_id} CH{channel}: tube_model mismatch! written={effective_tube_model} readback={readback}")
+        else:
+            logger.warning(f"Pump {device_id} CH{channel} tube_model not set, flow rate range may be limited")
+
         if not pump.set_direction(channel, direction):
+            logger.warning(f"Pump {device_id} CH{channel} set_direction failed")
             return False
-        if not pump.set_run_mode(channel, mode):
-            return False
-        if not pump.set_flow_rate(channel, flow_rate):
-            return False
-        if run_time is not None:
-            if not pump.set_run_time(channel, run_time):
+        time.sleep(0.05)
+
+        effective_flow_unit = FlowUnit(flow_unit) if flow_unit is not None else FlowUnit.ML_MIN
+
+        if mode == PumpRunMode.FLOW_MODE:
+            if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) failed")
                 return False
-        if dispense_volume is not None:
-            if not pump.set_dispense_volume(channel, dispense_volume):
+            time.sleep(0.1)
+            if not pump.set_flow_rate(channel, flow_rate, effective_flow_unit):
+                logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {effective_flow_unit}) failed")
                 return False
-        return pump.start_channel(channel)
+            time.sleep(0.05)
+
+        elif mode == PumpRunMode.TIME_QUANTITY:
+            if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) for flow_rate failed")
+                return False
+            time.sleep(0.1)
+            if not pump.set_flow_rate(channel, flow_rate, effective_flow_unit):
+                logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {effective_flow_unit}) failed")
+                return False
+            time.sleep(0.05)
+            if not pump.set_run_mode(channel, PumpRunMode.TIME_QUANTITY):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(TIME_QUANTITY) failed")
+                return False
+            time.sleep(0.1)
+            logger.info(f"Pump {device_id} CH{channel}: TIME_QUANTITY mode, flow_rate will be auto-calculated by pump")
+            if run_time is not None:
+                if not pump.set_run_time(channel, run_time):
+                    logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
+                    return False
+                time.sleep(0.05)
+            if dispense_volume is not None:
+                if not pump.set_dispense_volume(channel, dispense_volume):
+                    logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
+                    return False
+                time.sleep(0.05)
+
+        elif mode == PumpRunMode.TIME_SPEED:
+            if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) for flow_rate failed")
+                return False
+            time.sleep(0.1)
+            if not pump.set_flow_rate(channel, flow_rate, effective_flow_unit):
+                logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {effective_flow_unit}) failed")
+                return False
+            time.sleep(0.05)
+            if not pump.set_run_mode(channel, PumpRunMode.TIME_SPEED):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(TIME_SPEED) failed")
+                return False
+            time.sleep(0.1)
+            if run_time is not None:
+                if not pump.set_run_time(channel, run_time):
+                    logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
+                    return False
+                time.sleep(0.05)
+
+        elif mode == PumpRunMode.QUANTITY_SPEED:
+            if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) for flow_rate failed")
+                return False
+            time.sleep(0.1)
+            if not pump.set_flow_rate(channel, flow_rate, effective_flow_unit):
+                logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {effective_flow_unit}) failed")
+                return False
+            time.sleep(0.05)
+            if not pump.set_run_mode(channel, PumpRunMode.QUANTITY_SPEED):
+                logger.warning(f"Pump {device_id} CH{channel} set_run_mode(QUANTITY_SPEED) failed")
+                return False
+            time.sleep(0.1)
+            if dispense_volume is not None:
+                if not pump.set_dispense_volume(channel, dispense_volume):
+                    logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
+                    return False
+                time.sleep(0.05)
+
+        result = pump.start_channel(channel)
+        logger.info(f"Pump {device_id} CH{channel}: start result={result}")
+        return result
 
     def stop_pump_channel(self, device_id: str, channel: Optional[int] = None) -> bool:
         """停止蠕动泵

@@ -189,23 +189,30 @@ class ChemicalSynthesisExperiment:
         self._heartbeat_timeout = 10.0
 
     def _create_heater_config(self, port: str, device_id: str, name: str) -> HeaterConfig:
-        """创建加热器配置：串口、波特率、地址"""
+        """创建加热器配置：串口、波特率、地址
+
+        波特率与校验位与 system_config.yaml 保持一致。
+        """
         return HeaterConfig(
             device_id=device_id,
-            connection_params={'port': port, 'baudrate': 9600, 'address': 1},
+            connection_params={'port': port, 'baudrate': 9600, 'address': 1, 'parity': 'N'},
             timeout=2.0,
             decimal_places=1,
         )
 
     def _create_pump_config(self, port: str) -> PeristalticPumpConfig:
-        """创建蠕动泵配置：启用通道1、通道4"""
+        """创建蠕动泵配置：启用通道1、通道4
+
+        波特率与校验位与 system_config.yaml 保持一致。
+        协议文档规定：1个起始位 + 8个数据位 + 1个偶校验位 + 1个停止位。
+        """
         channels = [
-            PumpChannelConfig(channel=1, enabled=True, pump_head=5, tube_model=0),
-            PumpChannelConfig(channel=4, enabled=True, pump_head=5, tube_model=0),
+            PumpChannelConfig(channel=1, enabled=True, pump_head=5, tube_model=11),
+            PumpChannelConfig(channel=4, enabled=True, pump_head=5, tube_model=11),
         ]
         return PeristalticPumpConfig(
             device_id="pump1",
-            connection_params={'port': port, 'baudrate': 9600, 'parity': 'N'},
+            connection_params={'port': port, 'baudrate': 19200, 'parity': 'E', 'stopbits': 1, 'bytesize': 8},
             slave_address=1,
             channels=channels
         )

@@ -23,84 +23,115 @@ class RegisterDefinition:
     read_only: bool = False
 
 
-class PumpRunMode(IntEnum):
+class _DescribableIntEnum(IntEnum):
+    """可描述整数枚举基类，提供通用的 get_description 方法"""
+
+    @classmethod
+    def get_description(cls, value: int) -> str:
+        """根据枚举值获取描述文本"""
+        try:
+            return cls._descriptions().get(value, f"未知({value})")
+        except (AttributeError, TypeError):
+            return f"未知({value})"
+
+    @classmethod
+    def _descriptions(cls) -> Dict[int, str]:
+        """子类必须重写此方法返回值到描述的映射字典"""
+        raise NotImplementedError("子类必须实现 _descriptions 方法")
+
+
+class PumpRunMode(_DescribableIntEnum):
     """运行模式枚举"""
     FLOW_MODE = 0
     TIME_QUANTITY = 1
     TIME_SPEED = 2
     QUANTITY_SPEED = 3
-    
+
     @classmethod
-    def get_description(cls, value: int) -> str:
-        descriptions = {
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
             0: "流量模式",
             1: "定时定量",
             2: "定时定速",
             3: "定量定速",
         }
-        return descriptions.get(value, f"未知模式({value})")
 
 
-class PumpRunStatus(IntEnum):
+class PumpRunStatus(_DescribableIntEnum):
     """启停控制枚举"""
     STOP = 0
     START = 1
     PAUSE = 2
     FULL_SPEED = 3
-    
+
     @classmethod
-    def get_description(cls, value: int) -> str:
-        descriptions = {
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
             0: "停止",
             1: "启动",
             2: "暂停",
             3: "全速",
         }
-        return descriptions.get(value, f"未知状态({value})")
 
 
-class PumpDirection(IntEnum):
+class PumpDirection(_DescribableIntEnum):
     """方向控制枚举"""
     CLOCKWISE = 0
     COUNTER_CLOCKWISE = 1
-    
+
     @classmethod
-    def get_description(cls, value: int) -> str:
-        descriptions = {
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
             0: "顺时针",
             1: "逆时针",
         }
-        return descriptions.get(value, f"未知方向({value})")
 
 
-class TimeUnit(IntEnum):
+class TimeUnit(_DescribableIntEnum):
     """时间单位枚举"""
     SECOND = 0
     MINUTE = 1
     HOUR = 2
-    
+
     @classmethod
-    def get_description(cls, value: int) -> str:
-        descriptions = {
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
             0: "秒(sec)",
             1: "分(min)",
             2: "时(hour)",
         }
-        return descriptions.get(value, f"未知单位({value})")
 
 
-class FlowUnit(IntEnum):
+class FlowUnit(_DescribableIntEnum):
     """流速单位枚举"""
-    ML_MIN = 0
-    RPM = 1
-    
+    UL_MIN = 0
+    ML_MIN = 1
+    L_MIN = 2
+    RPM = 3
+
     @classmethod
-    def get_description(cls, value: int) -> str:
-        descriptions = {
-            0: "mL/min",
-            1: "RPM",
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
+            0: "uL/min",
+            1: "mL/min",
+            2: "L/min",
+            3: "RPM",
         }
-        return descriptions.get(value, f"未知单位({value})")
+
+
+class VolumeUnit(_DescribableIntEnum):
+    """液量单位枚举"""
+    UL = 0
+    ML = 1
+    L = 2
+
+    @classmethod
+    def _descriptions(cls) -> Dict[int, str]:
+        return {
+            0: "uL",
+            1: "mL",
+            2: "L",
+        }
 
 
 PUMP_HEAD_MODELS = {
@@ -244,7 +275,7 @@ PARAMETER_REGISTERS: Dict[int, RegisterDefinition] = {
         name="DISPENSE_UNIT",
         description="分装液量单位",
         data_type="uint16",
-        min_value=0, max_value=1,
+        min_value=0, max_value=2,
     ),
     107: RegisterDefinition(
         address=107,
@@ -281,79 +312,6 @@ PARAMETER_REGISTERS: Dict[int, RegisterDefinition] = {
         data_type="float",
         min_value=0.01, max_value=9999,
         unit="mL",
-    ),
-}
-
-STATUS_REGISTERS: Dict[int, RegisterDefinition] = {
-    300: RegisterDefinition(
-        address=300,
-        name="STATUS_ENABLE",
-        description="单元使能状态",
-        data_type="uint16",
-        read_only=True,
-    ),
-    301: RegisterDefinition(
-        address=301,
-        name="STATUS_RUN",
-        description="运行状态",
-        data_type="uint16",
-        read_only=True,
-    ),
-    302: RegisterDefinition(
-        address=302,
-        name="STATUS_DIRECTION",
-        description="方向状态",
-        data_type="uint16",
-        read_only=True,
-    ),
-    303: RegisterDefinition(
-        address=303,
-        name="STATUS_MODE",
-        description="运行模式状态",
-        data_type="uint16",
-        read_only=True,
-    ),
-    304: RegisterDefinition(
-        address=304,
-        name="STATUS_REMAIN_TIME",
-        description="剩余时间",
-        data_type="float",
-        read_only=True,
-    ),
-    306: RegisterDefinition(
-        address=306,
-        name="STATUS_REMAIN_VOLUME",
-        description="剩余液量",
-        data_type="float",
-        read_only=True,
-    ),
-    308: RegisterDefinition(
-        address=308,
-        name="STATUS_CURRENT_FLOW",
-        description="当前流速",
-        data_type="float",
-        read_only=True,
-    ),
-    310: RegisterDefinition(
-        address=310,
-        name="STATUS_CURRENT_SPEED",
-        description="当前转速",
-        data_type="float",
-        read_only=True,
-    ),
-    312: RegisterDefinition(
-        address=312,
-        name="STATUS_DISPENSED_VOLUME",
-        description="已分装液量",
-        data_type="float",
-        read_only=True,
-    ),
-    314: RegisterDefinition(
-        address=314,
-        name="STATUS_REPEAT_COUNT",
-        description="已分装次数",
-        data_type="uint16",
-        read_only=True,
     ),
 }
 
@@ -418,8 +376,6 @@ def get_register_info(address: int) -> Optional[RegisterDefinition]:
         return CHANNEL_CONTROL_REGISTERS[base_address]
     if base_address in PARAMETER_REGISTERS:
         return PARAMETER_REGISTERS[base_address]
-    if base_address in STATUS_REGISTERS:
-        return STATUS_REGISTERS[base_address]
     if base_address in CALIBRATION_REGISTERS:
         return CALIBRATION_REGISTERS[base_address]
     
@@ -452,19 +408,6 @@ def get_all_channel_registers(channel: int) -> Dict[int, RegisterDefinition]:
         )
     
     for base_addr, reg_def in PARAMETER_REGISTERS.items():
-        addr = get_channel_address(base_addr, channel)
-        registers[addr] = RegisterDefinition(
-            address=addr,
-            name=reg_def.name,
-            description=reg_def.description,
-            data_type=reg_def.data_type,
-            min_value=reg_def.min_value,
-            max_value=reg_def.max_value,
-            unit=reg_def.unit,
-            read_only=reg_def.read_only,
-        )
-    
-    for base_addr, reg_def in STATUS_REGISTERS.items():
         addr = get_channel_address(base_addr, channel)
         registers[addr] = RegisterDefinition(
             address=addr,

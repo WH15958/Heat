@@ -17,6 +17,7 @@
 | 实验日志 | ✅ 完成 | 实时日志推送 + JSON持久化 + 历史记录查询 |
 | 代码质量审查 | ✅ 完成 | v2.5 全面审查修复（20+问题，含安全/竞态/封装） |
 | 前端稳定性增强 | ✅ 完成 | v2.6 温度显示修复、日志保存开关、历史记录删除、浏览器缓存处理 |
+| 蠕动泵模式修复 | ✅ 完成 | v2.7 运行模式参数规则、流速单位限制、软管型号验证、定时定量自动计算、前端参数持久化 |
 | 主控制器 | ✅ 完成 | main.py 支持加热器+蠕动泵交互控制 |
 
 ## 核心架构
@@ -85,9 +86,11 @@ FastAPI 服务层（run_in_executor 桥接同步设备）
 
 ### 运行模式（蠕动泵）
 - 流量模式：设置流速持续运行
-- 定时定量：设定时间后定量分装
-- 定时定速：设定时间后定速运行
-- 定量定速：设定总量后定速运行
+- 定时定量：设定时间和分装液量，流速自动计算
+- 定时定速：设定时间和流速
+- 定量定速：设定分装液量和流速
+
+> **重要**：流速只能在流量模式下设置，非流量模式启动时会自动先切到流量模式设流速再切回目标模式。定时定量模式下流速由泵自动计算，前端显示为只读。流速单位仅支持 mL/min 和 RPM。
 
 ## 目录结构
 
@@ -230,16 +233,24 @@ from protocols.pump_params import PumpRunMode, PumpDirection
 
 config = PeristalticPumpConfig(
     device_id="pump1",
-    connection_params={"port": "COM10", "baudrate": 9600, "parity": "N"},
-    channels=[PumpChannelConfig(channel=1, enabled=True)]
+    connection_params={"port": "COM10", "baudrate": 19200, "parity": "E"},
+    channels=[PumpChannelConfig(channel=1, enabled=True, tube_model=13)]
 )
 
 pump = LabSmartPumpDevice(config)
 pump.connect()
 
+# 流量模式
 pump.set_direction(1, PumpDirection.CLOCKWISE)
-pump.set_run_mode(1, PumpRunMode.QUANTITY_SPEED)
-pump.set_flow_rate(1, 20.0)
+pump.set_run_mode(1, PumpRunMode.FLOW_MODE)
+pump.set_flow_rate(1, 5.0)
+pump.start_channel(1)
+
+# 定时定量模式（流速自动计算）
+pump.set_run_mode(1, PumpRunMode.FLOW_MODE)
+pump.set_flow_rate(1, 5.0)  # 先在流量模式设流速
+pump.set_run_mode(1, PumpRunMode.TIME_QUANTITY)  # 切到定时定量
+pump.set_run_time(1, 60.0)
 pump.set_dispense_volume(1, 10.0)
 pump.start_channel(1)
 
@@ -323,14 +334,13 @@ pumps:
     name: "蠕动泵"
     connection:
       port: "COM10"
-      baudrate: 9600
-      parity: "N"
+      baudrate: 19200
+      parity: "E"
     slave_address: 1
     channels:
       - channel: 1
         enabled: true
-        pump_head: 5
-        tube_model: 0
+        tube_model: 13
 ```
 
 ## 扩展新设备

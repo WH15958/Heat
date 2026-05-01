@@ -162,9 +162,9 @@ class PumpDeviceConfig(BaseConfig):
     """蠕动泵设备配置"""
     device_id: str = "pump1"
     name: str = "蠕动泵"
-    connection: DeviceConnectionConfig = field(default_factory=DeviceConnectionConfig)
+    connection: DeviceConnectionConfig = field(default_factory=lambda: DeviceConnectionConfig(baudrate=19200, parity="E"))
     slave_address: int = 1
-    parity: str = "N"
+    parity: str = "E"
     stopbits: int = 1
     bytesize: int = 8
     timeout: float = 2.0
