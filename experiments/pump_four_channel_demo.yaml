@@ -1,0 +1,100 @@
+name: 蠕动泵四通道四模式演示
+description: 依次演示蠕动泵4个通道的4种运行模式，验证所有模式可正常工作
+
+steps:
+  - id: ch1_flow_mode
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 1
+      flow_rate: 5.0
+      mode: FLOW_MODE
+      tube_model: 13
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 30
+
+  - id: stop_ch1
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 1
+
+  - id: log_ch1_done
+    type: log
+    params:
+      message: "CH1 流量模式完成：5.0 mL/min 持续30秒"
+
+  - id: ch2_time_quantity
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 2
+      flow_rate: 10.0
+      mode: TIME_QUANTITY
+      run_time: 60
+      dispense_volume: 10.0
+      tube_model: 13
+      flow_unit: 1
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 2
+      timeout: 120
+
+  - id: log_ch2_done
+    type: log
+    params:
+      message: "CH2 定时定量模式完成：60秒内分装10mL，流速自动计算"
+
+  - id: ch3_time_speed
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 3
+      flow_rate: 8.0
+      mode: TIME_SPEED
+      run_time: 45
+      tube_model: 13
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 50
+
+  - id: stop_ch3
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 3
+
+  - id: log_ch3_done
+    type: log
+    params:
+      message: "CH3 定时定速模式完成：8.0 mL/min 运行45秒"
+
+  - id: ch4_quantity_speed
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 4
+      flow_rate: 6.0
+      mode: QUANTITY_SPEED
+      dispense_volume: 15.0
+      tube_model: 13
+      flow_unit: 1
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 4
+      timeout: 300
+
+  - id: log_ch4_done
+    type: log
+    params:
+      message: "CH4 定量定速模式完成：6.0 mL/min 分装15mL"
+
+  - id: stop_all
+    type: pump.stop
+    params:
+      device_id: pump1

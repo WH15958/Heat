@@ -66,10 +66,12 @@ class StepExecutor:
                     PumpRunMode.TIME_QUANTITY,
                     PumpRunMode.QUANTITY_SPEED,
                 ) else None
+                tube_model = step.params.get("tube_model")
+                flow_unit = step.params.get("flow_unit")
                 await loop.run_in_executor(
                     None, self._dm.start_pump_channel, step.params["device_id"],
                     ch, step.params.get("flow_rate", 10.0), direction, mode,
-                    run_time, dispense_volume,
+                    run_time, dispense_volume, tube_model, flow_unit,
                 )
 
             elif step.type == ActionType.PUMP_STOP:
