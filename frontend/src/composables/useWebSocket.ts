@@ -14,6 +14,7 @@ export interface PumpChannelData {
   flow_rate: number
   volume: number
   direction: string | null
+  flow_unit: string
 }
 
 export interface PumpRealtimeData {

@@ -68,10 +68,28 @@ class StepExecutor:
                 ) else None
                 tube_model = step.params.get("tube_model")
                 flow_unit = step.params.get("flow_unit")
+                time_unit = step.params.get("time_unit")
+                volume_unit = step.params.get("volume_unit")
+                repeat_count = step.params.get("repeat_count")
+                interval_time = step.params.get("interval_time")
+                interval_time_unit = step.params.get("interval_time_unit")
+                if run_time is not None and time_unit is None:
+                    logger.warning(f"Step {step.id}: run_time={run_time} provided but time_unit not specified, defaulting to SECOND")
+                    time_unit = 0
+                if dispense_volume is not None and volume_unit is None:
+                    logger.warning(f"Step {step.id}: dispense_volume={dispense_volume} provided but volume_unit not specified, defaulting to ML")
+                    volume_unit = 1
+                if interval_time is not None and interval_time_unit is None:
+                    logger.warning(f"Step {step.id}: interval_time={interval_time} provided but interval_time_unit not specified, defaulting to SECOND")
+                    interval_time_unit = 0
+                if repeat_count is not None and repeat_count != 1 and (not interval_time or interval_time <= 0):
+                    logger.error(f"Step {step.id}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
+                    return False
                 await loop.run_in_executor(
                     None, self._dm.start_pump_channel, step.params["device_id"],
                     ch, step.params.get("flow_rate", 10.0), direction, mode,
                     run_time, dispense_volume, tube_model, flow_unit,
+                    time_unit, volume_unit, repeat_count, interval_time, interval_time_unit,
                 )
 
             elif step.type == ActionType.PUMP_STOP:

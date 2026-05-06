@@ -33,20 +33,25 @@ steps:
       channel: 2
       flow_rate: 10.0
       mode: TIME_QUANTITY
-      run_time: 60
+      run_time: 1
+      time_unit: 1
       dispense_volume: 10.0
+      volume_unit: 1
+      repeat_count: 3
+      interval_time: 2.0
+      interval_time_unit: 0
       tube_model: 13
       flow_unit: 1
     wait:
       type: pump_complete
       device_id: pump1
       channel: 2
-      timeout: 120
+      timeout: 300
 
   - id: log_ch2_done
     type: log
     params:
-      message: "CH2 定时定量模式完成：60秒内分装10mL，流速自动计算"
+      message: "CH2 定时定量模式完成：1分钟内分装10mL，重复3次间隔2秒"
 
   - id: ch3_time_speed
     type: pump.start
@@ -56,11 +61,15 @@ steps:
       flow_rate: 8.0
       mode: TIME_SPEED
       run_time: 45
+      time_unit: 0
+      repeat_count: 2
+      interval_time: 5.0
+      interval_time_unit: 0
       tube_model: 13
       flow_unit: 1
     wait:
       type: duration
-      seconds: 50
+      seconds: 110
 
   - id: stop_ch3
     type: pump.stop_channel
@@ -71,7 +80,7 @@ steps:
   - id: log_ch3_done
     type: log
     params:
-      message: "CH3 定时定速模式完成：8.0 mL/min 运行45秒"
+      message: "CH3 定时定速模式完成：8.0 mL/min 运行45秒，重复2次间隔5秒"
 
   - id: ch4_quantity_speed
     type: pump.start
@@ -81,6 +90,10 @@ steps:
       flow_rate: 6.0
       mode: QUANTITY_SPEED
       dispense_volume: 15.0
+      volume_unit: 1
+      repeat_count: 0
+      interval_time: 10.0
+      interval_time_unit: 0
       tube_model: 13
       flow_unit: 1
     wait:
@@ -92,7 +105,7 @@ steps:
   - id: log_ch4_done
     type: log
     params:
-      message: "CH4 定量定速模式完成：6.0 mL/min 分装15mL"
+      message: "CH4 定量定速模式完成：6.0 mL/min 分装15mL，无限重复间隔10秒"
 
   - id: stop_all
     type: pump.stop

@@ -24,6 +24,11 @@ class StartPumpRequest(BaseModel):
     dispense_volume: Optional[float] = None
     tube_model: Optional[int] = None
     flow_unit: Optional[int] = None
+    time_unit: Optional[int] = None
+    volume_unit: Optional[int] = None
+    repeat_count: Optional[int] = None
+    interval_time: Optional[float] = None
+    interval_time_unit: Optional[int] = None
 
 
 class StopPumpRequest(BaseModel):
@@ -279,7 +284,8 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
         result = await loop.run_in_executor(
             None, dm.start_pump_channel, device_id, body.channel,
             body.flow_rate, direction, run_mode, run_time, dispense_volume,
-            body.tube_model, body.flow_unit,
+            body.tube_model, body.flow_unit, body.time_unit, body.volume_unit,
+            body.repeat_count, body.interval_time, body.interval_time_unit,
         )
         return {
             "success": result,

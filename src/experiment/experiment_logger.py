@@ -63,6 +63,7 @@ class ExperimentRun:
     failed_steps: int = 0
     steps: List[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}})
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -83,6 +84,50 @@ class ExperimentLogger:
 
     def on_log(self, callback: Callable):
         self._on_log = callback
+
+    def record_sensor_data(self, realtime_payload: dict):
+        if not self._active_run or not realtime_payload:
+            return
+        elapsed = 0.0
+        if self._active_run.started_at:
+            start = datetime.fromisoformat(self._active_run.started_at)
+            elapsed = (datetime.now() - start).total_seconds()
+        point = {"t": round(elapsed, 1)}
+        heaters_recorded = 0
+        pumps_recorded = 0
+        for hid, hdata in (realtime_payload.get("heaters") or {}).items():
+            if hdata.get("error"):
+                continue
+            if hid not in self._active_run.sensor_data["heaters"]:
+                self._active_run.sensor_data["heaters"][hid] = {"pv": [], "sv": []}
+            self._active_run.sensor_data["heaters"][hid]["pv"].append(
+                {"t": point["t"], "v": hdata.get("pv")}
+            )
+            self._active_run.sensor_data["heaters"][hid]["sv"].append(
+                {"t": point["t"], "v": hdata.get("sv")}
+            )
+            heaters_recorded += 1
+        for pid, pdata in (realtime_payload.get("pumps") or {}).items():
+            if pdata.get("error") or not pdata.get("channels"):
+                continue
+            if pid not in self._active_run.sensor_data["pumps"]:
+                self._active_run.sensor_data["pumps"][pid] = {}
+            for chid, chdata in pdata["channels"].items():
+                if chid not in self._active_run.sensor_data["pumps"][pid]:
+                    self._active_run.sensor_data["pumps"][pid][chid] = {
+                        "flow_rate": [],
+                        "volume": [],
+                        "flow_unit": chdata.get("flow_unit", "ML_MIN"),
+                    }
+                self._active_run.sensor_data["pumps"][pid][chid]["flow_rate"].append(
+                    {"t": point["t"], "v": chdata.get("flow_rate", 0)}
+                )
+                self._active_run.sensor_data["pumps"][pid][chid]["volume"].append(
+                    {"t": point["t"], "v": chdata.get("volume", 0)}
+                )
+                pumps_recorded += 1
+        if heaters_recorded > 0 or pumps_recorded > 0:
+            logger.info(f"[{self._active_run.run_id}] Sensor recorded: heaters={heaters_recorded}, pumps={pumps_recorded}")
 
     def start_run(self, experiment_name: str, experiment_file: str, total_steps: int, metadata: dict = None) -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]

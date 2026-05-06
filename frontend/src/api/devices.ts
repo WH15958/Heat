@@ -27,8 +27,22 @@ export const TUBE_MODELS = [
 ] as const
 
 export const FLOW_UNITS = [
+  { value: 0, label: 'uL/min' },
   { value: 1, label: 'mL/min' },
+  { value: 2, label: 'L/min' },
   { value: 3, label: 'RPM' },
+] as const
+
+export const TIME_UNITS = [
+  { value: 0, label: '秒(sec)' },
+  { value: 1, label: '分(min)' },
+  { value: 2, label: '时(hour)' },
+] as const
+
+export const VOLUME_UNITS = [
+  { value: 0, label: 'uL' },
+  { value: 1, label: 'mL' },
+  { value: 2, label: 'L' },
 ] as const
 
 export type PumpMode = typeof PUMP_MODES[number]['value']
@@ -57,6 +71,11 @@ export const devicesApi = {
     dispenseVolume?: number,
     tubeModel?: number,
     flowUnit?: number,
+    timeUnit?: number,
+    volumeUnit?: number,
+    repeatCount?: number,
+    intervalTime?: number,
+    intervalTimeUnit?: number,
   ) =>
     api.post(`/pump/${id}/start`, {
       channel,
@@ -67,6 +86,11 @@ export const devicesApi = {
       dispense_volume: dispenseVolume ?? null,
       tube_model: tubeModel ?? null,
       flow_unit: flowUnit ?? null,
+      time_unit: timeUnit ?? null,
+      volume_unit: volumeUnit ?? null,
+      repeat_count: repeatCount ?? null,
+      interval_time: intervalTime ?? null,
+      interval_time_unit: intervalTimeUnit ?? null,
     }),
   stopPump: (id: string, channel?: number) =>
     api.post(`/pump/${id}/stop`, { channel: channel ?? null }),

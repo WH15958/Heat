@@ -50,7 +50,7 @@
                 {{ ch.running ? '运行中' : '停止' }}
               </el-tag>
               <span v-if="ch.running" class="channel-detail">
-                {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} mL/min
+                {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} {{ flowUnitLabel(ch.flow_unit) }}
               </span>
               <span v-if="ch.running && ch.volume > 0" class="channel-detail">
                 已泵 {{ ch.volume?.toFixed(1) ?? '0.0' }} mL
@@ -117,8 +117,20 @@ interface PumpSeriesData {
   channels: Record<string, [number, number][]>
 }
 const pumpDataMap: Record<string, PumpSeriesData> = {}
+const channelFlowUnitMap: Record<string, string> = {}
 
 const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
+
+const FLOW_UNIT_LABELS: Record<string, string> = {
+  ML_MIN: 'mL/min',
+  UL_MIN: 'uL/min',
+  L_MIN: 'L/min',
+  RPM: 'RPM',
+}
+
+function flowUnitLabel(unit: string | undefined): string {
+  return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
+}
 
 let resizeObserver: ResizeObserver | null = null
 
@@ -144,7 +156,7 @@ function initCharts() {
         legend: { data: [], top: 0 },
         grid: { left: 60, right: 20, top: 30, bottom: 30 },
         xAxis: { type: 'time' },
-        yAxis: { type: 'value', name: '流量(mL/min)' },
+        yAxis: { type: 'value', name: '流量' },
         series: [],
       })
     }
@@ -229,6 +241,10 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         if (typeof flowRate !== 'number') continue
         pumpDataMap[pumpId].channels[chId].push([now, flowRate])
         pumpDataMap[pumpId].channels[chId] = pumpDataMap[pumpId].channels[chId].slice(-maxPoints)
+        const unitKey = `${pumpId}_CH${chId}`
+        if (chData.flow_unit) {
+          channelFlowUnitMap[unitKey] = chData.flow_unit
+        }
       }
     }
 
@@ -253,8 +269,12 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       }
     }
     if (flowSeries.length > 0) {
+      const units = new Set(Object.values(channelFlowUnitMap))
+      const yAxisName = units.size === 1
+        ? `流量(${flowUnitLabel([...units][0])})`
+        : '流量'
       flowChart.setOption(
-        { legend: { data: flowLegend }, series: flowSeries },
+        { legend: { data: flowLegend }, yAxis: { name: yAxisName }, series: flowSeries },
         { replaceMerge: ['series'] }
       )
     }

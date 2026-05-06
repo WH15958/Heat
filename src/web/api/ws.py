@@ -165,6 +165,14 @@ async def data_push_loop(app):
             if manager.active:
                 await manager.broadcast(payload)
 
+            try:
+                from src.web.api.experiments import _engines
+                for filename, engine in list(_engines.items()):
+                    if engine.state.value == "running" and engine.exp_logger and engine.exp_logger.active_run:
+                        engine.exp_logger.record_sensor_data(payload)
+            except Exception as e:
+                logger.warning(f"Sensor data recording failed: {e}")
+
         except Exception as e:
             logger.error(f"Push loop error: {e}")
 

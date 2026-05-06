@@ -53,6 +53,14 @@
             </div>
           </template>
 
+          <el-alert
+            title="蠕动泵开机后请检查通信参数设置（波特率、校验位、软管型号），确保与实际配置一致后再操作"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+
           <div v-for="ch in [1,2,3,4]" :key="ch" class="channel-control">
             <div class="channel-header">
               <span class="channel-name">通道 {{ ch }}</span>
@@ -82,7 +90,7 @@
               <template v-else>
                 <el-input-number
                   v-model="pump.channels[ch].flowRate"
-                  :min="0.1" :max="pump.channels[ch].flowUnit === 3 ? 150 : pump.channels[ch].maxFlowRate" :step="0.5" :precision="1"
+                  :min="0.001" :max="pump.channels[ch].flowUnit === 3 ? 150 : pump.channels[ch].maxFlowRate" :step="0.001" :precision="3"
                   size="small"
                   style="width: 100px"
                   :disabled="!pump.connected"
@@ -105,16 +113,59 @@
                 style="width: 110px"
                 :disabled="!pump.connected"
               />
-              <span v-if="needsRunTime(pump.channels[ch].mode)" class="unit-label">秒</span>
+              <el-select
+                v-if="needsRunTime(pump.channels[ch].mode)"
+                v-model="pump.channels[ch].timeUnit"
+                size="small"
+                style="width: 95px"
+                :disabled="!pump.connected"
+              >
+                <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
+              </el-select>
               <el-input-number
                 v-if="needsDispenseVolume(pump.channels[ch].mode)"
                 v-model="pump.channels[ch].dispenseVolume"
-                :min="0.1" :max="9999" :step="1" :precision="1"
+                :min="0.01" :max="9999" :step="1" :precision="2"
                 size="small"
                 style="width: 110px"
                 :disabled="!pump.connected"
               />
-              <span v-if="needsDispenseVolume(pump.channels[ch].mode)" class="unit-label">mL</span>
+              <el-select
+                v-if="needsDispenseVolume(pump.channels[ch].mode)"
+                v-model="pump.channels[ch].volumeUnit"
+                size="small"
+                style="width: 80px"
+                :disabled="!pump.connected"
+              >
+                <el-option v-for="u in VOLUME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
+              </el-select>
+            </div>
+            <div class="channel-row" style="margin-top: 6px" v-if="pump.channels[ch].mode !== 'FLOW_MODE'">
+              <span class="param-label">重复</span>
+              <el-input-number
+                v-model="pump.channels[ch].repeatCount"
+                :min="0" :max="9999" :step="1"
+                size="small"
+                style="width: 95px"
+                :disabled="!pump.connected"
+              />
+              <span class="unit-label" style="font-size: 11px">0=无限</span>
+              <span class="param-label">间隔</span>
+              <el-input-number
+                v-model="pump.channels[ch].intervalTime"
+                :min="0" :max="9999" :step="0.1" :precision="1"
+                size="small"
+                style="width: 95px"
+                :disabled="!pump.connected"
+              />
+              <el-select
+                v-model="pump.channels[ch].intervalTimeUnit"
+                size="small"
+                style="width: 95px"
+                :disabled="!pump.connected"
+              >
+                <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
+              </el-select>
             </div>
             <div class="channel-row" style="margin-top: 6px">
               <el-button type="success" size="small" @click="startPumpChannel(pumpId, ch)" :disabled="!pump.connected" :loading="pump.channels[ch].starting">
@@ -144,7 +195,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, watch } from 'vue'
-import { devicesApi, PUMP_MODES, TUBE_MODELS, FLOW_UNITS, type PumpMode } from '../api/devices'
+import { devicesApi, PUMP_MODES, TUBE_MODELS, FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, type PumpMode } from '../api/devices'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket } from '../composables/useWebSocket'
 
@@ -157,7 +208,12 @@ interface ChannelConfig {
   direction: string
   mode: PumpMode
   runTime: number
+  timeUnit: number
   dispenseVolume: number
+  volumeUnit: number
+  repeatCount: number
+  intervalTime: number
+  intervalTimeUnit: number
   tubeModel: number
   maxFlowRate: number
   flowUnit: number
@@ -212,7 +268,7 @@ function calcFlowRate(ch: ChannelConfig): number {
 function createPumpChannels(): Record<number, ChannelConfig> {
   const channels: Record<number, ChannelConfig> = {}
   for (let i = 1; i <= 4; i++) {
-    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, dispenseVolume: 10.0, tubeModel: 11, maxFlowRate: 22.0, flowUnit: 1, starting: false, stopping: false }
+    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, timeUnit: 0, dispenseVolume: 10.0, volumeUnit: 1, repeatCount: 1, intervalTime: 0, intervalTimeUnit: 0, tubeModel: 11, maxFlowRate: 22.0, flowUnit: 1, starting: false, stopping: false }
   }
   return channels
 }
@@ -239,7 +295,12 @@ function saveParams() {
         direction: cfg.direction,
         mode: cfg.mode,
         runTime: cfg.runTime,
+        timeUnit: cfg.timeUnit,
         dispenseVolume: cfg.dispenseVolume,
+        volumeUnit: cfg.volumeUnit,
+        repeatCount: cfg.repeatCount,
+        intervalTime: cfg.intervalTime,
+        intervalTimeUnit: cfg.intervalTimeUnit,
         tubeModel: cfg.tubeModel,
         flowUnit: cfg.flowUnit,
       }
@@ -265,7 +326,12 @@ function restoreParams() {
         if (cfg.direction !== undefined) channel.direction = cfg.direction
         if (cfg.mode !== undefined) channel.mode = cfg.mode
         if (cfg.runTime !== undefined) channel.runTime = cfg.runTime
+        if (cfg.timeUnit !== undefined) channel.timeUnit = cfg.timeUnit
         if (cfg.dispenseVolume !== undefined) channel.dispenseVolume = cfg.dispenseVolume
+        if (cfg.volumeUnit !== undefined) channel.volumeUnit = cfg.volumeUnit
+        if (cfg.repeatCount !== undefined) channel.repeatCount = cfg.repeatCount
+        if (cfg.intervalTime !== undefined) channel.intervalTime = cfg.intervalTime
+        if (cfg.intervalTimeUnit !== undefined) channel.intervalTimeUnit = cfg.intervalTimeUnit
         if (cfg.tubeModel !== undefined) {
           channel.tubeModel = cfg.tubeModel
           channel.maxFlowRate = getMaxFlowRate(cfg.tubeModel)
@@ -397,6 +463,22 @@ async function disconnectPump(id: string) {
 
 async function startPumpChannel(pumpId: string, channel: number) {
   const ch = devices.pumps[pumpId].channels[channel]
+
+  if (ch.mode !== 'FLOW_MODE') {
+    if (ch.repeatCount < 0 || ch.repeatCount > 9999) {
+      ElMessage.error(`通道 ${channel}: 重复次数范围 0-9999，0 表示无限`)
+      return
+    }
+    if (ch.repeatCount !== 1 && ch.intervalTime <= 0) {
+      ElMessage.error(`通道 ${channel}: 重复次数 ≠ 1 时（0=无限）间隔时间必须 > 0`)
+      return
+    }
+    if (ch.intervalTime > 0 && ch.intervalTime < 0.1) {
+      ElMessage.error(`通道 ${channel}: 间隔时间最小值为 0.1 秒`)
+      return
+    }
+  }
+
   ch.starting = true
   try {
     const effectiveFlowRate = ch.mode === 'TIME_QUANTITY' ? calcFlowRate(ch) : ch.flowRate
@@ -410,6 +492,11 @@ async function startPumpChannel(pumpId: string, channel: number) {
       needsDispenseVolume(ch.mode) ? ch.dispenseVolume : undefined,
       ch.tubeModel,
       ch.mode === 'TIME_QUANTITY' ? 1 : ch.flowUnit,
+      needsRunTime(ch.mode) ? ch.timeUnit : undefined,
+      needsDispenseVolume(ch.mode) ? ch.volumeUnit : undefined,
+      ch.mode !== 'FLOW_MODE' ? ch.repeatCount : undefined,
+      ch.mode !== 'FLOW_MODE' && ch.intervalTime > 0 ? ch.intervalTime : undefined,
+      ch.mode !== 'FLOW_MODE' && ch.intervalTime > 0 ? ch.intervalTimeUnit : undefined,
     )
     if (!res.data.success) {
       ElMessage.error(`通道 ${channel} 启动失败: 泵设备返回失败`)
@@ -501,5 +588,11 @@ async function emergencyStop() {
   color: #909399;
   font-size: 12px;
   white-space: nowrap;
+}
+.param-label {
+  color: #606266;
+  font-size: 12px;
+  white-space: nowrap;
+  margin-right: 2px;
 }
 </style>

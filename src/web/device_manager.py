@@ -249,6 +249,9 @@ class DeviceManager:
                         "direction": ch_data.direction.name
                         if ch_data.direction
                         else None,
+                        "flow_unit": ch_data.flow_unit.name
+                        if ch_data.flow_unit
+                        else "ML_MIN",
                     }
             except Exception as e:
                 logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
@@ -406,6 +409,11 @@ class DeviceManager:
         dispense_volume: Optional[float] = None,
         tube_model: Optional[int] = None,
         flow_unit: Optional[int] = None,
+        time_unit: Optional[int] = None,
+        volume_unit: Optional[int] = None,
+        repeat_count: Optional[int] = None,
+        interval_time: Optional[float] = None,
+        interval_time_unit: Optional[int] = None,
     ) -> bool:
         """启动蠕动泵通道
 
@@ -415,10 +423,15 @@ class DeviceManager:
             flow_rate: 流速
             direction: 方向
             mode: 运行模式
-            run_time: 运行时间（秒）
-            dispense_volume: 定量体积（mL）
+            run_time: 运行时间
+            dispense_volume: 定量体积
             tube_model: 软管型号（覆盖配置）
             flow_unit: 流速单位 (0=uL/min, 1=mL/min, 2=L/min, 3=RPM)
+            time_unit: 时间单位 (0=sec, 1=min, 2=hour)
+            volume_unit: 液量单位 (0=uL, 1=mL, 2=L)
+            repeat_count: 重复次数 (0=无限, 1-9999)
+            interval_time: 间隔时间
+            interval_time_unit: 间隔时间单位 (0=sec, 1=min, 2=hour)
 
         Returns:
             bool: 启动成功返回True
@@ -438,14 +451,16 @@ class DeviceManager:
         if pump_lock:
             pump_lock.acquire()
         try:
-            return self._start_pump_channel_inner(pump, device_id, channel, flow_rate, direction, mode, run_time, dispense_volume, tube_model, flow_unit)
+            return self._start_pump_channel_inner(pump, device_id, channel, flow_rate, direction, mode, run_time, dispense_volume, tube_model, flow_unit, time_unit, volume_unit, repeat_count, interval_time, interval_time_unit)
         finally:
             if pump_lock:
                 pump_lock.release()
 
     def _start_pump_channel_inner(self, pump: LabSmartPumpDevice, device_id: str,
                                    channel: int, flow_rate: float, direction, mode,
-                                   run_time, dispense_volume, tube_model=None, flow_unit=None) -> bool:
+                                   run_time, dispense_volume, tube_model=None, flow_unit=None,
+                                   time_unit=None, volume_unit=None, repeat_count=None,
+                                   interval_time=None, interval_time_unit=None) -> bool:
         from src.protocols.pump_params import FlowUnit, PumpRunMode
 
         if not pump.enable_channel(channel, True):
@@ -480,6 +495,75 @@ class DeviceManager:
         time.sleep(0.05)
 
         effective_flow_unit = FlowUnit(flow_unit) if flow_unit is not None else FlowUnit.ML_MIN
+        from src.protocols.pump_params import TimeUnit, VolumeUnit
+
+        if flow_unit is not None:
+            try:
+                FlowUnit(flow_unit)
+            except ValueError:
+                logger.error(f"Pump {device_id} CH{channel}: invalid flow_unit={flow_unit}")
+                return False
+
+        if time_unit is not None:
+            try:
+                TimeUnit(time_unit)
+            except ValueError:
+                logger.error(f"Pump {device_id} CH{channel}: invalid time_unit={time_unit}")
+                return False
+
+        if volume_unit is not None:
+            try:
+                VolumeUnit(volume_unit)
+            except ValueError:
+                logger.error(f"Pump {device_id} CH{channel}: invalid volume_unit={volume_unit}")
+                return False
+
+        if interval_time_unit is not None:
+            try:
+                TimeUnit(interval_time_unit)
+            except ValueError:
+                logger.error(f"Pump {device_id} CH{channel}: invalid interval_time_unit={interval_time_unit}")
+                return False
+
+        if repeat_count is not None:
+            if not isinstance(repeat_count, (int, float)):
+                logger.error(f"Pump {device_id} CH{channel}: repeat_count must be numeric, got {type(repeat_count).__name__}")
+                return False
+            if isinstance(repeat_count, float):
+                if repeat_count != int(repeat_count):
+                    logger.error(f"Pump {device_id} CH{channel}: repeat_count={repeat_count} must be integer")
+                    return False
+                repeat_count = int(repeat_count)
+            if not (0 <= repeat_count <= 9999):
+                logger.error(f"Pump {device_id} CH{channel}: repeat_count={repeat_count} out of range [0, 9999]")
+                return False
+
+        if interval_time is not None:
+            if interval_time < 0:
+                logger.error(f"Pump {device_id} CH{channel}: interval_time={interval_time} must be >= 0")
+                return False
+            if interval_time > 0 and interval_time < 0.1:
+                logger.error(f"Pump {device_id} CH{channel}: interval_time={interval_time} below minimum 0.1sec")
+                return False
+
+        if repeat_count is not None and repeat_count != 1 and (interval_time is None or interval_time == 0):
+            logger.error(f"Pump {device_id} CH{channel}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
+            return False
+
+        if run_time is not None and time_unit is None:
+            logger.warning(f"Pump {device_id} CH{channel}: run_time={run_time} provided but time_unit is None, defaulting to SECOND")
+            time_unit = 0
+        effective_time_unit = TimeUnit(time_unit) if time_unit is not None else TimeUnit.SECOND
+
+        if dispense_volume is not None and volume_unit is None:
+            logger.warning(f"Pump {device_id} CH{channel}: dispense_volume={dispense_volume} provided but volume_unit is None, defaulting to ML")
+            volume_unit = 1
+        effective_volume_unit = VolumeUnit(volume_unit) if volume_unit is not None else VolumeUnit.ML
+
+        if interval_time is not None and interval_time_unit is None:
+            logger.warning(f"Pump {device_id} CH{channel}: interval_time={interval_time} provided but interval_time_unit is None, defaulting to SECOND")
+            interval_time_unit = 0
+        effective_interval_time_unit = TimeUnit(interval_time_unit) if interval_time_unit is not None else TimeUnit.SECOND
 
         if mode == PumpRunMode.FLOW_MODE:
             if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
@@ -506,12 +590,12 @@ class DeviceManager:
             time.sleep(0.1)
             logger.info(f"Pump {device_id} CH{channel}: TIME_QUANTITY mode, flow_rate will be auto-calculated by pump")
             if run_time is not None:
-                if not pump.set_run_time(channel, run_time):
+                if not pump.set_run_time(channel, run_time, effective_time_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
                     return False
                 time.sleep(0.05)
             if dispense_volume is not None:
-                if not pump.set_dispense_volume(channel, dispense_volume):
+                if not pump.set_dispense_volume(channel, dispense_volume, effective_volume_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
                     return False
                 time.sleep(0.05)
@@ -530,7 +614,7 @@ class DeviceManager:
                 return False
             time.sleep(0.1)
             if run_time is not None:
-                if not pump.set_run_time(channel, run_time):
+                if not pump.set_run_time(channel, run_time, effective_time_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
                     return False
                 time.sleep(0.05)
@@ -549,10 +633,22 @@ class DeviceManager:
                 return False
             time.sleep(0.1)
             if dispense_volume is not None:
-                if not pump.set_dispense_volume(channel, dispense_volume):
+                if not pump.set_dispense_volume(channel, dispense_volume, effective_volume_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
                     return False
                 time.sleep(0.05)
+
+        if repeat_count is not None:
+            if not pump.set_repeat_count(channel, repeat_count):
+                logger.warning(f"Pump {device_id} CH{channel} set_repeat_count({repeat_count}) failed")
+                return False
+            time.sleep(0.05)
+
+        if interval_time is not None:
+            if not pump.set_interval_time(channel, interval_time, effective_interval_time_unit):
+                logger.warning(f"Pump {device_id} CH{channel} set_interval_time({interval_time} {effective_interval_time_unit}) failed")
+                return False
+            time.sleep(0.05)
 
         result = pump.start_channel(channel)
         logger.info(f"Pump {device_id} CH{channel}: start result={result}")
