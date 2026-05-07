@@ -228,6 +228,37 @@ class LabSmartPumpDevice(BaseDevice):
 | `api/ws.py` | WebSocket：1Hz实时数据推送 |
 | `api/experiments.py` | 实验管理API（含路径遍历防护、日志保存开关、历史记录删除） |
 
+**DeviceManager 参数验证规则：**
+
+`start_pump_channel` 方法包含完整的参数校验链：
+
+| 验证项 | 规则 | 错误处理 |
+|--------|------|----------|
+| repeat_count类型 | 必须为int/float | 非数值类型返回False |
+| repeat_count范围 | [0, 9999]，float需为整数值 | 超范围返回False |
+| 重复模式间隔 | repeat_count!=1时interval_time>0 | 不满足返回False |
+| 单位默认值 | time_unit=None→0, volume_unit=None→1, interval_time_unit=None→0 | 记录warning后设默认值 |
+
+> **注意**：`repeat_count != 1` 而非 `> 1`，因为 repeat_count=0（无限重复）同样需要间隔时间。
+
+**executor.py 前置校验：**
+
+实验执行器在调用 `start_pump_channel` 前进行前置校验，提供更清晰的步骤级错误日志：
+
+```python
+if repeat_count is not None and repeat_count != 1 and (not interval_time or interval_time <= 0):
+    logger.error(f"Step {step.id}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
+    return False
+```
+
+单位参数缺失时自动设置默认值：
+
+```python
+if run_time is not None and time_unit is None:
+    logger.warning(f"Step {step.id}: ... defaulting to SECOND")
+    time_unit = 0
+```
+
 **Web层关键点**：
 - SPA路由：所有非 `/api/` 路径返回 `index.html`
 - `run_in_executor`：所有设备操作通过线程池执行
@@ -428,6 +459,25 @@ async def get_custom_data(device_id: str):
 1. 在 `actions.py` 的 `ActionType` 枚举中添加新类型
 2. 在 `executor.py` 的 `_execute_step()` 中添加处理分支
 3. 在前端 `ExperimentPage.vue` 中添加对应的步骤显示
+
+### start_pump 动作参数
+
+`start_pump` 动作支持以下参数：
+
+| 参数 | 类型 | 必选 | 说明 |
+|------|------|------|------|
+| device_id | string | ✅ | 设备ID |
+| channel | int | ✅ | 通道号(1-4) |
+| mode | int | ✅ | 运行模式(0=流量/1=定时定量/2=定时定速/3=定量定速) |
+| flow_rate | float | ✅ | 流速 |
+| flow_unit | int | - | 流速单位(1=mL/min, 3=RPM) |
+| run_time | float | - | 运行时间（定时定量/定时定速模式） |
+| time_unit | int | - | 运行时间单位(0=sec, 1=min, 2=hour) |
+| dispense_volume | float | - | 分装液量（定时定量/定量定速模式） |
+| volume_unit | int | - | 体积单位(0=uL, 1=mL, 2=L) |
+| repeat_count | int | - | 重复次数(0=无限, 1-9999) |
+| interval_time | float | - | 间隔时间（repeat_count!=1时必填） |
+| interval_time_unit | int | - | 间隔时间单位(0=sec, 1=min, 2=hour) |
 
 ### 添加新等待条件
 

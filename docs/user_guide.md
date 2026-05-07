@@ -151,12 +151,22 @@ curl http://localhost:8000/api/devices/pump1/data
 
 | 模式 | 说明 | 需设置参数 |
 |------|------|------------|
-| 流量模式 | 设置流速持续运行 | 流速 + 单位 |
-| 定时定量 | 设定时间和分装液量，流速自动计算 | 时间 + 液量（流速只读） |
-| 定时定速 | 设定时间和流速运行 | 流速 + 时间 |
-| 定量定速 | 设定分装液量和流速运行 | 流速 + 液量 |
+| 流量模式 | 设置流速持续运行 | 流速 + 流速单位 |
+| 定时定量 | 设定时间和分装液量，流速自动计算 | 运行时间 + 时间单位 + 分装液量 + 体积单位 + 重复次数 + 间隔时间 |
+| 定时定速 | 设定时间和流速运行 | 流速 + 流速单位 + 运行时间 + 时间单位 + 重复次数 + 间隔时间 |
+| 定量定速 | 设定分装液量和流速运行 | 流速 + 流速单位 + 分装液量 + 体积单位 + 重复次数 + 间隔时间 |
 
-> **注意**：定时定量模式下流速由泵自动计算（流速 = 液量 / 时间），前端显示为只读。流速单位仅支持 mL/min 和 RPM。
+> **注意**：定时定量模式下流速由泵自动计算（流速 = 液量 / 时间），前端显示为只读。流速单位仅支持 mL/min 和 RPM。流速精确到小数点后三位。
+
+### 重复模式参数
+
+| 参数 | 范围 | 说明 |
+|------|------|------|
+| 重复次数 | 0-9999 | 0表示无限重复，1表示单次执行 |
+| 间隔时间 | ≥0.1秒 | 重复次数>1时必须设置，最小0.1秒 |
+| 间隔时间单位 | sec/min/hour | 间隔时间的时间单位 |
+
+> **注意**：当重复次数为0（无限重复）或大于1时，间隔时间必须大于0。
 
 ---
 
@@ -249,7 +259,7 @@ steps:
 | `start_heater` | 启动加热器 | `device_id` |
 | `stop_heater` | 停止加热器 | `device_id` |
 | `set_flow_rate` | 设置泵通道流速 | `device_id`, `channel`, `flow_rate` |
-| `start_pump` | 启动泵通道 | `device_id`, `channel` |
+| `start_pump` | 启动泵通道 | `device_id`, `channel`, `mode`, `flow_rate`, `flow_unit`, `run_time`, `time_unit`, `dispense_volume`, `volume_unit`, `repeat_count`, `interval_time`, `interval_time_unit` |
 | `stop_pump` | 停止泵通道 | `device_id`, `channel` |
 
 #### 等待条件动作
@@ -344,6 +354,9 @@ steps:
     params:
       device_id: pump1
       channel: 1
+      mode: 0
+      flow_rate: 5.0
+      flow_unit: 1
 
   - name: 进料30分钟
     action: wait

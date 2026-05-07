@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-05-01
-版本：v2.7
+> 最后更新：2026-05-07
+版本：v2.8
 
 ---
 
@@ -457,6 +457,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 - 四种运行模式：流量、定时定量、定时定速、定量定速
 - 启停、换向、速度控制
 - 流量校准
+- 重复模式：repeat_count(0=无限,1-9999) + interval_time(最小0.1s) + interval_time_unit
+- 单位参数：time_unit(sec/min/hour)、volume_unit(uL/mL/L)、flow_unit(mL/min/RPM)
 
 **运行模式参数设置规则（实测验证，非常重要）：**
 
@@ -1627,3 +1629,68 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 3. **前端错误对象必须JSON.stringify**：FastAPI验证错误返回的detail是数组/对象，直接模板字符串拼接显示为[object Object]
 4. **浏览器缓存问题**：Vite构建后JS文件名含hash（如index-CnyeLZ9u.js），但index.html可能被缓存导致加载旧JS。添加no-cache meta标签解决
 5. **删除操作防重复点击**：deleting ref + if(deleting.value)return + finally重置，按钮绑定:loading
+
+### 6.13 2026-05-07 蠕动泵四种模式功能完善与参数验证增强（v2.8）
+
+**蠕动泵四种模式功能完善：**
+
+| 模式 | 可设置参数 | 说明 |
+|------|-----------|------|
+| 流量模式 | 流速 + 流速单位 | 持续运行，精确到小数点后3位 |
+| 定时定量 | 运行时间 + 时间单位 + 分装液量 + 体积单位 + 重复次数 + 间隔时间 + 间隔时间单位 | 流速由泵自动计算（只读） |
+| 定时定速 | 流速 + 流速单位 + 运行时间 + 时间单位 + 重复次数 + 间隔时间 + 间隔时间单位 | - |
+| 定量定速 | 流速 + 流速单位 + 分装液量 + 体积单位 + 重复次数 + 间隔时间 + 间隔时间单位 | - |
+
+**新增参数：**
+
+| 参数 | 范围 | 说明 |
+|------|------|------|
+| time_unit | 0=sec, 1=min, 2=hour | 运行时间单位 |
+| volume_unit | 0=uL, 1=mL, 2=L | 分装液量单位 |
+| repeat_count | 0=无限, 1-9999 | 重复次数 |
+| interval_time | ≥0.1s | 重复间隔时间 |
+| interval_time_unit | 0=sec, 1=min, 2=hour | 间隔时间单位 |
+
+**参数验证规则（双重防护）：**
+
+| 验证项 | executor.py（前置校验） | device_manager.py（防御性校验） |
+|--------|------------------------|-------------------------------|
+| repeat_count类型 | - | 必须为int/float，非数值类型拒绝 |
+| repeat_count范围 | - | [0, 9999]，float需为整数值 |
+| 重复模式间隔 | repeat_count!=1时interval_time>0 | repeat_count!=1时interval_time>0 |
+| 单位默认值 | time_unit=None→0, volume_unit=None→1, interval_time_unit=None→0 | 同左 |
+
+**关键设计决策：**
+
+1. **`repeat_count != 1` 而非 `> 1`**：repeat_count=0表示无限重复，也需要间隔时间。如果用`>1`，无限重复模式会漏掉间隔校验
+2. **单位参数提前归一化**：警告后立即设置默认值（time_unit=0, volume_unit=1, interval_time_unit=0），防止后续代码误用None
+3. **流速精度3位小数**：前端step=0.001, precision=3，符合说明书"精确到小数点后三位"
+
+**前端变更：**
+
+| 文件 | 变更 |
+|------|------|
+| ControlPanel.vue | 添加时间/体积单位切换、重复次数/间隔时间输入、流速step=0.001/precision=3、前端参数校验 |
+| devices.ts | 新增TIME_UNITS/VOLUME_UNITS常量，startPump添加5个新参数 |
+
+**后端变更：**
+
+| 文件 | 变更 |
+|------|------|
+| devices.py | StartPumpRequest添加time_unit/volume_unit/repeat_count/interval_time/interval_time_unit |
+| device_manager.py | 传递单位参数到泵驱动，添加repeat_count类型/范围校验，重复模式间隔校验，单位默认值归一化 |
+| executor.py | 传递新参数，单位默认值处理，重复模式前置校验 |
+
+**实验YAML更新：**
+
+| 文件 | 变更 |
+|------|------|
+| chemical_synthesis_A.yaml | 补全time_unit/volume_unit/repeat_count/interval_time/interval_time_unit |
+| pump_four_channel_demo.yaml | 同上 |
+
+**关键经验：**
+
+1. **参数验证双重防护**：executor前置校验给出清晰步骤级错误日志，device_manager防御性校验确保无论调用来源如何非法参数不写入泵寄存器
+2. **`!= 1` vs `> 1`**：repeat_count=0（无限重复）同样需要间隔时间，使用`!= 1`而非`> 1`避免漏校验
+3. **单位参数必须归一化**：仅记录警告不设默认值会导致原始参数仍为None，后续代码误用会出错
+4. **前端精度与步长必须匹配**：precision=3配合step=0.1导致无法精确输入3位小数，改为step=0.001

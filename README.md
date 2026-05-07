@@ -18,6 +18,7 @@
 | 代码质量审查 | ✅ 完成 | v2.5 全面审查修复（20+问题，含安全/竞态/封装） |
 | 前端稳定性增强 | ✅ 完成 | v2.6 温度显示修复、日志保存开关、历史记录删除、浏览器缓存处理 |
 | 蠕动泵模式修复 | ✅ 完成 | v2.7 运行模式参数规则、流速单位限制、软管型号验证、定时定量自动计算、前端参数持久化 |
+| 蠕动泵模式完善 | ✅ 完成 | v2.8 四种模式参数完善、重复模式、单位切换、参数验证双重防护、流速精度3位小数 |
 | 主控制器 | ✅ 完成 | main.py 支持加热器+蠕动泵交互控制 |
 
 ## 核心架构
@@ -85,10 +86,12 @@ FastAPI 服务层（run_in_executor 桥接同步设备）
 - **内存限制**：每设备最多10万数据点，防止内存溢出
 
 ### 运行模式（蠕动泵）
-- 流量模式：设置流速持续运行
+- 流量模式：设置流速持续运行，精确到小数点后3位
 - 定时定量：设定时间和分装液量，流速自动计算
 - 定时定速：设定时间和流速
 - 定量定速：设定分装液量和流速
+
+非流量模式支持重复运行：重复次数0-9999（0=无限），间隔时间最小0.1秒，支持sec/min/hour单位切换。
 
 > **重要**：流速只能在流量模式下设置，非流量模式启动时会自动先切到流量模式设流速再切回目标模式。定时定量模式下流速由泵自动计算，前端显示为只读。流速单位仅支持 mL/min 和 RPM。
 
@@ -252,6 +255,15 @@ pump.set_flow_rate(1, 5.0)  # 先在流量模式设流速
 pump.set_run_mode(1, PumpRunMode.TIME_QUANTITY)  # 切到定时定量
 pump.set_run_time(1, 60.0)
 pump.set_dispense_volume(1, 10.0)
+pump.start_channel(1)
+
+# 定时定速模式 + 重复运行
+pump.set_run_mode(1, PumpRunMode.FLOW_MODE)
+pump.set_flow_rate(1, 3.0)
+pump.set_run_mode(1, PumpRunMode.TIME_SPEED)
+pump.set_run_time(1, 30.0)
+pump.set_repeat_count(1, 5)       # 重复5次
+pump.set_interval_time(1, 10.0)   # 间隔10秒
 pump.start_channel(1)
 
 pump.stop_all()
