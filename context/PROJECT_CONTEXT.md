@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-05-07
-版本：v2.9
+> 最后更新：2026-05-15
+版本：v2.10
 
 ---
 
@@ -172,10 +172,6 @@ Heat/
 │   │       └── HistoryPage.vue   # 实验历史记录
 │   └── package.json
 ├── scripts/
-│   ├── chemical_synthesis_experiment.py  # 化学合成实验
-│   ├── heater_only_experiment.py         # 纯加热实验
-│   ├── temperature_experiment.py         # 温度控制实验
-│   ├── test_connections.py               # 设备连接测试
 │   └── cleanup_locks.py                  # 锁文件清理
 ├── src/
 │   ├── control/
@@ -213,10 +209,7 @@ Heat/
 │       └── logger.py               # 日志工具
 ├── tests/
 │   ├── test_heater.py              # 加热器测试
-│   ├── test_hardware.py            # 硬件测试
-│   ├── diagnose.py                 # 诊断工具
-│   ├── diagnose_pump.py            # 泵诊断
-│   └── diagnose_ttl.py             # TTL诊断
+│   └── test_hardware.py            # 硬件测试
 ├── output/                         # 实验输出（报告/图表）
 ├── run_server.py                   # Web服务器启动入口
 ├── environment.yml                 # Conda环境配置
@@ -862,8 +855,8 @@ class CSVDataLogger:
 - 上层（脚本/GUI）负责调度，驱动层只负责执行
 - ProgramController 的设计是正确的：虽然使用线程，但全程单线程顺序访问设备
 
-# 2. 在实验脚本中手动记录数据
-# scripts/chemical_synthesis_experiment.py
+# 2. 在实验引擎中自动记录数据
+# src/experiment/executor.py 通过 CSVDataLogger 自动记录设备数据
 def _record_temperature(self):
     try:
         if self.heater1:
@@ -874,8 +867,6 @@ def _record_temperature(self):
 
 # 3. 更新所有相关文件移除 DataMonitor
 # src/main.py
-# scripts/heater_only_experiment.py
-# scripts/chemical_synthesis_experiment.py
 # src/__init__.py
 ```
 
@@ -1268,9 +1259,6 @@ python scripts/test_pump_flow.py --port COM10 --force
 
 # 运行集成实验
 python scripts/heater_pump_safe.py --heater-ports COM7 COM9 --pump-port COM10 --force
-
-# 诊断串口
-python tests/diagnose_pump.py
 ```
 
 ### B. 环境管理
@@ -1365,13 +1353,13 @@ pumps:
 |------|------|------|
 | _receive_frame空数据返回空bytes而非None | modbus_rtu.py | 统一返回None |
 | read_channel_status返回内部数据引用 | peristaltic_pump.py | 使用copy.deepcopy返回深拷贝 |
-| heater_only_experiment.py cleanup无try/except | heater_only_experiment.py | 加try/except保护 |
+| heater_only_experiment.py cleanup无try/except | heater_only_experiment.py（已移除） | 文件已删除，功能由实验引擎替代 |
 
 **P2 改进项（3项）：**
 
 | 问题 | 文件 | 修复 |
 |------|------|------|
-| temperature_experiment.py自定义DataPoint | temperature_experiment.py | 统一使用CSVDataLogger + SimpleDataPoint + argparse |
+| temperature_experiment.py自定义DataPoint | temperature_experiment.py（已移除） | 文件已删除，功能由实验引擎替代 |
 | main.py不支持蠕动泵 | main.py | 添加_init_pumps/connect_pump/start_pump/stop_pump等方法和交互命令 |
 | 多处裸except | 3个实验脚本 | 全部改为except Exception |
 
@@ -1526,7 +1514,7 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 | data_push_loop竞态条件 | app.py / run_server.py | 将data_push_loop启动移入lifespan上下文管理器，确保device_manager先初始化 |
 | DeviceManager私有属性直接访问 | device_manager.py + api/ | 添加get_heater/get_pump/get_all_heaters/get_all_pumps公共方法，API层改用公共方法 |
 | ProgramController使用threading | program_controller.py | 从threading重构为asyncio架构，使用asyncio.Event和run_in_executor |
-| test_connections.py裸except | test_connections.py | 改为`except Exception` |
+| test_connections.py裸except | test_connections.py（已移除） | 文件已删除 |
 | parameters.py枚举值冲突 | parameters.py | 移除重复的MV_EXT=80（与SP1=80冲突） |
 
 **P1 中优先级（7项）：**
@@ -1728,3 +1716,26 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 1. **规则文件与上下文文件职责分离**：heat.md 定义"怎么做"（行为准则），PROJECT_CONTEXT.md 定义"是什么"（项目知识），避免重复维护
 2. **规则应通用而非具体**：设备参数、框架细节属于上下文，不属于规则；规则应跨设备、跨框架通用
 3. **Skill 优于角色扮演**：单AI架构下，结构化 Skill（清单+模板）比"多智能体角色扮演"更可执行、可验证
+
+### 6.15 2026-05-15 代码审查问题修复与依赖清理（v2.10）
+
+**变更内容：**
+
+| 类别 | 变更 | 涉及文件 |
+|------|------|----------|
+| 依赖管理 | 删除 `environment.yml` 中 3 行重复依赖（旧版本号 fastapi/uvicorn/websockets） | `environment.yml` |
+| 依赖管理 | 补充 `pydantic>=2.0.0` 到 `pyproject.toml` 和 `requirements.txt` | `pyproject.toml`, `requirements.txt` |
+| 配置加载 | `app.py` 改用 `ConfigManager` 加载配置，利用 dataclass 进行类型验证 | `src/web/app.py`, `src/utils/config.py` |
+| CLI 泵支持 | `get_device_status`/`get_all_status`/`record_device_data` 增加泵设备遍历 | `src/main.py` |
+| 代码重构 | `_start_pump_channel_inner` 拆分为 `_validate_pump_units`/`_validate_pump_repeat_params`/`_set_pump_flow_and_mode`/`_set_pump_mode_params` 4 个子函数 | `src/web/device_manager.py` |
+| 前端拆分 | `ControlPanel.vue`（598行）拆分为 `HeaterControl.vue` + `PumpControl.vue` 子组件，父组件降至 402 行 | `frontend/src/views/ControlPanel.vue`, `frontend/src/components/HeaterControl.vue`, `frontend/src/components/PumpControl.vue` |
+| 脚本清理 | 删除重复的 `chemical_synthesis_experiment.py`（690行），功能已由实验引擎替代 | `scripts/chemical_synthesis_experiment.py` |
+| 文档更新 | 清理 `PROJECT_CONTEXT.md` 和 `README.md` 中引用已删除文件的过期路径 | `context/PROJECT_CONTEXT.md`, `README.md` |
+| 缓存清理 | 删除 `scripts/__pycache__/` 中 13 个已删除脚本的 `.pyc` 残留（含 cpython-310/313 双版本） | `scripts/__pycache__/` |
+| 审查报告 | 新增 `docs/code_review.md` 代码审查报告 | `docs/code_review.md` |
+
+**经验教训：**
+
+1. **依赖文件三份必须同步**：`pyproject.toml`/`requirements.txt`/`environment.yml` 任何一份变更后必须检查另外两份，避免版本号不一致和缺失依赖
+2. **删除脚本后清理缓存**：`.pyc` 文件不会被 Git 跟踪（在 `.gitignore` 中），但残留会误导开发者以为脚本仍存在，删除 `.py` 源文件后应同步清理 `__pycache__/`
+3. **前端组件拆分阈值**：单文件超过 400 行且包含两种以上独立功能时，应考虑拆分为子组件

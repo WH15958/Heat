@@ -211,21 +211,15 @@ python run_server.py
 
 ### 2. 测试设备连接
 
-```bash
-python scripts/test_connections.py
-```
+通过 Web 界面连接设备并查看实时状态。
 
 ### 3. 运行化学合成实验
 
-```bash
-python scripts/chemical_synthesis_experiment.py --heater1-port COM7 --heater2-port COM9 --pump-port COM10 --force
-```
+通过 Web 界面加载 YAML 实验定义并运行。
 
 ### 4. 纯加热实验
 
-```bash
-python scripts/heater_only_experiment.py
-```
+通过 Web 界面创建并运行加热实验，或使用实验引擎 API。
 
 ## 使用示例
 

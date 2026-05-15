@@ -166,7 +166,7 @@ class AutomationController:
     def record_device_data(self, device_id: str):
         """
         手动记录设备数据
-        
+
         Args:
             device_id: 设备ID
         """
@@ -182,8 +182,27 @@ class AutomationController:
                     alarm_status=data.alarm_status,
                     alarms=data.alarms
                 )
+                return
             except Exception as e:
-                self._logger.warning(f"Failed to record data for {device_id}: {e}")
+                self._logger.warning(f"Failed to record heater data for {device_id}: {e}")
+
+        pump = self._pumps.get(device_id)
+        if pump and pump.is_connected():
+            try:
+                for ch in range(1, 5):
+                    ch_data = pump.read_channel_status(ch)
+                    if ch_data:
+                        self._csv_logger.record(
+                            device_id=f"{device_id}_ch{ch}",
+                            flow_rate=ch_data.flow_rate,
+                            volume=ch_data.dispensed_volume,
+                            running=ch_data.running,
+                        )
+                return
+            except Exception as e:
+                self._logger.warning(f"Failed to record pump data for {device_id}: {e}")
+
+        self._logger.warning(f"Device not found or not connected: {device_id}")
     
     def connect_device(self, device_id: str) -> bool:
         """
@@ -387,19 +406,49 @@ class AutomationController:
             data = heater.read_data()
             return {
                 'device_id': device_id,
+                'type': 'heater',
                 'status': heater.status.value,
                 'pv': data.pv,
                 'sv': data.sv,
                 'mv': data.mv,
                 'alarms': data.alarms,
             }
+
+        pump = self._pumps.get(device_id)
+        if pump and pump.is_connected():
+            channels = {}
+            for ch in range(1, 5):
+                try:
+                    ch_data = pump.read_channel_status(ch)
+                    if ch_data:
+                        channels[str(ch)] = {
+                            'running': ch_data.running,
+                            'flow_rate': ch_data.flow_rate,
+                            'volume': ch_data.dispensed_volume,
+                            'direction': ch_data.direction.name if ch_data.direction else None,
+                        }
+                except Exception:
+                    channels[str(ch)] = {'running': False, 'flow_rate': 0.0, 'volume': 0.0}
+            return {
+                'device_id': device_id,
+                'type': 'pump',
+                'status': pump.status.value,
+                'channels': channels,
+            }
+
         return None
-    
+
     def get_all_status(self) -> Dict[str, Dict]:
         """获取所有设备状态"""
         status = {}
         for device_id in self._heaters:
-            status[device_id] = self.get_device_status(device_id)
+            s = self.get_device_status(device_id)
+            if s:
+                status[device_id] = s
+        for device_id in self._pumps:
+            s = self.get_device_status(device_id)
+            if s:
+                status[device_id] = s
         return status
     
     def generate_report(self, 

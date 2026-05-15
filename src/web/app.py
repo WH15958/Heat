@@ -19,48 +19,53 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_device_manager() -> DeviceManager:
-    """从配置文件创建设备管理器
+    """从配置文件创建设备管理器（使用 ConfigManager 做配置验证）
 
     Returns:
         DeviceManager: 已注册设备的设备管理器
     """
+    from src.utils.config import ConfigManager
+
     dm = DeviceManager()
     try:
-        import yaml
+        config_mgr = ConfigManager()
+        config = config_mgr.load()
 
-        config_path = Path("config/system_config.yaml")
-        if not config_path.exists():
-            logger.warning("Config file not found, starting with empty devices")
-            return dm
-
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        for h_cfg in data.get("heaters", []):
-            if not h_cfg.get("enabled", True):
+        for h_cfg in config.heaters:
+            if not h_cfg.enabled:
                 continue
-            conn = h_cfg.get("connection", {})
             dm.add_heater(
-                device_id=h_cfg["device_id"],
-                port=conn.get("port", "COM1"),
-                baudrate=conn.get("baudrate", 9600),
-                address=conn.get("address", 1),
-                decimal_places=h_cfg.get("decimal_places", 1),
+                device_id=h_cfg.device_id,
+                port=h_cfg.connection.port,
+                baudrate=h_cfg.connection.baudrate,
+                address=h_cfg.connection.address,
+                decimal_places=h_cfg.decimal_places,
             )
-            logger.info(f"Registered heater: {h_cfg['device_id']}")
+            logger.info(f"Registered heater: {h_cfg.device_id}")
 
-        for p_cfg in data.get("pumps", []):
-            if not p_cfg.get("enabled", True):
+        for p_cfg in config.pumps:
+            if not p_cfg.enabled:
                 continue
-            conn = p_cfg.get("connection", {})
+            channels = None
+            if p_cfg.channels:
+                channels = [
+                    {
+                        "channel": ch.channel,
+                        "enabled": ch.enabled,
+                        "pump_head": ch.pump_head,
+                        "tube_model": ch.tube_model,
+                        "suck_back_angle": ch.suck_back_angle,
+                    }
+                    for ch in p_cfg.channels
+                ]
             dm.add_pump(
-                device_id=p_cfg["device_id"],
-                port=conn.get("port", "COM1"),
-                baudrate=conn.get("baudrate", 19200),
-                slave_address=p_cfg.get("slave_address", 1),
-                channels=p_cfg.get("channels"),
+                device_id=p_cfg.device_id,
+                port=p_cfg.connection.port,
+                baudrate=p_cfg.connection.baudrate,
+                slave_address=p_cfg.slave_address,
+                channels=channels,
             )
-            logger.info(f"Registered pump: {p_cfg['device_id']}")
+            logger.info(f"Registered pump: {p_cfg.device_id}")
 
     except Exception as e:
         logger.warning(f"Failed to load config, starting with empty devices: {e}")

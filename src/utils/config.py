@@ -405,7 +405,7 @@ class ConfigManager:
         heaters = []
         for heater_data in data.get("heaters", []):
             conn_data = heater_data.get("connection", {})
-            connection = DeviceConnectionConfig(**conn_data)
+            connection = DeviceConnectionConfig.from_dict(conn_data)
             heater = HeaterDeviceConfig(
                 **{k: v for k, v in heater_data.items() if k != "connection"},
                 connection=connection
@@ -415,7 +415,7 @@ class ConfigManager:
         pumps = []
         for pump_data in data.get("pumps", []):
             conn_data = pump_data.get("connection", {})
-            connection = DeviceConnectionConfig(**conn_data)
+            connection = DeviceConnectionConfig.from_dict(conn_data)
             
             channels = []
             for ch_data in pump_data.get("channels", []):
