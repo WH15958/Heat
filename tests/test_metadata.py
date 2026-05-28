@@ -318,53 +318,73 @@ def test_sample_record_failed_experiment():
 def test_experiment_logger_start_run_generates_sample_id():
     print("\n=== 测试11: ExperimentLogger.start_run 自动生成 sample_id ===")
 
-    from src.experiment.experiment_logger import ExperimentLogger
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.experiment.experiment_logger import ExperimentLogger
+        import src.science.sample_record as sr_mod
 
-    exp_logger = ExperimentLogger(save_log=False)
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            exp_logger = ExperimentLogger(save_log=False)
 
-    run_id = exp_logger.start_run(
-        experiment_name="test",
-        experiment_file="test.yaml",
-        total_steps=3,
-        metadata={
-            "batch_id": "CsPbBr3_20260528_B01",
-            "sample_index": 3,
-            "material_system": "CsPbBr3",
-            "operator": "WH",
-        },
-    )
+            run_id = exp_logger.start_run(
+                experiment_name="test",
+                experiment_file="test.yaml",
+                total_steps=3,
+                metadata={
+                    "batch_id": "CsPbBr3_20260528_B01",
+                    "sample_index": 3,
+                    "material_system": "CsPbBr3",
+                    "operator": "WH",
+                },
+            )
 
-    assert exp_logger.active_run is not None
-    metadata = exp_logger.active_run.metadata
-    assert metadata["sample_id"] == "CsPbBr3_20260528_B01_S003"
-    assert metadata["recipe_file"] == "test.yaml"
-    assert "started_at" in metadata
-    print(f"  run_id: {run_id}")
-    print(f"  sample_id: {metadata['sample_id']}")
-    print("[OK] start_run 时自动生成 sample_id 并写入 metadata")
+            assert exp_logger.active_run is not None
+            metadata = exp_logger.active_run.metadata
+            assert metadata["sample_id"] == "CsPbBr3_20260528_B01_S003"
+            assert metadata["recipe_file"] == "test.yaml"
+            assert "started_at" in metadata
+            print(f"  run_id: {run_id}")
+            print(f"  sample_id: {metadata['sample_id']}")
+            print("[OK] start_run 时自动生成 sample_id 并写入 metadata")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def test_experiment_logger_start_run_no_metadata():
     print("\n=== 测试12: ExperimentLogger.start_run 无 metadata 时正常启动 ===")
 
-    from src.experiment.experiment_logger import ExperimentLogger
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.experiment.experiment_logger import ExperimentLogger
+        import src.science.sample_record as sr_mod
 
-    exp_logger = ExperimentLogger(save_log=False)
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            exp_logger = ExperimentLogger(save_log=False)
 
-    run_id = exp_logger.start_run(
-        experiment_name="test",
-        experiment_file="test.yaml",
-        total_steps=2,
-    )
+            run_id = exp_logger.start_run(
+                experiment_name="test",
+                experiment_file="test.yaml",
+                total_steps=2,
+            )
 
-    assert exp_logger.active_run is not None
-    metadata = exp_logger.active_run.metadata
-    assert "sample_id" in metadata
-    assert "UNKNOWN" in metadata["sample_id"]
-    assert metadata["recipe_file"] == "test.yaml"
-    print(f"  run_id: {run_id}")
-    print(f"  auto sample_id: {metadata['sample_id']}")
-    print("[OK] 无 metadata 时自动生成 sample_id，不报错")
+            assert exp_logger.active_run is not None
+            metadata = exp_logger.active_run.metadata
+            assert "sample_id" in metadata
+            assert "UNKNOWN" in metadata["sample_id"]
+            assert metadata["recipe_file"] == "test.yaml"
+            print(f"  run_id: {run_id}")
+            print(f"  auto sample_id: {metadata['sample_id']}")
+            print("[OK] 无 metadata 时自动生成 sample_id，不报错")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def test_experiment_logger_finish_run_writes_samples_csv():
@@ -554,6 +574,355 @@ def test_sample_record_utf8_encoding():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_sample_id_uniqueness_auto_increment():
+    print("\n=== 测试18: sample_id 已存在时自动递增 ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.science.sample_record import write_sample_record, existing_sample_ids
+        from src.science.sample_id import generate_unique_sample_id
+        import src.science.sample_record as sr_mod
+
+        original_dir = sr_mod.SAMPLES_DIR
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_DIR = tmp_dir
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            metadata = {
+                "sample_id": "TEST_B01_S001",
+                "batch_id": "TEST_B01",
+                "condition_id": "R1",
+                "material_system": "Test",
+                "operator": "WH",
+                "recipe_file": "test.yaml",
+                "started_at": "2026-05-28T10:00:00",
+                "finished_at": "2026-05-28T10:30:00",
+            }
+            write_sample_record(run_id="unique_test_001", metadata=metadata, status="completed")
+
+            existing = existing_sample_ids()
+            assert "TEST_B01_S001" in existing
+
+            metadata2 = {
+                "batch_id": "TEST_B01",
+                "sample_index": 1,
+                "material_system": "Test",
+                "operator": "WH",
+            }
+            sid = generate_unique_sample_id(metadata2)
+            assert sid != "TEST_B01_S001"
+            assert sid == "TEST_B01_S002"
+            print(f"  第一个 sample_id: TEST_B01_S001")
+            print(f"  第二个 sample_id (自动递增): {sid}")
+            print("[OK] sample_id 重复时自动递增到下一个")
+        finally:
+            sr_mod.SAMPLES_DIR = original_dir
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_explicit_sample_id_not_duplicated():
+    print("\n=== 测试19: 显式提供 sample_id 且未重复时不被改写 ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.science.sample_id import generate_unique_sample_id
+        import src.science.sample_record as sr_mod
+
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            metadata = {
+                "sample_id": "MY_CUSTOM_SID_001",
+                "batch_id": "CUSTOM_B01",
+                "material_system": "Custom",
+            }
+            sid = generate_unique_sample_id(metadata)
+            assert sid == "MY_CUSTOM_SID_001"
+            print(f"  sample_id: {sid}")
+            print("[OK] 显式提供 sample_id 且未重复时保持不变")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_explicit_sample_id_duplicated_auto_fix():
+    print("\n=== 测试20: 显式提供 sample_id 但已重复时自动递增并记录警告 ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.science.sample_record import write_sample_record
+        from src.science.sample_id import generate_unique_sample_id
+        import src.science.sample_record as sr_mod
+
+        original_dir = sr_mod.SAMPLES_DIR
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_DIR = tmp_dir
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            metadata_pre = {
+                "sample_id": "DUP_S001",
+                "batch_id": "DUP_B01",
+                "condition_id": "R1",
+                "material_system": "Test",
+                "operator": "WH",
+                "recipe_file": "test.yaml",
+                "started_at": "2026-05-28T10:00:00",
+                "finished_at": "2026-05-28T10:30:00",
+            }
+            write_sample_record(run_id="dup_test_001", metadata=metadata_pre, status="completed")
+
+            metadata2 = {
+                "sample_id": "DUP_S001",
+                "batch_id": "DUP_B01",
+                "sample_index": 1,
+                "material_system": "Test",
+            }
+
+            import io
+            import logging
+            from src.science.sample_id import logger as sid_logger
+
+            log_capture = io.StringIO()
+            handler = logging.StreamHandler(log_capture)
+            handler.setLevel(logging.WARNING)
+            old_handlers = sid_logger.handlers[:]
+            sid_logger.handlers = [handler]
+
+            try:
+                sid = generate_unique_sample_id(metadata2)
+                assert sid != "DUP_S001"
+                assert sid == "DUP_B01_S002"
+                log_output = log_capture.getvalue()
+                assert "already exists" in log_output
+                print(f"  重复的 sample_id: DUP_S001")
+                print(f"  自动修复为: {sid}")
+                print(f"  日志警告: {log_output.strip()}")
+                print("[OK] 显式 sample_id 重复时自动递增并记录警告")
+            finally:
+                sid_logger.handlers = old_handlers
+        finally:
+            sr_mod.SAMPLES_DIR = original_dir
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_save_log_false_raw_log_path_empty():
+    print("\n=== 测试21: save_log=False 时 samples.csv 中 raw_log_path 为空 ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    samples_tmp = tmp_dir / "samples.csv"
+    try:
+        from src.experiment.experiment_logger import ExperimentLogger
+        from src.science import sample_record as sr_mod
+        import src.experiment.experiment_logger as el_mod
+
+        original_logs_dir = el_mod.LOGS_DIR
+        original_samples_dir = sr_mod.SAMPLES_DIR
+        original_samples_csv = sr_mod.SAMPLES_CSV
+
+        el_mod.LOGS_DIR = tmp_dir
+        sr_mod.SAMPLES_DIR = tmp_dir
+        sr_mod.SAMPLES_CSV = samples_tmp
+        try:
+            exp_logger = ExperimentLogger(save_log=False)
+
+            exp_logger.start_run(
+                experiment_name="no_log_test",
+                experiment_file="no_log_test.yaml",
+                total_steps=1,
+                metadata={
+                    "batch_id": "NOLOG_B01",
+                    "sample_index": 1,
+                    "material_system": "Test",
+                    "operator": "WH",
+                },
+            )
+
+            exp_logger.finish_run("completed")
+
+            assert samples_tmp.exists()
+            with open(samples_tmp, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                row = next(reader)
+                assert row["raw_log_path"] == ""
+                assert row["status"] == "completed"
+                assert row["sample_id"] == "NOLOG_B01_S001"
+
+            print(f"  raw_log_path: '{row['raw_log_path']}'")
+            print("[OK] save_log=False 时 raw_log_path 为空字符串")
+        finally:
+            el_mod.LOGS_DIR = original_logs_dir
+            sr_mod.SAMPLES_DIR = original_samples_dir
+            sr_mod.SAMPLES_CSV = original_samples_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_get_experiment_returns_metadata():
+    print("\n=== 测试22: GET /experiments/{filename} 返回 metadata ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        yaml_content = """name: meta_test
+description: Test metadata in API
+metadata:
+  material_system: CsPbBr3
+  batch_id: CsPbBr3_20260528_B01
+  condition_id: T140_t180_R2
+  sample_index: 1
+  operator: WH
+  recipe_version: v0.1
+steps:
+  - id: step1
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 1
+"""
+        yaml_path = tmp_dir / "meta_test.yaml"
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            f.write(yaml_content)
+
+        from src.experiment.parser import EXPERIMENTS_DIR, parse_experiment
+        import src.experiment.parser as parser_mod
+
+        original_dir = parser_mod.EXPERIMENTS_DIR
+        parser_mod.EXPERIMENTS_DIR = tmp_dir
+        try:
+            result = parse_experiment(str(yaml_path))
+        finally:
+            parser_mod.EXPERIMENTS_DIR = original_dir
+
+        assert "metadata" in result
+        assert result["metadata"]["material_system"] == "CsPbBr3"
+        assert result["metadata"]["batch_id"] == "CsPbBr3_20260528_B01"
+        assert result["metadata"]["operator"] == "WH"
+        assert result["description"] == "Test metadata in API"
+        print(f"  metadata keys: {list(result['metadata'].keys())}")
+        print("[OK] parse_experiment 返回 metadata 字段")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_start_experiment_returns_sample_id():
+    print("\n=== 测试23: start_run 返回 sample_id ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.experiment.experiment_logger import ExperimentLogger
+        import src.science.sample_record as sr_mod
+
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            exp_logger = ExperimentLogger(save_log=False)
+
+            exp_logger.start_run(
+                experiment_name="api_test",
+                experiment_file="api_test.yaml",
+                total_steps=2,
+                metadata={
+                    "batch_id": "API_B01",
+                    "sample_index": 1,
+                    "material_system": "Test",
+                    "operator": "WH",
+                },
+            )
+
+            assert exp_logger.active_run is not None
+            sample_id = exp_logger.active_run.metadata.get("sample_id")
+            assert sample_id is not None
+            assert sample_id == "API_B01_S001"
+            assert "sample_id" in exp_logger.active_run.metadata
+            assert "material_system" in exp_logger.active_run.metadata
+            print(f"  sample_id: {sample_id}")
+            print(f"  metadata: {exp_logger.active_run.metadata}")
+            print("[OK] start_run 后 metadata 中包含 sample_id")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_existing_sample_ids_function():
+    print("\n=== 测试24: existing_sample_ids() 正确读取已存在 sample_id ===")
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        from src.science.sample_record import write_sample_record, existing_sample_ids as sr_existing_sample_ids
+        import src.science.sample_record as sr_mod
+
+        original_dir = sr_mod.SAMPLES_DIR
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_DIR = tmp_dir
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            metadata = {
+                "sample_id": "READ_TEST_S001",
+                "batch_id": "READ_B01",
+                "condition_id": "R1",
+                "material_system": "Test",
+                "operator": "WH",
+                "recipe_file": "test.yaml",
+                "started_at": "2026-05-28T10:00:00",
+                "finished_at": "2026-05-28T10:30:00",
+            }
+            write_sample_record(run_id="read_test_001", metadata=metadata, status="completed")
+
+            existing = sr_existing_sample_ids()
+            assert "READ_TEST_S001" in existing
+            assert len(existing) == 1
+            print(f"  existing sample_ids: {existing}")
+            print("[OK] existing_sample_ids() 正确读取 sample_id")
+        finally:
+            sr_mod.SAMPLES_DIR = original_dir
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_finish_run_does_not_crash_on_csv_write_failure():
+    print("\n=== 测试25: samples.csv 写入失败不影响实验结束流程 ===")
+
+    from src.experiment.experiment_logger import ExperimentLogger
+
+    exp_logger = ExperimentLogger(save_log=False)
+
+    exp_logger.start_run(
+        experiment_name="crash_test",
+        experiment_file="crash_test.yaml",
+        total_steps=1,
+        metadata={
+            "batch_id": "CRASH_B01",
+            "sample_index": 1,
+            "material_system": "Test",
+        },
+    )
+
+    from src.science import sample_record as sr_mod
+    import src.experiment.experiment_logger as el_mod
+
+    original_write = el_mod.write_sample_record
+    was_called = {"count": 0}
+
+    def mock_write(*args, **kwargs):
+        was_called["count"] += 1
+        raise OSError("Simulated disk full")
+
+    el_mod.write_sample_record = mock_write
+    try:
+        exp_logger.finish_run("completed")
+        assert was_called["count"] == 1
+        print("[OK] samples.csv 写入失败时 finish_run 仍正常结束，不抛异常")
+    finally:
+        el_mod.write_sample_record = original_write
+
+
 def run_all():
     tests = [
         test_parser_old_yaml_no_metadata,
@@ -573,6 +942,14 @@ def run_all():
         test_engine_load_steps_backward_compatible,
         test_list_experiments_includes_metadata_yaml,
         test_sample_record_utf8_encoding,
+        test_sample_id_uniqueness_auto_increment,
+        test_explicit_sample_id_not_duplicated,
+        test_explicit_sample_id_duplicated_auto_fix,
+        test_save_log_false_raw_log_path_empty,
+        test_get_experiment_returns_metadata,
+        test_start_experiment_returns_sample_id,
+        test_existing_sample_ids_function,
+        test_finish_run_does_not_crash_on_csv_write_failure,
     ]
 
     passed = 0

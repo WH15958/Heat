@@ -37,6 +37,7 @@ async def get_experiment(filename: str):
         return {
             "name": data["name"],
             "description": data["description"],
+            "metadata": data.get("metadata", {}),
             "steps": [
                 {
                     "id": s.id,
@@ -119,7 +120,13 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
     _engines[filename] = engine
 
     await engine.start()
-    return {"success": True, "experiment": data["name"], "run_id": exp_logger.active_run.run_id if exp_logger.active_run else None}
+    return {
+        "success": True,
+        "experiment": data["name"],
+        "run_id": exp_logger.active_run.run_id if exp_logger.active_run else None,
+        "sample_id": exp_logger.active_run.metadata.get("sample_id") if exp_logger.active_run else None,
+        "metadata": exp_logger.active_run.metadata if exp_logger.active_run else {},
+    }
 
 
 @router.post("/{filename}/pause")

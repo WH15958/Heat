@@ -52,6 +52,22 @@ def _existing_run_ids() -> set:
     return ids
 
 
+def existing_sample_ids() -> set:
+    if not SAMPLES_CSV.exists():
+        return set()
+    ids = set()
+    try:
+        with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sid = row.get("sample_id", "").strip()
+                if sid:
+                    ids.add(sid)
+    except Exception:
+        pass
+    return ids
+
+
 def write_sample_record(
     run_id: str,
     metadata: dict,

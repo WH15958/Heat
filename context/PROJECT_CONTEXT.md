@@ -3,7 +3,7 @@
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
 > 最后更新：2026-05-28
-版本：v2.11
+版本：v2.12
 
 ---
 
@@ -1826,3 +1826,58 @@ metadata:
 2. **向后兼容靠默认值**：`metadata=None` 配合 `or {}` 确保老代码无需修改
 3. **防御性异常处理**：`_ensure_dir()` 的 `mkdir` 需 try/except，否则权限不足等场景会静默崩溃（已在 review 中修复）
 4. **冗余代码清理**：`merged_metadata.get("sample_index", merged_metadata.get("sample_index", 1))` 内层 get 多余，简化为 `merged_metadata.get("sample_index", 1)`（已在 review 中修复）
+
+
+### 6.17 2026-05-28 sample_id唯一性修复、API metadata增强、raw_log_path修复（v2.12）
+
+**问题修复：**
+
+| 问题 | 修复方案 |
+|------|---------|
+| sample_id 可能重复（写死 batch_id+sample_index） | 新增 `generate_unique_sample_id()`，自动递增至不重复 |
+| GET /experiments/{filename} 不返回 metadata | 增加 `metadata: data.get("metadata", {})` |
+| POST start 不返回 sample_id | 增加 `sample_id` 和 `metadata` 字段 |
+| save_log=False 时写入假路径 | 条件判断：save_log=True 才写真实路径，否则空字符串 |
+| cspbbr3_baseline.yaml 描述不清 | 改为 `metadata demo / heating-only placeholder, not full synthesis recipe` |
+| CSV 写入失败会中断实验 | `finish_run()` 中 `_write_sample_record()` 包裹 try/except |
+
+**新增函数：**
+
+| 函数 | 位置 | 说明 |
+|------|------|------|
+| `existing_sample_ids()` | `src/science/sample_record.py` | 从 samples.csv 读取已存在的所有 sample_id |
+| `generate_unique_sample_id(metadata: dict) -> str` | `src/science/sample_id.py` | 唯一 sample_id 生成，策略见下 |
+
+**sample_id 唯一性生成规则：**
+
+| 场景 | 策略 |
+|------|------|
+| 显式提供 sample_id，未重复 | 直接使用 |
+| 显式提供 sample_id，已重复 | 日志警告 + 基于 batch_id/sample_index 递增 |
+| 无 sample_id，有 batch_id+sample_index | 生成基础 ID，自动递增至不重复 |
+| 无 batch_id | `UNKNOWN_{日期}_B01` 前缀，同样保证唯一 |
+
+**API 接口变更：**
+
+| 接口 | 新增字段 |
+|------|---------|
+| `GET /experiments/{filename}` | `metadata` |
+| `POST /experiments/{filename}/start` | `sample_id`, `metadata` |
+
+**涉及文件：**
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/science/sample_id.py` | 修改 | 新增 `generate_unique_sample_id()` + logger |
+| `src/science/sample_record.py` | 修改 | 新增 `existing_sample_ids()` |
+| `src/experiment/experiment_logger.py` | 修改 | 使用 `generate_unique_sample_id()`；raw_log_path 条件设置；CSV 写入 try/except |
+| `src/web/api/experiments.py` | 修改 | GET 返回 metadata；POST 返回 sample_id+metadata |
+| `experiments/cspbbr3_baseline.yaml` | 修改 | description 注明为 placeholder |
+| `tests/test_metadata.py` | 修改 | 25 个测试（+8 个新测试） |
+
+**经验教训：**
+
+1. **ID 唯一性必须对 CSV 已有记录做去重**：仅靠 run_id 去重不够，sample_id 也必须独立保证唯一
+2. **显式 sample_id 重复时不应报错，应自动处理并警告**：避免中断实验流程
+3. **API 返回 sample_id 和 metadata**：让前端和操作者可以在启动前/后看到样品信息
+4. **save_log 与 raw_log_path 必须一致**：避免写入不存在的日志路径

@@ -1,5 +1,5 @@
 name: cspbbr3_baseline
-description: CsPbBr3 fixed-condition baseline synthesis
+description: metadata demo / heating-only placeholder, not full synthesis recipe
 metadata:
   material_system: CsPbBr3
   batch_id: CsPbBr3_20260528_B01

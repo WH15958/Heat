@@ -257,6 +257,8 @@ steps:
 ```
 
 > **说明**：`metadata` 字段是可选的。如果不提供，系统会自动生成 `sample_id`、`batch_id`、`condition_id` 等标识。实验结束后，所有运行记录会写入 `data/datasets/samples.csv`。失败实验也会记录并标记 `error_flag=true`。
+>
+> **sample_id 唯一性**：系统会自动检测 `sample_id` 是否重复。如果重复，会记录日志警告并自动递增 `sample_index` 直到找到未使用的编号。即使 YAML 中写死 batch_id 和 sample_index，也不会产生重复的 sample_id。
 
 ### 可用动作类型
 

@@ -8,7 +8,7 @@ from typing import Optional, List, Callable
 from enum import Enum
 
 from src.utils.logger import get_logger
-from src.science.sample_id import generate_sample_id
+from src.science.sample_id import generate_unique_sample_id
 from src.science.sample_record import write_sample_record
 
 logger = get_logger(__name__)
@@ -140,11 +140,7 @@ class ExperimentLogger:
 
         batch_id = merged_metadata.get("batch_id", "")
         sample_index = merged_metadata.get("sample_index", 1)
-        if not merged_metadata.get("sample_id"):
-            merged_metadata["sample_id"] = generate_sample_id(
-                batch_id=batch_id,
-                sample_index=sample_index,
-            )
+        merged_metadata["sample_id"] = generate_unique_sample_id(merged_metadata)
 
         self._active_run = ExperimentRun(
             run_id=run_id,
@@ -227,7 +223,10 @@ class ExperimentLogger:
             start = datetime.fromisoformat(self._active_run.started_at)
             self._active_run.total_duration = (datetime.now() - start).total_seconds()
         self._save_to_file()
-        self._write_sample_record(status)
+        try:
+            self._write_sample_record(status)
+        except Exception as e:
+            logger.error(f"Failed to write sample record: {e}")
         self._emit("run_finished", self._active_run.to_dict())
         logger.info(f"Experiment run {status}: {self._active_run.run_id}")
 
@@ -236,8 +235,10 @@ class ExperimentLogger:
         metadata = run.metadata or {}
         metadata["finished_at"] = run.finished_at
 
-        log_filename = f"{run.run_id}_{run.experiment_name}.json"
-        log_path = str(LOGS_DIR / log_filename)
+        log_path = ""
+        if self._save_log:
+            log_filename = f"{run.run_id}_{run.experiment_name}.json"
+            log_path = str(LOGS_DIR / log_filename)
 
         error_flag = status in (RunStatus.FAILED.value, RunStatus.STOPPED.value)
 

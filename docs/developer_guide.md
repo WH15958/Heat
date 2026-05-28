@@ -274,14 +274,14 @@ if run_time is not None and time_unit is None:
 | `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED；`load_steps()` 支持 metadata 参数 |
 | `executor.py` | 步骤执行器：调用DeviceManager |
 | `actions.py` | 9种动作 + 4种等待条件定义 |
-| `experiment_logger.py` | 实验运行日志；`start_run()` 自动生成 sample_id；`finish_run()` 写入 samples.csv |
+| `experiment_logger.py` | 实验运行日志；`start_run()` 调用 `generate_unique_sample_id()` 确保唯一；`finish_run()` 写入 samples.csv（try/except 防护） |
 
 ### 科学数据层 (`src/science/`)
 
 | 文件 | 职责 |
 |------|------|
-| `sample_id.py` | `generate_sample_id()` / `generate_batch_id()` / `generate_condition_id()` |
-| `sample_record.py` | `write_sample_record()`：写入 `data/datasets/samples.csv`，自动建目录、写 header、UTF-8、防重复 |
+| `sample_id.py` | `generate_sample_id()` / `generate_batch_id()` / `generate_condition_id()` / `generate_unique_sample_id()` |
+| `sample_record.py` | `write_sample_record()` / `existing_sample_ids()`：写入/读取 `data/datasets/samples.csv`，自动建目录、写 header、UTF-8、防重复 |
 
 ---
 
