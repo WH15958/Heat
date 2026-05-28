@@ -241,6 +241,13 @@ curl http://localhost:8000/api/experiments/simple_heat_test.yaml/status
 ```yaml
 name: 实验名称
 description: 实验描述
+metadata:                          # 可选，样品元数据
+  material_system: CsPbBr3         # 材料体系
+  batch_id: CsPbBr3_20260528_B01   # 批次编号（留空自动生成）
+  condition_id: T140_t180_R2       # 条件编号（留空自动生成）
+  sample_index: 3                  # 样品序号（默认1）
+  operator: WH                     # 操作员
+  recipe_version: v0.1             # 配方版本
 steps:
   - name: 步骤1名称
     action: 动作类型
@@ -248,6 +255,8 @@ steps:
       参数1: 值1
       参数2: 值2
 ```
+
+> **说明**：`metadata` 字段是可选的。如果不提供，系统会自动生成 `sample_id`、`batch_id`、`condition_id` 等标识。实验结束后，所有运行记录会写入 `data/datasets/samples.csv`。失败实验也会记录并标记 `error_flag=true`。
 
 ### 可用动作类型
 

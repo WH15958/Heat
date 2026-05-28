@@ -270,10 +270,18 @@ if run_time is not None and time_unit is None:
 
 | 文件 | 职责 |
 |------|------|
-| `parser.py` | YAML解析 + 文件名校验 |
-| `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED |
+| `parser.py` | YAML解析 + 文件名校验 + metadata 字段提取 |
+| `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED；`load_steps()` 支持 metadata 参数 |
 | `executor.py` | 步骤执行器：调用DeviceManager |
 | `actions.py` | 9种动作 + 4种等待条件定义 |
+| `experiment_logger.py` | 实验运行日志；`start_run()` 自动生成 sample_id；`finish_run()` 写入 samples.csv |
+
+### 科学数据层 (`src/science/`)
+
+| 文件 | 职责 |
+|------|------|
+| `sample_id.py` | `generate_sample_id()` / `generate_batch_id()` / `generate_condition_id()` |
+| `sample_record.py` | `write_sample_record()`：写入 `data/datasets/samples.csv`，自动建目录、写 header、UTF-8、防重复 |
 
 ---
 

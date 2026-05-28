@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-05-15
-版本：v2.10
+> 最后更新：2026-05-28
+版本：v2.11
 
 ---
 
@@ -159,7 +159,9 @@ Heat/
 │   └── presentation.md         # 演示文档
 ├── experiments/
 │   ├── chemical_synthesis_A.yaml  # 化学合成实验定义
-│   └── simple_heat_test.yaml      # 简单加热测试定义
+│   ├── simple_heat_test.yaml      # 简单加热测试定义
+│   ├── cspbbr3_baseline.yaml      # CsPbBr3基线实验（metadata示例）
+│   └── pump_four_channel_demo.yaml # 蠕动泵四通道四模式演示
 ├── frontend/
 │   ├── src/
 │   │   ├── api/devices.ts        # REST API封装
@@ -195,6 +197,9 @@ Heat/
 │   │   └── pump_params.py          # 泵参数定义
 │   ├── reports/
 │   │   └── report_generator.py     # 报告生成器
+│   ├── science/
+│   │   ├── sample_id.py            # sample_id/batch_id/condition_id 生成
+│   │   └── sample_record.py        # samples.csv 写入（目录创建、header、去重、UTF-8）
 │   ├── web/
 │   │   ├── app.py                  # FastAPI应用入口
 │   │   ├── device_manager.py       # 设备管理器
@@ -209,7 +214,8 @@ Heat/
 │       └── logger.py               # 日志工具
 ├── tests/
 │   ├── test_heater.py              # 加热器测试
-│   └── test_hardware.py            # 硬件测试
+│   ├── test_hardware.py            # 硬件测试
+│   └── test_metadata.py            # metadata/sample_id/samples.csv 测试（17项）
 ├── output/                         # 实验输出（报告/图表）
 ├── run_server.py                   # Web服务器启动入口
 ├── environment.yml                 # Conda环境配置
@@ -1739,3 +1745,84 @@ heater.py / peristaltic_pump.py connect方法3层防护：
 1. **依赖文件三份必须同步**：`pyproject.toml`/`requirements.txt`/`environment.yml` 任何一份变更后必须检查另外两份，避免版本号不一致和缺失依赖
 2. **删除脚本后清理缓存**：`.pyc` 文件不会被 Git 跟踪（在 `.gitignore` 中），但残留会误导开发者以为脚本仍存在，删除 `.py` 源文件后应同步清理 `__pycache__/`
 3. **前端组件拆分阈值**：单文件超过 400 行且包含两种以上独立功能时，应考虑拆分为子组件
+
+### 6.16 2026-05-28 实验YAML metadata支持与samples.csv样品记录（v2.11）
+
+**新增模块：`src/science/`**
+
+| 文件 | 用途 |
+|------|------|
+| `sample_id.py` | `generate_sample_id()` / `generate_batch_id()` / `generate_condition_id()` |
+| `sample_record.py` | `write_sample_record()`：自动创建目录、写 header、UTF-8 编码、防重复 run_id |
+
+**metadata 从 YAML 到 samples.csv 的完整链路：**
+
+```
+YAML metadata → parser.py → web/api/experiments.py → engine.load_steps()
+    → engine.start() → exp_logger.start_run()
+        → generate_sample_id() → ExperimentRun.metadata
+    → ... 状态机执行步骤 ...
+    → exp_logger.finish_run()
+        → _save_to_file() (JSON 日志)
+        → _write_sample_record() → write_sample_record() → data/datasets/samples.csv
+```
+
+**YAML metadata 字段示例（`cspbbr3_baseline.yaml`）：**
+
+```yaml
+metadata:
+  material_system: CsPbBr3
+  batch_id: CsPbBr3_20260528_B01
+  condition_id: T140_t180_R2
+  sample_index: 3
+  operator: WH
+  recipe_version: v0.1
+```
+
+**samples.csv 格式：**
+
+| 字段 | 说明 |
+|------|------|
+| sample_id | 样品编号（`{batch_id}_S{sample_index:03d}`） |
+| batch_id | 批次编号（`{material_system}_{date}_B{number:02d}`） |
+| condition_id | 条件编号 |
+| run_id | 实验运行ID |
+| recipe_file | YAML 文件名 |
+| material_system | 材料体系 |
+| operator | 操作员 |
+| started_at / finished_at | 起止时间 |
+| status | completed / failed / stopped |
+| raw_log_path | JSON 日志路径 |
+| notes | 备注 |
+| error_flag | 失败实验为 true |
+
+**关键设计决策：**
+
+| 决策 | 原因 |
+|------|------|
+| sample_id 在 start_run 时生成，不在 finish_run | 保证样品编号在实验开始时就有，可随时引用 |
+| sample_id 生成与 CSV 写入职责分离 | `sample_id.py` 只做编号逻辑，`sample_record.py` 只做 CSV I/O |
+| 失败实验也写入 samples.csv 且 error_flag=true | 完整追踪所有实验，含失败案例 |
+| `engine.load_steps(metadata=None)` 默认 None | 向后兼容，老 YAML 无 metadata 仍正常运行 |
+| 无 metadata 时自动生成 sample_id | 老 YAML 运行后同样有样品记录 |
+
+**涉及文件：**
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/science/__init__.py` | 新增 | 包声明 |
+| `src/science/sample_id.py` | 新增 | ID 生成逻辑 |
+| `src/science/sample_record.py` | 新增 | CSV 写入逻辑（含异常处理） |
+| `src/experiment/parser.py` | 修改 | 解析 YAML metadata 字段，无则返回 `{}` |
+| `src/experiment/engine.py` | 修改 | `load_steps()` 增加 `metadata=None` 参数 |
+| `src/experiment/experiment_logger.py` | 修改 | `start_run()` 生成 sample_id；`finish_run()` 写入 samples.csv |
+| `src/web/api/experiments.py` | 修改 | 传递 metadata 到 engine |
+| `experiments/cspbbr3_baseline.yaml` | 新增 | 带 metadata 的示例 YAML |
+| `tests/test_metadata.py` | 新增 | 17 个测试覆盖所有场景 |
+
+**经验教训：**
+
+1. **职责分离优于单体模块**：将 ID 生成与 CSV 写入分离，使两个模块各司其职、独立可测
+2. **向后兼容靠默认值**：`metadata=None` 配合 `or {}` 确保老代码无需修改
+3. **防御性异常处理**：`_ensure_dir()` 的 `mkdir` 需 try/except，否则权限不足等场景会静默崩溃（已在 review 中修复）
+4. **冗余代码清理**：`merged_metadata.get("sample_index", merged_metadata.get("sample_index", 1))` 内层 get 多余，简化为 `merged_metadata.get("sample_index", 1)`（已在 review 中修复）

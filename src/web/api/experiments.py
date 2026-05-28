@@ -94,7 +94,7 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
     exp_logger.on_log(on_log_event)
 
     engine = ExperimentEngine(executor, exp_logger=exp_logger)
-    engine.load_steps(data["steps"], name=data["name"], filename=filename)
+    engine.load_steps(data["steps"], name=data["name"], filename=filename, metadata=data.get("metadata", {}))
 
     def on_progress(progress):
         try:

@@ -108,6 +108,7 @@ def parse_experiment(filepath: str) -> dict:
         "name": data.get("name", path.stem),
         "description": data.get("description", ""),
         "steps": steps,
+        "metadata": data.get("metadata") or {},
     }
 
 

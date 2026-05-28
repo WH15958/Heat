@@ -78,11 +78,12 @@ class ExperimentEngine:
     def on_complete(self, callback: Callable):
         self._on_complete = callback
 
-    def load_steps(self, steps: List[ExperimentStep], name: str = "", filename: str = ""):
+    def load_steps(self, steps: List[ExperimentStep], name: str = "", filename: str = "", metadata: dict = None):
         self._steps = [s for s in steps if s.enabled]
         self._current_step = 0
         self._experiment_name = name
         self._experiment_file = filename
+        self._metadata = metadata or {}
         logger.info(f"Loaded {len(self._steps)} steps")
 
     async def start(self):
@@ -97,6 +98,7 @@ class ExperimentEngine:
             experiment_name=self._experiment_name,
             experiment_file=self._experiment_file,
             total_steps=len(self._steps),
+            metadata=self._metadata,
         )
         self._task = asyncio.create_task(self._run())
 
