@@ -21,7 +21,7 @@
 | 蠕动泵模式完善 | ✅ 完成 | v2.8 四种模式参数完善、重复模式、单位切换、参数验证双重防护、流速精度3位小数 |
 | 规则重构与工具链 | ✅ 完成 | v2.9 规则文件精简、Skill体系建立（code-review/doc-sync）、命令触发流程 |
 | 主控制器 | ✅ 完成 | main.py 支持加热器+蠕动泵交互控制 |
-| 样品追踪 | ✅ 完成 | metadata → sample_id 唯一生成 → samples.csv，API 返回元数据 |
+| 样品追踪 | ✅ 完成 | metadata → sample_id 唯一生成 → samples.csv，API 返回元数据，全局单实验保护 |
 
 ## 核心架构
 

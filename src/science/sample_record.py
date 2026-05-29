@@ -47,7 +47,8 @@ def _existing_run_ids() -> set:
                 rid = row.get("run_id", "").strip()
                 if rid:
                     ids.add(rid)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to read existing sample ids from {SAMPLES_CSV}: {e}")
         pass
     return ids
 
@@ -89,6 +90,14 @@ def write_sample_record(
         return False
 
     sample_id = metadata.get("sample_id", "")
+    if sample_id:
+        sample_id_set = existing_sample_ids()
+        if sample_id in sample_id_set:
+            logger.warning(
+                f"sample_id={sample_id} already exists in {SAMPLES_CSV}. "
+                f"Duplicate sample_id may indicate sample_id generation issue."
+            )
+
     batch_id = metadata.get("batch_id", "")
     condition_id = metadata.get("condition_id", "")
     recipe_file = metadata.get("recipe_file", "")

@@ -134,7 +134,7 @@ class ExperimentLogger:
     def start_run(self, experiment_name: str, experiment_file: str, total_steps: int, metadata: dict = None) -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
         started_at = datetime.now().isoformat()
-        merged_metadata = metadata or {}
+        merged_metadata = dict(metadata or {})
         merged_metadata["recipe_file"] = merged_metadata.get("recipe_file", experiment_file)
         merged_metadata["started_at"] = merged_metadata.get("started_at", started_at)
 

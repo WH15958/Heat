@@ -15,6 +15,13 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 _engines: dict = {}
 
 
+def _get_active_engine():
+    for fname, engine in _engines.items():
+        if engine.state.value in ("running", "paused"):
+            return fname, engine
+    return None, None
+
+
 def _cleanup_engine(filename: str):
     if filename in _engines:
         del _engines[filename]
@@ -66,11 +73,18 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if filename in _engines and _engines[filename].state.value == "running":
-        raise HTTPException(status_code=409, detail="Experiment already running")
+    for fname in list(_engines.keys()):
+        engine = _engines[fname]
+        if engine.state.value in ("completed", "failed", "stopped"):
+            _cleanup_engine(fname)
 
-    if filename in _engines:
-        _cleanup_engine(filename)
+    active_fname, active_engine = _get_active_engine()
+    if active_engine is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot start new experiment: '{active_fname}' is still {active_engine.state.value}. "
+                   f"Please stop or wait for it to complete before starting another.",
+        )
 
     executor = StepExecutor(dm)
     exp_logger = ExperimentLogger(save_log=body.save_log)

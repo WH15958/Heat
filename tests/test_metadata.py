@@ -886,6 +886,218 @@ def test_existing_sample_ids_function():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_active_engine_blocks_new_experiment():
+    print("\n=== 测试26: 全局单实验运行保护 - running 引擎阻止新实验 ===")
+
+    from src.web.api.experiments import _get_active_engine, _engines, _cleanup_engine
+    from src.experiment.engine import ExperimentEngine, ExperimentState
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+    mock_executor = Mock()
+    engine1 = ExperimentEngine(mock_executor)
+    engine1._state = ExperimentState.RUNNING
+    _engines["exp1.yaml"] = engine1
+
+    active_fname, active_engine = _get_active_engine()
+    assert active_fname == "exp1.yaml"
+    assert active_engine is not None
+    print(f"  活动引擎: {active_fname}, state: {active_engine.state.value}")
+    print("[OK] _get_active_engine() 正确检测到 running 状态的引擎")
+
+    engine1._state = ExperimentState.IDLE
+    active_fname2, active_engine2 = _get_active_engine()
+    assert active_fname2 is None
+    print("[OK] 处于 idle 的引擎不被视为活动")
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+
+def test_paused_engine_blocks_new_experiment():
+    print("\n=== 测试27: 全局单实验运行保护 - paused 引擎也阻止新实验 ===")
+
+    from src.web.api.experiments import _get_active_engine, _engines, _cleanup_engine
+    from src.experiment.engine import ExperimentEngine, ExperimentState
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+    mock_executor = Mock()
+    engine1 = ExperimentEngine(mock_executor)
+    engine1._state = ExperimentState.PAUSED
+    _engines["exp1.yaml"] = engine1
+
+    active_fname, active_engine = _get_active_engine()
+    assert active_fname == "exp1.yaml"
+    assert active_engine.state.value == "paused"
+    print(f"  活动引擎: {active_fname}, state: {active_engine.state.value}")
+    print("[OK] _get_active_engine() 正确检测到 paused 状态的引擎")
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+
+def test_completed_failed_stopped_do_not_block():
+    print("\n=== 测试28: completed/failed/stopped 引擎不阻止新实验 ===")
+
+    from src.web.api.experiments import _get_active_engine, _engines, _cleanup_engine
+    from src.experiment.engine import ExperimentEngine, ExperimentState
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+    mock_executor = Mock()
+
+    for state in [ExperimentState.COMPLETED, ExperimentState.FAILED, ExperimentState.STOPPED]:
+        for key in list(_engines.keys()):
+            _cleanup_engine(key)
+        engine = ExperimentEngine(mock_executor)
+        engine._state = state
+        _engines[f"exp_{state.value}.yaml"] = engine
+
+        active_fname, active_engine = _get_active_engine()
+        assert active_fname is None, f"state={state.value} should not block"
+        print(f"  state={state.value}: 不阻止新实验 ✓")
+
+    print("[OK] completed/failed/stopped 的引擎不阻止新实验")
+
+    for key in list(_engines.keys()):
+        _cleanup_engine(key)
+
+
+def test_metadata_not_mutated_in_place():
+    print("\n=== 测试29: start_run 不原地修改传入的 metadata dict ===")
+
+    from src.experiment.experiment_logger import ExperimentLogger
+    import src.science.sample_record as sr_mod
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            original_metadata = {
+                "batch_id": "MUTATE_B01",
+                "sample_index": 1,
+                "material_system": "Test",
+            }
+            metadata_copy = dict(original_metadata)
+
+            exp_logger = ExperimentLogger(save_log=False)
+            exp_logger.start_run(
+                experiment_name="mutate_test",
+                experiment_file="mutate_test.yaml",
+                total_steps=1,
+                metadata=metadata_copy,
+            )
+
+            assert "sample_id" not in metadata_copy, (
+                f"传入的 metadata dict 被原地修改了: {metadata_copy}"
+            )
+            assert metadata_copy == original_metadata, (
+                f"传入的 metadata dict 内容被改变: {metadata_copy} != {original_metadata}"
+            )
+            print(f"  原始 metadata: {original_metadata}")
+            print(f"  传入后 metadata_copy: {metadata_copy}")
+            print("[OK] start_run 不原地修改传入的 metadata dict")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_sample_index_string_conversion():
+    print("\n=== 测试30: sample_index 为字符串 '3' 时生成 S003 ===")
+
+    from src.science.sample_id import generate_sample_id, _normalize_sample_index
+
+    assert _normalize_sample_index("3") == 3
+    assert _normalize_sample_index(3) == 3
+    assert _normalize_sample_index(None) == 1
+    assert _normalize_sample_index("") == 1
+    assert _normalize_sample_index("abc") == 1
+    assert _normalize_sample_index(0) == 1
+    assert _normalize_sample_index(-5) == 1
+    print(f"  _normalize_sample_index('3') = {_normalize_sample_index('3')}")
+    print(f"  _normalize_sample_index('abc') = {_normalize_sample_index('abc')}")
+    print(f"  _normalize_sample_index(None) = {_normalize_sample_index(None)}")
+    print(f"  _normalize_sample_index('') = {_normalize_sample_index('')}")
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index="3")
+    assert "S003" in sid
+    print(f"  generate_sample_id('TEST_B01', '3') = {sid}")
+    print("[OK] 字符串 sample_index 正确转换为 int")
+
+
+def test_sample_index_fallback_to_s001():
+    print("\n=== 测试31: sample_index 非法值时 fallback 到 S001 ===")
+
+    from src.science.sample_id import generate_sample_id
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index="not_a_number")
+    assert "S001" in sid
+    print(f"  generate_sample_id('TEST_B01', 'not_a_number') = {sid}")
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index=None)
+    assert "S001" in sid
+    print(f"  generate_sample_id('TEST_B01', None) = {sid}")
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index="")
+    assert "S001" in sid
+    print(f"  generate_sample_id('TEST_B01', '') = {sid}")
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index=0)
+    assert "S001" in sid
+    print(f"  generate_sample_id('TEST_B01', 0) = {sid}")
+
+    sid = generate_sample_id(batch_id="TEST_B01", sample_index=-1)
+    assert "S001" in sid
+    print(f"  generate_sample_id('TEST_B01', -1) = {sid}")
+
+    print("[OK] 非法 sample_index 正确 fallback 到 S001")
+
+
+def test_existing_sample_ids_logs_warning_on_error():
+    print("\n=== 测试32: samples.csv 读取异常时记录 warning ===")
+
+    import logging
+    from io import StringIO
+
+    from src.science.sample_record import existing_sample_ids as sr_existing_sample_ids
+    import src.science.sample_record as sr_mod
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        original_csv = sr_mod.SAMPLES_CSV
+        damaged_csv = tmp_dir / "damaged_samples.csv"
+        with open(damaged_csv, "w", encoding="utf-8") as f:
+            f.write("sample_id,batch_id\n")
+            f.write("OK_S001,B01\n")
+            f.write("garbage_line_without_comma\n")
+        sr_mod.SAMPLES_CSV = damaged_csv
+
+        log_stream = StringIO()
+        handler = logging.StreamHandler(log_stream)
+        handler.setLevel(logging.WARNING)
+        sr_logger = logging.getLogger("src.science.sample_record")
+        sr_logger.addHandler(handler)
+
+        try:
+            existing = sr_existing_sample_ids()
+            log_output = log_stream.getvalue()
+            assert "OK_S001" in existing
+            print(f"  existing sample_ids: {existing}")
+            print(f"  warning logged: {bool(log_output)}")
+            print("[OK] 即使有损坏行也不抛异常，数据仍可读取")
+        finally:
+            sr_logger.removeHandler(handler)
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def test_finish_run_does_not_crash_on_csv_write_failure():
     print("\n=== 测试25: samples.csv 写入失败不影响实验结束流程 ===")
 
@@ -950,6 +1162,13 @@ def run_all():
         test_start_experiment_returns_sample_id,
         test_existing_sample_ids_function,
         test_finish_run_does_not_crash_on_csv_write_failure,
+        test_active_engine_blocks_new_experiment,
+        test_paused_engine_blocks_new_experiment,
+        test_completed_failed_stopped_do_not_block,
+        test_metadata_not_mutated_in_place,
+        test_sample_index_string_conversion,
+        test_sample_index_fallback_to_s001,
+        test_existing_sample_ids_logs_warning_on_error,
     ]
 
     passed = 0

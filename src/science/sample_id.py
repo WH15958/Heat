@@ -6,9 +6,19 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_sample_index(sample_index) -> int:
+    try:
+        sample_index = int(sample_index) if sample_index not in (None, "") else 1
+    except (ValueError, TypeError):
+        sample_index = 1
+    if sample_index < 1:
+        sample_index = 1
+    return sample_index
+
+
 def generate_sample_id(
     batch_id: str,
-    sample_index: int,
+    sample_index,
     *,
     date_format: str = "%Y%m%d",
 ) -> str:
@@ -16,8 +26,7 @@ def generate_sample_id(
         today = datetime.now().strftime(date_format)
         batch_id = f"UNKNOWN_{today}_B01"
 
-    if sample_index < 1:
-        sample_index = 1
+    sample_index = _normalize_sample_index(sample_index)
 
     return f"{batch_id}_S{sample_index:03d}"
 
@@ -37,9 +46,7 @@ def generate_unique_sample_id(metadata: dict) -> str:
             f"auto-incrementing to find unique sample_id"
         )
         batch_id = metadata.get("batch_id", "")
-        sample_index = metadata.get("sample_index", 1)
-        if sample_index < 1:
-            sample_index = 1
+        sample_index = _normalize_sample_index(metadata.get("sample_index", 1))
         base_batch = batch_id if batch_id else ""
         existing = existing_sample_ids()
         while True:
@@ -49,9 +56,7 @@ def generate_unique_sample_id(metadata: dict) -> str:
                 return candidate
 
     batch_id = metadata.get("batch_id", "")
-    sample_index = metadata.get("sample_index", 1)
-    if sample_index < 1:
-        sample_index = 1
+    sample_index = _normalize_sample_index(metadata.get("sample_index", 1))
 
     existing = existing_sample_ids()
     candidate = generate_sample_id(batch_id=batch_id, sample_index=sample_index)

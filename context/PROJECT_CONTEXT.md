@@ -3,7 +3,7 @@
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
 > 最后更新：2026-05-28
-版本：v2.12
+版本：v2.13
 
 ---
 
@@ -1881,3 +1881,59 @@ metadata:
 2. **显式 sample_id 重复时不应报错，应自动处理并警告**：避免中断实验流程
 3. **API 返回 sample_id 和 metadata**：让前端和操作者可以在启动前/后看到样品信息
 4. **save_log 与 raw_log_path 必须一致**：避免写入不存在的日志路径
+
+### 6.18 2026-05-29 全局单实验保护、metadata边界修复、类型规范化（v2.13）
+
+**问题修复：**
+
+| 问题 | 修复方案 |
+|------|---------|
+| 只阻止同一 filename 重复启动，不同 filename 可并行运行（争用硬件） | 新增 `_get_active_engine()`，任何 running/paused 引擎都阻止新实验 → HTTP 409 |
+| 旧引擎 completed/failed/stopped 后不清理，累积占用内存 | 启动新实验前自动清理已结束的引擎 |
+| `start_run()` 中 `metadata or {}` 可能原地修改 parser 返回的原始 dict | 改为 `dict(metadata or {})` 浅拷贝 |
+| `sample_index` 来自 YAML 或前端时可能是字符串，导致格式化失败 | 新增 `_normalize_sample_index()`，统一 int 转换 + fallback 到 1 |
+| `existing_sample_ids()` / `_existing_run_ids()` 读取异常时静默 pass | 改为 `logger.warning()` 记录异常信息 |
+| `write_sample_record()` 写入重复 sample_id 时无提示 | 新增 `existing_sample_ids()` 检查，重复时记录 warning |
+
+**新增函数：**
+
+| 函数 | 位置 | 说明 |
+|------|------|------|
+| `_get_active_engine()` | `src/web/api/experiments.py` | 遍历 `_engines` 查找 running/paused 状态的引擎，返回 `(filename, engine)` |
+| `_normalize_sample_index(sample_index) -> int` | `src/science/sample_id.py` | 将 sample_index 统一转为 int；None/""/非数字/≤0 → 1 |
+
+**全局单实验保护逻辑：**
+
+```
+启动新实验
+  ├── 清理 completed/failed/stopped 的旧引擎
+  ├── _get_active_engine() 检查是否有 running/paused 引擎
+  │   ├── 有 → HTTP 409，返回活动引擎 filename + state
+  │   └── 无 → 继续
+  └── 创建新引擎并启动
+```
+
+**API 行为变更：**
+
+| 场景 | 旧行为 | 新行为 |
+|------|--------|--------|
+| 实验A running，启动实验B | 允许并行运行 | HTTP 409: `'expA.yaml' is still running` |
+| 实验A paused，启动实验B | 允许并行运行 | HTTP 409: `'expA.yaml' is still paused` |
+| 实验A completed，启动实验B | 旧引擎残留 | 自动清理旧引擎，允许启动 |
+
+**涉及文件：**
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/web/api/experiments.py` | 修改 | 新增 `_get_active_engine()`；启动前清理旧引擎 + 全局活动检查 |
+| `src/experiment/experiment_logger.py` | 修改 | `metadata or {}` → `dict(metadata or {})` |
+| `src/science/sample_id.py` | 修改 | 新增 `_normalize_sample_index()`；`generate_sample_id` / `generate_unique_sample_id` 使用 |
+| `src/science/sample_record.py` | 修改 | 异常时记录 warning；`write_sample_record()` 重复 sample_id 警告 |
+| `tests/test_metadata.py` | 修改 | 32 个测试（+7 个新测试，覆盖引擎保护、metadata 不修改、类型规范化等） |
+
+**经验教训：**
+
+1. **单套硬件必须全局单实验保护**：不同 YAML 文件可能争用同一套泵、温控器、串口，必须阻止并行运行
+2. **metadata 必须防御性拷贝**：`dict(metadata or {})` 避免修改 parser 返回的共享对象
+3. **YAML/前端传来的数值类型不可信**：必须做类型规范化，sample_index 可能是 str/int/None
+4. **静默吞异常是隐患**：数据读取异常必须记录日志，否则可能误判"无已有数据"导致重复编号
