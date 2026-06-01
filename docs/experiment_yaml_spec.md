@@ -1,0 +1,440 @@
+# Heat 实验 YAML 规范
+
+适用人群：需要编写、审核或扩展实验 YAML 的使用者与开发者。
+
+---
+
+## 你现在应该看什么
+
+- 只想会写一个简单实验：看“最小示例”
+- 想知道所有字段：看“顶层字段”和“steps 结构”
+- 想知道所有动作和等待类型：看“动作表”和“等待表”
+- 想排查 YAML 为什么跑不起来：看“常见错误”
+
+---
+
+## 1. 文件级规则
+
+### 1.1 文件位置与后缀
+
+- 实验文件放在 `experiments/`
+- 只接受 `.yaml` 或 `.yml`
+- 文件名必须是普通文件名，不能包含路径穿越
+
+不允许：
+
+- `../test.yaml`
+- `subdir/test.yaml`
+- 非 YAML 后缀
+
+### 1.2 顶层字段
+
+| 字段 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| `name` | 否 | string | 实验名；缺省时使用文件名 |
+| `description` | 否 | string | 实验描述 |
+| `metadata` | 否 | object | 样品与实验元数据 |
+| `steps` | 是 | list | 实验步骤列表 |
+
+---
+
+## 2. metadata 推荐字段
+
+`metadata` 当前不是强制字段，但推荐使用以下键：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `material_system` | string | 材料体系 |
+| `batch_id` | string | 批次编号 |
+| `condition_id` | string | 条件编号 |
+| `sample_index` | int 或可转为 int 的值 | 样品序号 |
+| `operator` | string | 操作员 |
+| `recipe_version` | string | 配方版本 |
+
+补充说明：
+
+- `sample_index` 允许来自 YAML 的字符串值，但建议直接写整数
+- `sample_id` 可由系统自动生成，不必手工提供
+- `recipe_file`、`started_at`、`finished_at` 等运行态字段由系统补充
+
+---
+
+## 3. steps 结构
+
+每个步骤的标准结构：
+
+```yaml
+- id: unique_step_id
+  type: heater.set_temperature
+  params:
+    device_id: heater1
+    temperature: 80.0
+  wait:
+    type: temperature_reached
+    device_id: heater1
+    tolerance: 1.0
+    timeout: 600
+  enabled: true
+  on_error: stop
+```
+
+### 3.1 步骤字段
+
+| 字段 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| `id` | 是 | string | 步骤唯一标识 |
+| `type` | 是 | string | 动作类型 |
+| `params` | 否 | object | 动作参数，默认空对象 |
+| `wait` | 否 | object | 等待条件，默认 `none` |
+| `enabled` | 否 | bool | 是否启用，默认 `true` |
+| `on_error` | 否 | string | 错误策略，默认 `stop` |
+
+### 3.2 `enabled` 语义
+
+- `true`：步骤会被执行
+- `false`：步骤会被加载时跳过，不进入实际执行列表
+
+### 3.3 `on_error` 语义
+
+当前推荐使用：
+
+- `stop`：步骤失败后终止实验
+- `skip`：步骤失败后跳过该步骤并继续
+
+说明：
+
+- 当前代码默认值是 `stop`
+- 非标准值不应依赖，文档与 YAML 建议仅使用 `stop` 和 `skip`
+
+---
+
+## 4. 动作类型
+
+### 4.1 `heater.set_temperature`
+
+用途：设置加热器目标温度。
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 加热器 ID |
+| `temperature` | 是 | 目标温度 |
+
+示例：
+
+```yaml
+- id: set_temp
+  type: heater.set_temperature
+  params:
+    device_id: heater1
+    temperature: 80.0
+```
+
+### 4.2 `heater.start`
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 加热器 ID |
+
+### 4.3 `heater.stop`
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 加热器 ID |
+
+### 4.4 `pump.start`
+
+用途：启动指定泵通道。
+
+基础参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 泵 ID |
+| `channel` | 是 | 通道号，通常为 1-4 |
+| `flow_rate` | 否 | 流速 |
+| `direction` | 否 | `CW` 或 `CCW`，默认 `CW` |
+| `mode` | 否 | 运行模式，默认 `FLOW_MODE` |
+| `tube_model` | 否 | 软管型号 |
+| `flow_unit` | 否 | 流速单位，常用 `1`(mL/min) |
+
+按模式扩展参数：
+
+| 模式 | 额外参数 |
+|------|----------|
+| `FLOW_MODE` | 无 |
+| `TIME_QUANTITY` | `run_time` `time_unit` `dispense_volume` `volume_unit` |
+| `TIME_SPEED` | `run_time` `time_unit` |
+| `QUANTITY_SPEED` | `dispense_volume` `volume_unit` |
+
+重复模式参数：
+
+| 参数 | 说明 |
+|------|------|
+| `repeat_count` | 0 表示无限重复，1 表示单次 |
+| `interval_time` | 重复间隔 |
+| `interval_time_unit` | 间隔单位 |
+
+规则：
+
+- `repeat_count != 1` 时，`interval_time` 必须大于 0
+- 缺失单位时系统会补默认值，但建议显式写出
+
+### 4.5 `pump.stop`
+
+用途：停止整个泵设备。
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 泵 ID |
+
+### 4.6 `pump.stop_channel`
+
+用途：停止指定通道。
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 泵 ID |
+| `channel` | 是 | 通道号 |
+
+### 4.7 `wait`
+
+用途：不执行设备动作，仅依赖 `wait` 字段实现等待。
+
+通常写法：
+
+```yaml
+- id: hold
+  type: wait
+  params: {}
+  wait:
+    type: duration
+    seconds: 60
+```
+
+### 4.8 `emergency_stop`
+
+用途：执行全局紧急停止。
+
+参数：无强制参数。
+
+### 4.9 `log`
+
+用途：在实验日志中写入一条消息。
+
+参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `message` | 否 | 日志文本 |
+
+---
+
+## 5. 等待类型
+
+### 5.1 `none`
+
+默认值，不等待。
+
+### 5.2 `duration`
+
+按秒等待。
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `seconds` | 是 | 等待秒数 |
+
+说明：
+
+- 当前系统 stop 会中断该等待，不必等完整时长
+
+### 5.3 `temperature_reached`
+
+等待加热器达到目标条件。
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 加热器 ID |
+| `tolerance` | 否 | 容差，默认 `1.0` |
+| `timeout` | 否 | 超时秒数，默认 `3600` |
+
+说明：
+
+- 判断逻辑基于当前温度和设定温度差值
+- 超时会导致该步骤失败，不会静默继续
+
+### 5.4 `pump_complete`
+
+等待指定泵通道运行结束。
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 泵 ID |
+| `channel` | 是 | 通道号 |
+| `timeout` | 否 | 超时秒数，默认 `3600` |
+
+说明：
+
+- 超时会导致步骤失败
+- stop 会中断该等待
+
+---
+
+## 6. 最小示例
+
+```yaml
+name: simple_heat_test
+description: 简单加热测试
+steps:
+  - id: set_temp
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 50.0
+```
+
+---
+
+## 7. 带 metadata 的完整示例
+
+```yaml
+name: cspbbr3_baseline
+description: metadata demo
+metadata:
+  material_system: CsPbBr3
+  batch_id: CsPbBr3_20260528_B01
+  condition_id: T140_t180_R2
+  sample_index: 3
+  operator: WH
+  recipe_version: v0.1
+steps:
+  - id: heat_up
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 140.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 1.0
+      timeout: 600
+```
+
+---
+
+## 8. 泵模式示例
+
+### 8.1 流量模式
+
+```yaml
+- id: ch1_flow
+  type: pump.start
+  params:
+    device_id: pump1
+    channel: 1
+    flow_rate: 5.0
+    mode: FLOW_MODE
+    tube_model: 13
+    flow_unit: 1
+```
+
+### 8.2 定时定量模式
+
+```yaml
+- id: ch2_time_quantity
+  type: pump.start
+  params:
+    device_id: pump1
+    channel: 2
+    flow_rate: 10.0
+    mode: TIME_QUANTITY
+    run_time: 1
+    time_unit: 1
+    dispense_volume: 10.0
+    volume_unit: 1
+    repeat_count: 3
+    interval_time: 2.0
+    interval_time_unit: 0
+```
+
+---
+
+## 9. 常见错误
+
+### 9.1 文件名错误
+
+错误：
+
+```yaml
+../bad.yaml
+```
+
+原因：
+
+- 当前系统会拒绝路径穿越形式的文件名
+
+### 9.2 动作名错误
+
+错误：
+
+```yaml
+type: set_temperature
+```
+
+正确：
+
+```yaml
+type: heater.set_temperature
+```
+
+### 9.3 缺少 `steps`
+
+错误：
+
+```yaml
+name: bad
+description: no steps
+```
+
+原因：
+
+- `steps` 是必填顶层字段
+
+### 9.4 重复模式缺少间隔
+
+错误：
+
+```yaml
+repeat_count: 3
+interval_time: 0
+```
+
+原因：
+
+- `repeat_count != 1` 时必须有大于 0 的 `interval_time`
+
+### 9.5 单位省略太多
+
+虽然系统会为部分单位补默认值，但建议显式写出：
+
+- `time_unit`
+- `volume_unit`
+- `interval_time_unit`
+- `flow_unit`
+
+这样更容易调试和复现实验。

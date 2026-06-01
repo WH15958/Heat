@@ -1,827 +1,296 @@
-# Heat 开发者维护教程
+# Heat 开发者指南
 
-面向项目开发者与AI辅助开发，介绍项目架构、开发规范、调试方法与维护流程。
-
----
-
-## 目录
-
-1. [项目架构总览](#1-项目架构总览)
-2. [核心设计约束](#2-核心设计约束)
-3. [开发环境搭建](#3-开发环境搭建)
-4. [代码结构详解](#4-代码结构详解)
-5. [添加新设备驱动](#5-添加新设备驱动)
-6. [Web层开发](#6-web层开发)
-7. [实验引擎扩展](#7-实验引擎扩展)
-8. [线程安全规范](#8-线程安全规范)
-9. [Git分支管理](#9-git分支管理)
-10. [AI辅助开发指南](#10-ai辅助开发指南)
-11. [调试与排错](#11-调试与排错)
-12. [代码审查清单](#12-代码审查清单)
+面向人类开发者与维护者。  
+如果你是 AI / 自动化协作者，请先读 [../context/PROJECT_CONTEXT.md](../context/PROJECT_CONTEXT.md)。
 
 ---
 
-## 1. 项目架构总览
+## 你现在应该看什么
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                 frontend/ (Web前端 - Vue 3)                   │
-│   Dashboard.vue, ControlPanel.vue, ExperimentPage.vue       │
-└─────────────────────────────────────────────────────────────┘
-                              │ WebSocket + REST API
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  web/ (Web服务层 - FastAPI)                    │
-│   app.py, device_manager.py, api/devices.py, api/ws.py      │
-│   关键：run_in_executor 桥接同步设备与异步框架                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│               experiment/ (实验自动化引擎)                      │
-│   parser.py → engine.py → executor.py → actions.py          │
-│   关键：YAML解析 → 状态机调度 → 步骤执行                       │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    devices/ (设备驱动层)                      │
-│   base_device.py, heater.py, peristaltic_pump.py            │
-│   关键：纯同步、无线程，RLock保护串口访问                       │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    protocols/ (协议层)                        │
-│   aibus.py, modbus_rtu.py, pump_params.py                   │
-│   关键：协议编解码，不持有状态                                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    utils/ (工具层)                            │
-│   serial_manager.py, config.py, csv_logger.py               │
-│   关键：串口单例管理，配置过滤，数据大小限制                     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 数据流
-
-```
-用户操作 → FastAPI → run_in_executor → 设备方法（同步）→ 协议层 → 串口
-                                                              ↓
-WebSocket推送 ← FastAPI ← 设备read_data ← 协议层 ← 串口响应
-```
+- 想理解系统结构：看“架构总览”
+- 想扩展实验能力：看“新增实验动作 / 等待条件标准流程”
+- 想接入新设备：看“新增设备驱动标准流程”
+- 想确认 merge 前要做什么：看 [testing_and_merge_flow.md](testing_and_merge_flow.md)
+- 想排查线上/联调问题：看 [troubleshooting.md](troubleshooting.md)
 
 ---
 
-## 2. 核心设计约束
+## 1. 架构总览
 
-### 约束1：设备驱动必须是纯同步、无线程
+当前主路径是 Web 架构：
 
-**原因**：串口通信天然是请求-响应模式，多线程并发访问串口会导致数据混乱。
+```text
+Vue 前端
+  -> FastAPI Web 层
+  -> Experiment 引擎
+  -> Devices 同步驱动
+  -> Protocols
+  -> 串口资源管理
+```
 
-**规则**：
-- 设备驱动（`devices/`）内部**禁止**创建线程
-- 所有设备方法都是同步阻塞调用
-- 使用 `threading.RLock` 保护串口访问，防止Web层并发调用
-- 锁范围最小化：仅保护协议通信，计算逻辑在锁外
+主线模块：
 
-### 约束2：协议层不持有状态
+- `src/web/`：REST API、WebSocket、应用生命周期
+- `src/experiment/`：YAML 解析、状态机、步骤执行、实验日志
+- `src/devices/`：加热器和泵的同步设备驱动
+- `src/protocols/`：AIBUS、MODBUS RTU、参数定义
+- `src/utils/`：配置、日志、串口资源管理
+- `src/science/`：`sample_id` 和 `samples.csv` 记录链路
 
-**原因**：协议对象可能被多个设备共享（同一串口）。
+前端主要页面：
 
-**规则**：
-- 协议类（`protocols/`）只负责编解码
-- 不缓存数据，不维护设备状态
-- 每次调用都是独立的请求-响应
-
-### 约束3：Web层通过 run_in_executor 桥接
-
-**原因**：FastAPI是异步框架，设备方法是同步阻塞的。
-
-**规则**：
-- 所有设备操作必须通过 `run_in_executor` 调用
-- 禁止在 async 函数中直接调用设备方法
-- WebSocket推送在独立的定时任务中执行
-
-### 约束4：锁范围最小化
-
-**原因**：锁范围过大会导致死锁和不必要的阻塞。
-
-**规则**：
-- 锁仅保护共享资源（串口协议调用、状态变量）
-- I/O操作（协议通信）在锁内执行（串口必须互斥）
-- 纯计算逻辑（数据解析、对象构造）在锁外执行
-- connect方法：锁仅保护状态检查和设置，协议通信在锁外
+- `/`
+- `/control`
+- `/experiment`
+- `/history`
 
 ---
 
-## 3. 开发环境搭建
+## 2. 核心开发约束
 
-### Python后端
+### 2.1 设备驱动必须保持同步
 
-```bash
-git clone https://gitee.com/wh158958/heat.git
-cd heat
-conda env create -f environment.yml
-conda activate heat
-```
+不要在 `src/devices/` 内做这些事情：
 
-### Vue前端
+- 后台线程轮询
+- 内部异步任务调度
+- 命令队列线程
+- 页面生命周期联动控制
 
-```bash
-cd frontend
-npm install
-npm run dev      # 开发模式（热重载，端口5173）
-npm run build    # 生产构建 → src/web/static/
-```
+原因：
 
-> **注意**：`vite.config.ts` 已配置 `build.outDir` 指向 `src/web/static/`，构建产物直接输出到后端静态文件目录。构建后重启Web服务器，浏览器按 `Ctrl+Shift+R` 强制刷新。
+- 串口是半双工，请求-响应强依赖顺序
+- 驱动层并发会破坏稳定性
 
-### 验证环境
+### 2.2 Web 层必须用桥接思维
 
-```bash
-python -m py_compile src/devices/heater.py   # 编译检查
-python -m py_compile src/web/app.py          # Web层检查
-python scripts/test_connections.py           # 硬件连接测试
-```
+FastAPI 是异步的，但设备是同步的。  
+开发原则：
 
----
+- 设备调用通过 `run_in_executor`
+- 不在 Web 层伪造成功状态
+- 不让 WebSocket 断开影响设备运行
 
-## 4. 代码结构详解
+### 2.3 语义一致性优先
 
-### 设备驱动层 (`src/devices/`)
+以下三者必须一致：
 
-| 文件 | 职责 |
-|------|------|
-| `base_device.py` | 基类：状态管理、回调、重试机制 |
-| `heater.py` | 加热器：AI-BUS协议，温度控制 |
-| `peristaltic_pump.py` | 蠕动泵：MODBUS-RTU协议，多通道控制 |
+- 引擎状态
+- 日志状态
+- 真实设备副作用
 
-**BaseDevice 关键机制**：
+尤其注意：
 
-```python
-class BaseDevice:
-    _lock: RLock              # 保护串口访问（可重入）
-    _callback_lock: Lock      # 保护回调列表（在_callbacks之前初始化）
-    _status: DeviceStatus     # 设备状态（通过property setter触发回调）
-    
-    def execute_with_retry()  # 重试机制（retry_count >= 1）
-    def _notify_status_change()  # 状态变更通知（锁内复制回调列表，锁外执行）
-```
-
-**Heater 关键机制**：
-
-```python
-class AIHeaterDevice(BaseDevice):
-    connect()    # 锁仅保护状态，协议通信在锁外
-    read_data()  # 锁仅保护协议调用，数据解析在锁外
-    _safe_run_status()  # 枚举越界保护
-    wait_for_temperature()  # 连接检查 + 轮询
-```
-
-**Pump 关键机制**：
-
-```python
-class LabSmartPumpDevice(BaseDevice):
-    _write_float_with_unit()  # 先写单位(0x06)，再写浮点数(0x10)
-    _safe_enum()              # 枚举越界保护
-    channel_data              # 返回deepcopy，防止外部修改
-    _force_disconnect()       # 非阻塞锁获取（atexit安全）
-    set_tube_model()          # 验证范围0-13，防止无效型号损坏寄存器
-```
-
-**Pump 运行模式参数规则（重要）**：
-
-| 参数 | 可设置的模式 | 不可设置的模式 |
-|------|-------------|---------------|
-| 流速(n110) | 仅流量模式(0) | 定时定量/定时定速/定量定速 ❌ |
-| 运行时间(n107) | 定时定量(1)/定时定速(2) | 流量模式 ❌ |
-| 分装液量(n104) | 定时定量(1)/定量定速(3) | 流量模式 ❌ |
-
-非流量模式启动流程：先切流量模式设流速 → 再切目标模式设其他参数 → 启动。
-
-流速单位(n112)仅接受 1(mL/min) 和 3(RPM)，0 和 2 返回 ILLEGAL_DATA_VALUE。
-
-### 协议层 (`src/protocols/`)
-
-| 文件 | 职责 |
-|------|------|
-| `aibus.py` | AI-BUS协议：读写参数、CRC校验 |
-| `modbus_rtu.py` | MODBUS-RTU：功能码03/06/16、CRC-16 |
-| `parameters.py` | 加热器参数码定义 |
-| `pump_params.py` | 泵寄存器地址映射 |
-
-**协议层关键点**：
-- `_receive_frame()` 不完整帧返回 `None`（不返回部分数据）
-- `_send_and_receive()` 写入后调用 `flush()` 确保数据发出
-- `close()` 异常时返回 `False`
-
-### Web层 (`src/web/`)
-
-| 文件 | 职责 |
-|------|------|
-| `app.py` | FastAPI入口、SPA路由、静态文件 |
-| `device_manager.py` | 设备实例管理、桥接Web与设备 |
-| `api/devices.py` | REST API：连接/控制/数据 |
-| `api/ws.py` | WebSocket：1Hz实时数据推送；断开时仅清理连接，不停止设备 |
-| `api/experiments.py` | 实验管理API（含全局单实验保护、路径遍历防护、日志保存开关、历史记录删除）；stop 统一由 `on_complete` 回调清理引擎 |
-
-**DeviceManager 参数验证规则：**
-
-`start_pump_channel` 方法包含完整的参数校验链：
-
-| 验证项 | 规则 | 错误处理 |
-|--------|------|----------|
-| repeat_count类型 | 必须为int/float | 非数值类型返回False |
-| repeat_count范围 | [0, 9999]，float需为整数值 | 超范围返回False |
-| 重复模式间隔 | repeat_count!=1时interval_time>0 | 不满足返回False |
-| 单位默认值 | time_unit=None→0, volume_unit=None→1, interval_time_unit=None→0 | 记录warning后设默认值 |
-
-> **注意**：`repeat_count != 1` 而非 `> 1`，因为 repeat_count=0（无限重复）同样需要间隔时间。
-
-**executor.py 前置校验：**
-
-实验执行器在调用 `start_pump_channel` 前进行前置校验，提供更清晰的步骤级错误日志：
-
-```python
-if repeat_count is not None and repeat_count != 1 and (not interval_time or interval_time <= 0):
-    logger.error(f"Step {step.id}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
-    return False
-```
-
-单位参数缺失时自动设置默认值：
-
-```python
-if run_time is not None and time_unit is None:
-    logger.warning(f"Step {step.id}: ... defaulting to SECOND")
-    time_unit = 0
-```
-
-**Web层关键点**：
-- SPA路由：所有非 `/api/` 路径返回 `index.html`
-- `run_in_executor`：所有设备操作通过线程池执行
-- 路径遍历防护：`_validate_filename()` 校验文件名
-- 实验启动：`StartExperimentRequest` 包含 `save_log` 字段控制日志保存
-- 历史记录：支持 DELETE 单条/全部删除
-
-### 实验引擎 (`src/experiment/`)
-
-| 文件 | 职责 |
-|------|------|
-| `parser.py` | YAML解析 + 文件名校验 + metadata 字段提取 |
-| `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED；`load_steps()` 支持 metadata 参数；`__init__` 注入 `set_stop_checker` 回调到 executor |
-| `executor.py` | 步骤执行器：调用DeviceManager；`_should_stop` 回调支持等待中断；所有设备命令检查返回值 |
-| `actions.py` | 9种动作 + 4种等待条件定义 |
-| `experiment_logger.py` | 实验运行日志；`start_run()` 调用 `generate_unique_sample_id()` 确保唯一，metadata 防御性拷贝；`finish_run()` 写入 samples.csv（try/except 防护） |
-
-### 科学数据层 (`src/science/`)
-
-| 文件 | 职责 |
-|------|------|
-| `sample_id.py` | `generate_sample_id()` / `generate_batch_id()` / `generate_condition_id()` / `generate_unique_sample_id()` / `_normalize_sample_index()` |
-| `sample_record.py` | `write_sample_record()` / `existing_sample_ids()`：写入/读取 `data/datasets/samples.csv`，自动建目录、写 header、UTF-8、防重复 |
+- 设备方法返回 `False` 不能被忽略
+- wait 超时不能静默继续
+- stop 要尽快生效，但状态必须落到正确终态
 
 ---
 
-## 5. 添加新设备驱动
+## 3. 代码结构与职责
 
-### 步骤1：创建配置类
+### 3.1 Web 层
 
-```python
-# src/devices/new_device.py
-from dataclasses import dataclass, field
-from devices.base_device import DeviceConfig
+- `src/web/app.py`：创建 FastAPI 应用、加载配置、挂载静态资源、启动推送循环
+- `src/web/api/devices.py`：设备连接、控制、状态接口
+- `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史
+- `src/web/api/ws.py`：WebSocket 推送与连接管理
 
-@dataclass
-class NewDeviceConfig(DeviceConfig):
-    custom_param: str = "default"
-    channels: list = field(default_factory=list)
-```
+### 3.2 实验引擎
 
-### 步骤2：实现设备类
+- `src/experiment/parser.py`：解析 YAML、校验实验文件名
+- `src/experiment/actions.py`：动作和等待类型定义
+- `src/experiment/executor.py`：逐步执行动作，处理等待、失败和返回值
+- `src/experiment/engine.py`：状态机与 run 生命周期
+- `src/experiment/experiment_logger.py`：run / step 日志与持久化
 
-```python
-from devices.base_device import BaseDevice, DeviceStatus
-from protocols.your_protocol import YourProtocol
+### 3.3 设备与协议
 
-class NewDevice(BaseDevice):
-    def __init__(self, config: NewDeviceConfig):
-        super().__init__(config)
-        self._config = config
-        self._protocol = None
-    
-    def connect(self) -> bool:
-        with self._lock:
-            if self.is_connected():
-                return True
-            self.status = DeviceStatus.CONNECTING
-        
-        try:
-            protocol = YourProtocol(...)
-            protocol.connect()
-            
-            with self._lock:
-                self._protocol = protocol
-                self.status = DeviceStatus.CONNECTED
-            return True
-        except Exception as e:
-            with self._lock:
-                self.status = DeviceStatus.ERROR
-            self._logger.error(f"Connect failed: {e}")
-            return False
-    
-    def disconnect(self) -> bool:
-        with self._lock:
-            if self._protocol is not None:
-                self._protocol.disconnect()
-                self._protocol = None
-            self.status = DeviceStatus.DISCONNECTED
-        return True
-    
-    def emergency_stop(self):
-        with self._lock:
-            if self._protocol is not None:
-                self._protocol.emergency_stop()
-    
-    def read_data(self):
-        def _read():
-            with self._lock:
-                return self._protocol.read_all()
-        
-        data = self.execute_with_retry(
-            _read,
-            operation_name="read_data"
-        )
-        return self._parse_data(data)
-```
+- `src/devices/heater.py`：加热器同步控制
+- `src/devices/peristaltic_pump.py`：多通道泵同步控制
+- `src/protocols/aibus.py`：加热器协议实现
+- `src/protocols/modbus_rtu.py`：泵协议实现
 
-### 步骤3：注册到DeviceManager
+### 3.4 样品与记录
 
-```python
-# src/web/device_manager.py
-from devices.new_device import NewDevice, NewDeviceConfig
-
-class DeviceManager:
-    def add_new_device(self, device_id, port, **kwargs):
-        config = NewDeviceConfig(
-            device_id=device_id,
-            connection_params={"port": port, ...},
-            **kwargs
-        )
-        device = NewDevice(config)
-        self._new_devices[device_id] = device
-        return device
-```
-
-### 步骤4：添加Web API
-
-```python
-# src/web/api/devices.py - 添加新的路由
-@router.post("/devices/{device_id}/custom-action")
-async def custom_action(device_id: str, ...):
-    device = manager.get_device(device_id)
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, device.custom_action, ...
-    )
-    return {"success": result}
-```
-
-### 步骤5：添加实验动作
-
-```python
-# src/experiment/actions.py - 添加新动作类型
-class ActionType(str, Enum):
-    ...
-    CUSTOM_ACTION = "custom_action"
-
-# src/experiment/executor.py - 添加执行逻辑
-async def _execute_custom_action(self, params):
-    device = self._device_manager.get_device(params["device_id"])
-    return await asyncio.get_event_loop().run_in_executor(
-        None, device.custom_action, params["param"]
-    )
-```
+- `src/science/sample_id.py`：`sample_id`、`batch_id`、`condition_id`
+- `src/science/sample_record.py`：`samples.csv` 写入与去重
 
 ---
 
-## 6. Web层开发
+## 4. 新增设备驱动标准流程
 
-### 前端开发流程
+### 4.1 目标
 
-1. 启动前端开发服务器：`cd frontend && npm run dev`
-2. 修改Vue组件（热重载自动刷新）
-3. 构建生产版本：`npm run build`
-4. 产物自动输出到 `src/web/static/`
+把“新设备”纳入现有体系，而不是单独起一套旁路实现。
 
-### 添加新页面
+### 4.2 标准步骤
 
-1. 在 `frontend/src/views/` 创建 `.vue` 文件
-2. 在 `frontend/src/router/index.ts` 添加路由
-3. 在 `App.vue` 导航栏添加链接
-4. 构建部署
+1. 明确协议层边界
+   - 协议编解码写在 `src/protocols/`
+   - 协议层不要承载设备状态
+2. 在 `src/devices/` 实现同步驱动
+   - 保持同步阻塞
+   - 使用现有锁与资源管理模式
+3. 在配置层接入
+   - 补 `config/system_config.yaml` 对应结构
+   - 补 `utils/config.py` 的解析逻辑（若需要）
+4. 在 `DeviceManager` 中注册并暴露控制入口
+5. 如需 Web 控制，再补 `api/devices.py`
+6. 如需实验引擎接入，再扩动作和执行器
+7. 补软件测试与最小联调说明
+8. 同步文档
 
-### WebSocket数据格式
+### 4.3 禁止事项
 
-服务端每秒推送：
-
-```json
-{
-    "type": "device_data",
-    "timestamp": "2026-04-24T10:30:00",
-    "heaters": {
-        "heater1": {"pv": 85.3, "sv": 100.0, "mv": 65, "status": "connected"}
-    },
-    "pumps": {
-        "pump1": {
-            "channels": {
-                "1": {"flow_rate": 5.0, "running": true, "dispensed_volume": 12.5}
-            }
-        }
-    }
-}
-```
-
-### 添加新API端点
-
-```python
-# src/web/api/devices.py
-@router.get("/devices/{device_id}/custom")
-async def get_custom_data(device_id: str):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None, manager.get_custom_data, device_id
-    )
-    return result
-```
-
-**注意**：所有设备操作必须通过 `run_in_executor`，禁止直接调用。
+- 直接在 Web 层拼协议帧
+- 为新设备绕过 `DeviceManager`
+- 在驱动内偷偷起线程
 
 ---
 
-## 7. 实验引擎扩展
+## 5. 新增实验动作 / 等待条件标准流程
 
-### 添加新动作类型
+### 5.1 新增动作
 
-1. 在 `actions.py` 的 `ActionType` 枚举中添加新类型
-2. 在 `executor.py` 的 `_execute_step()` 中添加处理分支
-3. 在前端 `ExperimentPage.vue` 中添加对应的步骤显示
+1. 在 `actions.py` 增加 `ActionType`
+2. 在 `parser.py` 的 `ACTION_MAP` 注册字符串映射
+3. 在 `executor.py` 增加执行逻辑
+4. 如需要，补前端展示和用户文档
+5. 补测试
+6. 同步 [experiment_yaml_spec.md](experiment_yaml_spec.md)
 
-### start_pump 动作参数
+### 5.2 新增等待条件
 
-`start_pump` 动作支持以下参数：
+1. 在 `actions.py` 增加 `WaitType`
+2. 在 `parser.py` 的 `WAIT_MAP` 注册
+3. 在 `executor.py` 的 `_wait_condition()` 增加处理
+4. 明确 timeout 和 stop 的语义
+5. 补测试
+6. 同步 YAML 规范文档
 
-| 参数 | 类型 | 必选 | 说明 |
-|------|------|------|------|
-| device_id | string | ✅ | 设备ID |
-| channel | int | ✅ | 通道号(1-4) |
-| mode | int | ✅ | 运行模式(0=流量/1=定时定量/2=定时定速/3=定量定速) |
-| flow_rate | float | ✅ | 流速 |
-| flow_unit | int | - | 流速单位(1=mL/min, 3=RPM) |
-| run_time | float | - | 运行时间（定时定量/定时定速模式） |
-| time_unit | int | - | 运行时间单位(0=sec, 1=min, 2=hour) |
-| dispense_volume | float | - | 分装液量（定时定量/定量定速模式） |
-| volume_unit | int | - | 体积单位(0=uL, 1=mL, 2=L) |
-| repeat_count | int | - | 重复次数(0=无限, 1-9999) |
-| interval_time | float | - | 间隔时间（repeat_count!=1时必填） |
-| interval_time_unit | int | - | 间隔时间单位(0=sec, 1=min, 2=hour) |
+### 5.3 特别注意
 
-### 添加新等待条件
+新增等待逻辑时必须回答清楚：
 
-1. 在 `actions.py` 的 `WaitConditionType` 中添加
-2. 在 `executor.py` 的 `_wait_for_condition()` 中添加检查逻辑
-3. 等待条件必须支持暂停检查
+- stop 是否可中断
+- timeout 后是失败还是继续
+- 需要读取哪个设备状态
+- 失败时如何写日志
 
 ---
 
-## 8. 线程安全规范
+## 6. 测试分层策略
 
-### 锁使用规则
+### 6.1 纯软件验证
 
-| 场景 | 锁类型 | 范围 |
-|------|--------|------|
-| 串口协议调用 | `self._lock` (RLock) | 仅包裹协议读写 |
-| 状态变量读写 | `self._lock` | 仅包裹赋值 |
-| 回调列表操作 | `self._callback_lock` (Lock) | 仅包裹列表修改/复制 |
-| 全局单例创建 | `threading.Lock` | 双重检查锁 |
+适合日常开发和合并前检查：
 
-### 锁初始化顺序
+- `python tests\test_metadata.py`
+- 模块导入检查
+- 前端构建
 
-```python
-def __init__(self):
-    self._callback_lock = threading.Lock()  # 先于 _callbacks
-    self._callbacks = []
-    self._lock = threading.RLock()          # 保护串口
-```
+### 6.2 需要实机验证的改动
 
-### connect方法锁模式
+以下改动不应只靠软件测试：
 
-```python
-def connect(self) -> bool:
-    with self._lock:                    # 锁内：状态检查
-        if self.is_connected():
-            return True
-        self.status = DeviceStatus.CONNECTING
-    
-    # 锁外：协议通信（可能耗时）
-    protocol = create_protocol(...)
-    protocol.connect()
-    
-    with self._lock:                    # 锁内：状态更新
-        self._protocol = protocol
-        self.status = DeviceStatus.CONNECTED
-    return True
-```
+- 串口时序调整
+- 协议写寄存器顺序变化
+- 泵模式参数写入策略变化
+- 真实设备 stop / start 时序变化
 
-### read_data方法锁模式
+### 6.3 本项目测试重点
 
-```python
-def read_data(self):
-    def _read():
-        with self._lock:                # 锁内：协议调用
-            raw = self._protocol.read()
-            current_status = self._status
-        return raw, current_status
-    
-    raw, status = self.execute_with_retry(_read, ...)
-    # 锁外：数据解析、对象构造
-    return self._parse(raw, status)
-```
+当前最重要的非硬件测试点：
 
-### atexit回调锁模式
-
-```python
-def _force_disconnect(self):
-    try:
-        if self._lock.acquire(blocking=False):  # 非阻塞
-            try:
-                self._protocol.disconnect()
-                self._protocol = None
-                self._closed = True
-            finally:
-                self._lock.release()
-        else:
-            self._closed = True  # 获取不到锁，至少标记关闭
-    except Exception:
-        pass
-```
-
-### 常见陷阱
-
-| 陷阱 | 正确做法 |
-|------|----------|
-| `x or default` | `x if x is not None else default` |
-| `RunStatus(val)` | `_safe_enum(RunStatus, val, RunStatus.STOP)` |
-| 返回内部可变对象 | `return copy.deepcopy(self._data)` |
-| 锁内执行耗时I/O | 缩小锁范围，I/O在锁外 |
-| `retry_count=0` 崩溃 | `retry_count = max(config.retry_count, 1)` |
+- YAML 解析
+- metadata / `sample_id`
+- `samples.csv`
+- 单实验保护
+- stop / wait 语义
+- WebSocket 断开不影响设备
 
 ---
 
-## 9. Git分支管理
+## 7. 调试与排错
 
-### 分支策略
+优先使用这几个入口做定位：
 
-```
-master (主分支)
-  │
-  ├── develop-web (Web开发分支)
-  │     │
-  │     └── feature/xxx (功能分支)
-  │
-  └── hotfix/xxx (紧急修复分支)
-```
+- `src/web/api/experiments.py`：实验生命周期问题
+- `src/experiment/executor.py`：动作失败、等待失败、返回值失败
+- `src/web/api/ws.py`：实时推送、连接副作用
+- `src/science/sample_record.py`：样品记录异常
 
-### 日常开发流程
+常见问题请直接看：
 
-```bash
-# 在功能分支开发
-git checkout develop-web
-git checkout -b feature/new-sensor
-
-# 开发完成后合并
-git add .
-git commit -m "feat: add new sensor driver"
-git checkout develop-web
-git merge feature/new-sensor
-
-# 测试通过后合并到master
-git checkout master
-git merge develop-web
-
-# 推送到两个远程
-git push gitee master
-git push github master
-```
-
-### 双远程同步
-
-```bash
-# 查看远程
-git remote -v
-
-# 推送到两个远程
-git push gitee --all
-git push github --all
-```
+- [troubleshooting.md](troubleshooting.md)
 
 ---
 
-## 10. AI辅助开发指南
+## 8. 文档同步规则（开发者视角）
 
-### 规则文件体系
+以下改动后必须同步文档：
 
-项目使用两层规则文件：
+- 页面路由变化
+- API 路径变化
+- 实验动作 / wait 类型变化
+- 行为语义变化，例如 stop、timeout、日志保存、样品记录
+- 测试与 merge 流程变化
 
-| 文件 | 职责 | 内容 |
-|------|------|------|
-| `.trae/rules/heat.md` | 行为准则 | 核心原则、开发流程、质量要求、AI行为规范 |
-| `context/PROJECT_CONTEXT.md` | 项目知识库 | 架构、编码规范、设备参数、历史经验 |
+文档职责分工：
 
-规则文件定义"怎么做"，上下文文件定义"是什么"，两者不重复。
-
-### 可用 Skill
-
-| Skill | 触发方式 | 用途 |
-|-------|---------|------|
-| `code-review` | `/review` 或代码修改后 | 按项目规则执行代码质检 |
-| `doc-sync` | `/git` 或要求更新文档时 | 分析变更后更新4份文档 |
-
-### 新对话启动
-
-每次新开AI对话时，首先提供项目上下文：
-
-```
-@context/PROJECT_CONTEXT.md
-```
-
-这会让AI了解项目架构、设计约束和历史经验。
-
-### 高效提问模式
-
-| 场景 | 推荐提问方式 |
-|------|-------------|
-| 修复Bug | "验证问题的存在性并进行修复：标题:xxx 详情:xxx" |
-| 代码审查 | `/review` 或 "对整个项目进行审查" |
-| 添加功能 | "实现xxx功能，参考现有xxx的模式" |
-| 架构设计 | "xxx应该怎么设计，给出完整流程" |
-| 更新文档 | `/git` 或 "更新上下文md、README" |
-
-### AI开发注意事项
-
-1. **验证后再修复**：AI可能误判问题，要求"验证问题的存在性"
-2. **编译检查**：修改后必须运行 `py_compile` 验证
-3. **遵循约束**：提醒AI"设备驱动必须是纯同步无线程"
-4. **锁规范**：提醒AI"锁范围最小化，I/O在锁外"
-5. **不添加注释**：项目约定不添加代码注释
-
-### 项目上下文维护
-
-每次重大变更后更新 `context/PROJECT_CONTEXT.md`：
-
-- 版本号递增
-- 架构图更新
-- 新增模块说明
-- 关键经验记录
-- Bug修复记录
+- `README.md`：入口与导航
+- `PROJECT_CONTEXT.md`：AI 规则、历史问题、系统不变量
+- `user_guide.md`：使用方式和行为语义
+- `developer_guide.md`：开发维护方式
+- `experiment_yaml_spec.md`：实验格式规范
+- `testing_and_merge_flow.md`：测试、commit、push、双远程流程
 
 ---
 
-## 11. 调试与排错
+## 9. 合并前检查清单
 
-### 串口调试
+合并前至少确认：
 
-```python
-# 查看可用串口
-import serial.tools.list_ports
-for port in serial.tools.list_ports.comports():
-    print(port.device, port.description)
+- 代码改动与文档改动一致
+- `tests/test_metadata.py` 通过
+- Web 关键模块可导入
+- 前端 `npm run build` 通过
+- 临时产物未误入版本控制
 
-# 直接发送MODBUS命令
-import serial
-ser = serial.Serial('COM10', 9600, timeout=1)
-ser.write(bytes.fromhex('010300000002C40B'))
-response = ser.read(20)
-print(response.hex())
-```
+更详细的流程见：
 
-### 设备诊断
-
-```bash
-# 加热器诊断
-python tests/diagnose.py
-
-# 蠕动泵诊断
-python tests/diagnose_pump.py
-
-# TTL信号诊断
-python tests/diagnose_ttl.py
-```
-
-### Web服务调试
-
-```bash
-# 启动带日志的Web服务
-python -c "
-import uvicorn
-from src.web.app import create_app
-app = create_app()
-uvicorn.run(app, host='0.0.0.0', port=8000, log_level='debug')
-"
-
-# 测试API端点
-curl -v http://localhost:8000/api/devices/status
-curl -v http://localhost:8000/api/experiments/
-```
-
-### 前端调试
-
-1. 浏览器F12打开开发者工具
-2. Console查看错误
-3. Network查看API请求
-4. WebSocket查看实时数据帧
-
-### 日志配置
-
-设备驱动使用Python标准logging，日志级别：
-
-```python
-self._logger.debug("详细调试信息")    # 协议通信细节
-self._logger.info("正常操作信息")     # 连接/断开
-self._logger.warning("警告信息")      # 非致命错误
-self._logger.error("错误信息")        # 操作失败
-```
+- [testing_and_merge_flow.md](testing_and_merge_flow.md)
 
 ---
 
-## 12. 代码审查清单
+## 10. 发布 / 推送流程（双远程）
 
-> **自动化审查**：使用 `/review` 命令或 `code-review` Skill 可自动执行以下清单。
+本仓库当前常用双远程：
 
-### 安全性
+- `origin`：Gitee
+- `github`：GitHub
 
-- [ ] 路径遍历：文件名参数是否校验
-- [ ] 注入风险：用户输入是否过滤
-- [ ] 资源泄露：串口是否正确关闭
-- [ ] 紧急停止：是否能可靠停止所有设备
+标准流程：
 
-### 线程安全
+1. 本地验证
+2. 文档同步
+3. `git add`
+4. `git commit`
+5. 推送到当前工作分支
+6. 同步推送到两个远程
 
-- [ ] 共享资源是否加锁
-- [ ] 锁范围是否最小化
-- [ ] 锁初始化是否先于被保护数据
-- [ ] atexit回调是否非阻塞
-- [ ] `or` 是否误用（应为 `is not None`）
-- [ ] 枚举转换是否有越界保护
-- [ ] 可变对象是否返回深拷贝
+命令和规则细节统一见：
 
-### 协议层
-
-- [ ] 不完整帧是否拒绝（返回None）
-- [ ] 写入后是否flush
-- [ ] CRC校验是否正确
-- [ ] 超时处理是否合理
-
-### 设备层
-
-- [ ] connect/disconnect是否有锁保护
-- [ ] connect锁范围是否最小化
-- [ ] read_data锁范围是否最小化
-- [ ] emergency_stop是否有null检查
-- [ ] execute_with_retry的retry_count是否 >= 1
-
-### Web层
-
-- [ ] 设备操作是否通过run_in_executor
-- [ ] SPA路由是否正确
-- [ ] 静态文件路径是否正确
-- [ ] API参数是否校验
-
-### 编译验证
-
-```bash
-# 批量编译检查
-python -m py_compile src/devices/base_device.py
-python -m py_compile src/devices/heater.py
-python -m py_compile src/devices/peristaltic_pump.py
-python -m py_compile src/protocols/aibus.py
-python -m py_compile src/protocols/modbus_rtu.py
-python -m py_compile src/web/app.py
-python -m py_compile src/experiment/engine.py
-```
+- [testing_and_merge_flow.md](testing_and_merge_flow.md)
 
 ---
 
-## 附录：关键文件速查
+## 11. Review Checklist
 
-| 需求 | 文件 |
-|------|------|
-| 添加新设备 | `src/devices/` + `src/web/device_manager.py` |
-| 修改协议 | `src/protocols/` |
-| 添加Web API | `src/web/api/` |
-| 添加实验动作 | `src/experiment/actions.py` + `executor.py` |
-| 修改前端页面 | `frontend/src/views/` |
-| 修改配置 | `config/system_config.yaml` |
-| 查看项目历史 | `context/PROJECT_CONTEXT.md` |
-| 用户教程 | `docs/user_guide.md` |
+- 是否破坏了同步驱动模型
+- 是否忽略了设备返回值
+- 是否让 stop / timeout 语义变模糊
+- 是否让页面连接状态影响设备状态
+- 是否同步了 YAML 文档 / 用户文档 / AI 文档
+- 是否把运行产物错误纳入版本控制

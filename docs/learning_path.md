@@ -142,9 +142,9 @@ const devices = reactive({ pumps: {}, heaters: {} })
 
 | 方法 | 用途 | 项目示例 |
 |------|------|----------|
-| GET | 获取数据 | `GET /api/devices/status` |
+| GET | 获取数据 | `GET /api/devices` |
 | POST | 执行操作 | `POST /api/pump/pump1/start` |
-| DELETE | 删除资源 | `DELETE /api/experiments/history/runs/{id}` |
+| DELETE | 删除资源 | `DELETE /api/experiments/history/runs/{run_id}` |
 
 **关键概念**：
 - 请求体（Request Body）：JSON 格式传参
