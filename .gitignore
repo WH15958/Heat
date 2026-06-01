@@ -46,6 +46,7 @@ data/
 # Reports (generated)
 reports/*.html
 reports/*.png
+output/
 
 # Config with sensitive info (if any)
 # config/local_config.yaml

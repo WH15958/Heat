@@ -16,6 +16,10 @@ class StepExecutor:
 
     def __init__(self, device_manager):
         self._dm = device_manager
+        self._should_stop = lambda: False
+
+    def set_stop_checker(self, checker):
+        self._should_stop = checker
 
     async def execute(self, step: ExperimentStep) -> bool:
         """执行一个步骤
@@ -32,15 +36,24 @@ class StepExecutor:
             loop = asyncio.get_event_loop()
 
             if step.type == ActionType.HEATER_SET_TEMP:
-                await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None, self._dm.set_temperature, step.params["device_id"], step.params["temperature"]
                 )
+                if not result:
+                    logger.error(f"Step {step.id}: set_temperature returned False")
+                    return False
 
             elif step.type == ActionType.HEATER_START:
-                await loop.run_in_executor(None, self._dm.start_heater, step.params["device_id"])
+                result = await loop.run_in_executor(None, self._dm.start_heater, step.params["device_id"])
+                if not result:
+                    logger.error(f"Step {step.id}: start_heater returned False")
+                    return False
 
             elif step.type == ActionType.HEATER_STOP:
-                await loop.run_in_executor(None, self._dm.stop_heater, step.params["device_id"])
+                result = await loop.run_in_executor(None, self._dm.stop_heater, step.params["device_id"])
+                if not result:
+                    logger.error(f"Step {step.id}: stop_heater returned False")
+                    return False
 
             elif step.type == ActionType.PUMP_START:
                 from protocols.pump_params import PumpRunMode, PumpDirection
@@ -85,20 +98,29 @@ class StepExecutor:
                 if repeat_count is not None and repeat_count != 1 and (not interval_time or interval_time <= 0):
                     logger.error(f"Step {step.id}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
                     return False
-                await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None, self._dm.start_pump_channel, step.params["device_id"],
                     ch, step.params.get("flow_rate", 10.0), direction, mode,
                     run_time, dispense_volume, tube_model, flow_unit,
                     time_unit, volume_unit, repeat_count, interval_time, interval_time_unit,
                 )
+                if not result:
+                    logger.error(f"Step {step.id}: start_pump_channel returned False")
+                    return False
 
             elif step.type == ActionType.PUMP_STOP:
-                await loop.run_in_executor(None, self._dm.stop_pump_channel, step.params["device_id"])
+                result = await loop.run_in_executor(None, self._dm.stop_pump_channel, step.params["device_id"])
+                if not result:
+                    logger.error(f"Step {step.id}: stop_pump_channel returned False")
+                    return False
 
             elif step.type == ActionType.PUMP_STOP_CHANNEL:
-                await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None, self._dm.stop_pump_channel, step.params["device_id"], step.params["channel"]
                 )
+                if not result:
+                    logger.error(f"Step {step.id}: stop_pump_channel returned False")
+                    return False
 
             elif step.type == ActionType.WAIT:
                 pass
@@ -114,7 +136,8 @@ class StepExecutor:
                 return False
 
             if step.wait.type != WaitType.NONE:
-                await self._wait_condition(step.wait)
+                if not await self._wait_condition(step.wait):
+                    return False
 
             logger.info(f"Step completed: {step.id}")
             return True
@@ -134,7 +157,15 @@ class StepExecutor:
 
         if condition.type == WaitType.DURATION:
             logger.info(f"Waiting {condition.seconds}s...")
-            await asyncio.sleep(condition.seconds)
+            remaining = max(condition.seconds, 0)
+            while remaining > 0:
+                if self._should_stop():
+                    logger.info("Wait interrupted by stop request")
+                    return False
+                sleep_time = min(remaining, 0.2)
+                await asyncio.sleep(sleep_time)
+                remaining -= sleep_time
+            return True
 
         elif condition.type == WaitType.TEMPERATURE_REACHED:
             logger.info(
@@ -142,10 +173,13 @@ class StepExecutor:
                 f"(tolerance={condition.tolerance}C, timeout={condition.timeout}s)"
             )
             while True:
+                if self._should_stop():
+                    logger.info("Temperature wait interrupted by stop request")
+                    return False
                 elapsed = time.time() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Wait timeout after {condition.timeout}s")
-                    break
+                    return False
                 try:
                     data = await loop.run_in_executor(
                         None, self._dm.read_heater_data, condition.device_id
@@ -154,9 +188,9 @@ class StepExecutor:
                     sv = data["sv"]
                     if abs(pv - sv) <= condition.tolerance:
                         logger.info(f"Temperature reached: {pv:.1f}C ~ {sv:.1f}C")
-                        break
-                except Exception:
-                    pass
+                        return True
+                except Exception as e:
+                    logger.warning(f"Temperature wait read failed for {condition.device_id}: {e}")
                 await asyncio.sleep(1.0)
 
         elif condition.type == WaitType.PUMP_COMPLETE:
@@ -164,10 +198,13 @@ class StepExecutor:
                 f"Waiting for pump {condition.device_id} CH{condition.channel} to complete"
             )
             while True:
+                if self._should_stop():
+                    logger.info("Pump wait interrupted by stop request")
+                    return False
                 elapsed = time.time() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Pump wait timeout after {condition.timeout}s")
-                    break
+                    return False
                 try:
                     status = await loop.run_in_executor(
                         None, self._dm.read_pump_status, condition.device_id
@@ -177,7 +214,9 @@ class StepExecutor:
                         logger.info(
                             f"Pump channel {condition.channel} completed"
                         )
-                        break
-                except Exception:
-                    pass
+                        return True
+                except Exception as e:
+                    logger.warning(f"Pump wait read failed for {condition.device_id} CH{condition.channel}: {e}")
                 await asyncio.sleep(1.0)
+
+        return True

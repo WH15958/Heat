@@ -167,7 +167,6 @@ async def stop_experiment(filename: str):
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
     await engine.stop()
-    _cleanup_engine(filename)
     return {"success": True}
 
 

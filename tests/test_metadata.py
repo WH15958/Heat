@@ -4,6 +4,7 @@ import tempfile
 import shutil
 import csv
 import json
+import asyncio
 from pathlib import Path
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -959,7 +960,7 @@ def test_completed_failed_stopped_do_not_block():
 
         active_fname, active_engine = _get_active_engine()
         assert active_fname is None, f"state={state.value} should not block"
-        print(f"  state={state.value}: 不阻止新实验 ✓")
+        print(f"  state={state.value}: 不阻止新实验 [OK]")
 
     print("[OK] completed/failed/stopped 的引擎不阻止新实验")
 
@@ -1135,6 +1136,122 @@ def test_finish_run_does_not_crash_on_csv_write_failure():
         el_mod.write_sample_record = original_write
 
 
+def test_execute_returns_false_when_device_command_returns_false():
+    print("\n=== 测试33: 设备命令返回 False 时 step 执行失败 ===")
+
+    from src.experiment.executor import StepExecutor
+    from src.experiment.actions import ExperimentStep, ActionType, WaitCondition, WaitType
+
+    mock_dm = Mock()
+    mock_dm.set_temperature.return_value = False
+    executor = StepExecutor(mock_dm)
+
+    step = ExperimentStep(
+        id="set_temp_fail",
+        type=ActionType.HEATER_SET_TEMP,
+        params={"device_id": "heater1", "temperature": 80.0},
+        wait=WaitCondition(type=WaitType.NONE),
+    )
+
+    result = asyncio.run(executor.execute(step))
+    assert result is False
+    print("[OK] 设备返回 False 时不会被误判为成功")
+
+
+def test_wait_timeout_returns_false():
+    print("\n=== 测试34: 等待条件超时时 step 执行失败 ===")
+
+    from src.experiment.executor import StepExecutor
+    from src.experiment.actions import ExperimentStep, ActionType, WaitCondition, WaitType
+
+    mock_dm = Mock()
+    mock_dm.read_heater_data.return_value = {"pv": 20.0, "sv": 80.0}
+    executor = StepExecutor(mock_dm)
+
+    step = ExperimentStep(
+        id="wait_timeout",
+        type=ActionType.WAIT,
+        params={},
+        wait=WaitCondition(
+            type=WaitType.TEMPERATURE_REACHED,
+            device_id="heater1",
+            tolerance=0.5,
+            timeout=0.1,
+        ),
+    )
+
+    result = asyncio.run(executor.execute(step))
+    assert result is False
+    print("[OK] 等待超时会返回失败，不再静默继续")
+
+
+def test_stop_experiment_waits_for_task_completion():
+    print("\n=== 测试35: stop 接口等待任务结束后再清理引擎 ===")
+
+    from src.experiment.engine import ExperimentEngine, ExperimentState
+    from src.experiment.executor import StepExecutor
+    from src.experiment.actions import ExperimentStep, ActionType, WaitCondition, WaitType
+    from src.web.api.experiments import _engines, _cleanup_engine, stop_experiment
+
+    async def scenario():
+        for key in list(_engines.keys()):
+            _cleanup_engine(key)
+
+        mock_dm = Mock()
+        executor = StepExecutor(mock_dm)
+        engine = ExperimentEngine(executor)
+        engine.load_steps([
+            ExperimentStep(
+                id="long_wait",
+                type=ActionType.WAIT,
+                params={},
+                wait=WaitCondition(type=WaitType.DURATION, seconds=5),
+            )
+        ], name="test", filename="exp_stop.yaml")
+        engine.on_complete(lambda: _cleanup_engine("exp_stop.yaml"))
+        _engines["exp_stop.yaml"] = engine
+
+        await engine.start()
+        await asyncio.sleep(0.2)
+        await stop_experiment("exp_stop.yaml")
+
+        assert engine.state == ExperimentState.STOPPED
+        assert "exp_stop.yaml" not in _engines
+
+    asyncio.run(scenario())
+    print("[OK] stop 会等待后台任务结束，并通过完成回调清理引擎")
+
+
+def test_websocket_disconnect_does_not_stop_pumps():
+    print("\n=== 测试36: WebSocket 断开不会自动停泵 ===")
+
+    from types import SimpleNamespace
+    from fastapi import WebSocketDisconnect
+    from src.web.api.ws import websocket_endpoint, manager
+
+    class FakeWebSocket:
+        def __init__(self, device_manager):
+            self.app = SimpleNamespace(state=SimpleNamespace(device_manager=device_manager))
+
+        async def accept(self):
+            return None
+
+        async def receive_text(self):
+            raise WebSocketDisconnect()
+
+    pump = Mock()
+    pump.is_connected.return_value = True
+    dm = Mock()
+    dm.get_all_pumps.return_value = {"pump1": pump}
+
+    ws = FakeWebSocket(dm)
+    asyncio.run(websocket_endpoint(ws))
+
+    assert pump.stop_all.call_count == 0
+    assert ws not in manager.active
+    print("[OK] WebSocket 断开不再对泵发送 stop_all")
+
+
 def run_all():
     tests = [
         test_parser_old_yaml_no_metadata,
@@ -1169,6 +1286,10 @@ def run_all():
         test_sample_index_string_conversion,
         test_sample_index_fallback_to_s001,
         test_existing_sample_ids_logs_warning_on_error,
+        test_execute_returns_false_when_device_command_returns_false,
+        test_wait_timeout_returns_false,
+        test_stop_experiment_waits_for_task_completion,
+        test_websocket_disconnect_does_not_stop_pumps,
     ]
 
     passed = 0

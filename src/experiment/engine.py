@@ -34,6 +34,7 @@ class ExperimentProgress:
 class ExperimentEngine:
     def __init__(self, executor: StepExecutor, exp_logger: Optional[ExperimentLogger] = None):
         self._executor = executor
+        self._executor.set_stop_checker(lambda: self._stop_flag)
         self._exp_logger = exp_logger or ExperimentLogger()
         self._state = ExperimentState.IDLE
         self._steps: List[ExperimentStep] = []
@@ -135,6 +136,14 @@ class ExperimentEngine:
             success = await self._executor.execute(step)
             wait_duration = time.time() - step_start
 
+            if self._stop_flag:
+                self._exp_logger.finish_step(i, success=False, error="Stopped by user", wait_duration=wait_duration)
+                self._state = ExperimentState.STOPPED
+                self._exp_logger.finish_run(RunStatus.STOPPED.value)
+                self._notify()
+                self._notify_complete()
+                return
+
             if not success:
                 self._exp_logger.finish_step(i, success=False, error="Execution failed", wait_duration=wait_duration)
                 if step.on_error == "stop":
@@ -173,6 +182,8 @@ class ExperimentEngine:
     async def stop(self):
         self._stop_flag = True
         self._pause_event.set()
+        if self._task is not None:
+            await self._task
 
     def _notify(self):
         if self._on_progress:

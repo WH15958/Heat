@@ -225,8 +225,8 @@ class LabSmartPumpDevice(BaseDevice):
 | `app.py` | FastAPI入口、SPA路由、静态文件 |
 | `device_manager.py` | 设备实例管理、桥接Web与设备 |
 | `api/devices.py` | REST API：连接/控制/数据 |
-| `api/ws.py` | WebSocket：1Hz实时数据推送 |
-| `api/experiments.py` | 实验管理API（含全局单实验保护、路径遍历防护、日志保存开关、历史记录删除） |
+| `api/ws.py` | WebSocket：1Hz实时数据推送；断开时仅清理连接，不停止设备 |
+| `api/experiments.py` | 实验管理API（含全局单实验保护、路径遍历防护、日志保存开关、历史记录删除）；stop 统一由 `on_complete` 回调清理引擎 |
 
 **DeviceManager 参数验证规则：**
 
@@ -271,8 +271,8 @@ if run_time is not None and time_unit is None:
 | 文件 | 职责 |
 |------|------|
 | `parser.py` | YAML解析 + 文件名校验 + metadata 字段提取 |
-| `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED；`load_steps()` 支持 metadata 参数 |
-| `executor.py` | 步骤执行器：调用DeviceManager |
+| `engine.py` | 状态机：IDLE/RUNNING/PAUSED/COMPLETED/FAILED/STOPPED；`load_steps()` 支持 metadata 参数；`__init__` 注入 `set_stop_checker` 回调到 executor |
+| `executor.py` | 步骤执行器：调用DeviceManager；`_should_stop` 回调支持等待中断；所有设备命令检查返回值 |
 | `actions.py` | 9种动作 + 4种等待条件定义 |
 | `experiment_logger.py` | 实验运行日志；`start_run()` 调用 `generate_unique_sample_id()` 确保唯一，metadata 防御性拷贝；`finish_run()` 写入 samples.csv（try/except 防护） |
 

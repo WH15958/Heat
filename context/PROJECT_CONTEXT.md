@@ -2,8 +2,8 @@
 
 > **项目级 AI 记忆库 + 开发者交接手册**
 >
-> 最后更新：2026-05-28
-版本：v2.13
+> 最后更新：2026-05-29
+版本：v2.13.1
 
 ---
 
@@ -1937,3 +1937,58 @@ metadata:
 2. **metadata 必须防御性拷贝**：`dict(metadata or {})` 避免修改 parser 返回的共享对象
 3. **YAML/前端传来的数值类型不可信**：必须做类型规范化，sample_index 可能是 str/int/None
 4. **静默吞异常是隐患**：数据读取异常必须记录日志，否则可能误判"无已有数据"导致重复编号
+
+### 6.19 2026-05-29 stop响应加速、设备命令返回值检查、引擎清理回调（v2.13.1）
+
+**问题修复：**
+
+| 问题 | 修复方案 |
+|------|---------|
+| stop 后需等待当前步骤完整执行（如等待 5 分钟），用户体验差 | executor 新增 `_should_stop` 回调，等待循环中周期性检查；engine 在步骤执行后立即检查 `_stop_flag` |
+| 设备命令返回值（`set_temperature`、`start_heater` 等）被忽略，失败时静默继续 | executor 中所有设备命令均检查返回值，`False` 时记录 error 并返回失败 |
+| `stop_experiment` 中手动调用 `_cleanup_engine()` 与 `on_complete` 回调重复清理 | 移除 `stop_experiment` 中的 `_cleanup_engine()`，统一由 `on_complete` 回调处理 |
+| WebSocket 断开时自动停泵，前端刷新即导致泵停止 | 移除 WebSocket 断开时的 `stop_all` 调用，仅清理连接状态 |
+
+**引擎 stop 响应加速架构：**
+
+```
+ExperimentEngine.__init__
+  └── executor.set_stop_checker(lambda: self._stop_flag)
+
+StepExecutor._wait_condition (DURATION / TEMPERATURE_REACHED / PUMP_COMPLETE)
+  └── while 循环中每轮检查 self._should_stop()
+      └── True → 立即返回 False（中断等待）
+
+ExperimentEngine._run()
+  └── executor.execute(step) 返回后
+      └── if self._stop_flag → 立即 finish_step + finish_run + return
+```
+
+**设备命令返回值检查清单：**
+
+| 动作 | 检查项 | 失败处理 |
+|------|--------|----------|
+| `HEATER_SET_TEMP` | `set_temperature()` 返回值 | `logger.error` → `return False` |
+| `HEATER_START` | `start_heater()` 返回值 | `logger.error` → `return False` |
+| `HEATER_STOP` | `stop_heater()` 返回值 | `logger.error` → `return False` |
+| `PUMP_START` | `start_pump_channel()` 返回值 | `logger.error` → `return False` |
+| `PUMP_STOP` | `stop_pump_channel()` 返回值 | `logger.error` → `return False` |
+| `PUMP_STOP_CHANNEL` | `stop_pump_channel()` 返回值 | `logger.error` → `return False` |
+
+**涉及文件：**
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/experiment/engine.py` | 修改 | `__init__` 注入 `set_stop_checker`；`_run()` 步骤执行后立即检查 `_stop_flag` |
+| `src/experiment/executor.py` | 修改 | 新增 `_should_stop` + `set_stop_checker()`；所有设备命令检查返回值；等待循环中检查停止标志 |
+| `src/web/api/experiments.py` | 修改 | `stop_experiment` 移除 `_cleanup_engine()`，由 `on_complete` 回调统一清理 |
+| `src/web/api/ws.py` | 修改 | WebSocket 断开时不再停泵，仅清理连接 |
+| `.gitignore` | 修改 | 新增 `output/` 忽略 |
+| `tests/test_metadata.py` | 修改 | 36 个测试（+4 个新测试：设备返回False、等待超时、stop等待任务完成、WebSocket断开不停泵） |
+
+**经验教训：**
+
+1. **长时间等待必须可中断**：wait 循环中必须周期性检查停止标志，否则 stop 命令需等待数分钟才生效
+2. **设备命令返回值不可忽略**：硬件通信可能失败，忽略返回值会导致"静默失败"——实验报告成功但实际未执行
+3. **清理逻辑应有唯一入口**：on_complete 回调作为引擎清理的唯一入口，避免手动调用 `_cleanup_engine()` 导致双重清理
+4. **WebSocket 生命周期 ≠ 设备生命周期**：前端断开不应影响硬件状态，设备控制应通过明确的 API 调用
