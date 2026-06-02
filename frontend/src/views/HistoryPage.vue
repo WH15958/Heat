@@ -123,8 +123,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
-import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 
 interface TimePoint {
   t: number
@@ -172,9 +172,9 @@ const detailTitle = ref('')
 const reportTempChartRef = ref<HTMLElement>()
 const reportFlowChartRef = ref<HTMLElement>()
 const reportVolumeChartRef = ref<HTMLElement>()
-let reportTempChart: echarts.ECharts | null = null
-let reportFlowChart: echarts.ECharts | null = null
-let reportVolumeChart: echarts.ECharts | null = null
+let reportTempChart: ECharts | null = null
+let reportFlowChart: ECharts | null = null
+let reportVolumeChart: ECharts | null = null
 
 const FLOW_UNIT_LABELS: Record<string, string> = {
   ML_MIN: 'mL/min',
@@ -250,8 +250,8 @@ function renderReportCharts() {
 
     if (sd.heaters && Object.keys(sd.heaters).length > 0 && reportTempChartRef.value) {
       if (reportTempChart) reportTempChart.dispose()
-      reportTempChart = echarts.init(reportTempChartRef.value)
-      const series: echarts.SeriesOption[] = []
+      reportTempChart = init(reportTempChartRef.value)
+      const series: LineSeriesOption[] = []
       const legend: string[] = []
       for (const [hid, hdata] of Object.entries(sd.heaters)) {
         if (hdata.pv?.length) {
@@ -294,8 +294,8 @@ function renderReportCharts() {
 
     if (sd.pumps && Object.keys(sd.pumps).length > 0 && reportFlowChartRef.value) {
       if (reportFlowChart) reportFlowChart.dispose()
-      reportFlowChart = echarts.init(reportFlowChartRef.value)
-      const series: echarts.SeriesOption[] = []
+      reportFlowChart = init(reportFlowChartRef.value)
+      const series: LineSeriesOption[] = []
       const legend: string[] = []
       const colors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
       for (const [pid, pdata] of Object.entries(sd.pumps)) {
@@ -336,8 +336,8 @@ function renderReportCharts() {
 
     if (sd.pumps && Object.keys(sd.pumps).length > 0 && reportVolumeChartRef.value) {
       if (reportVolumeChart) reportVolumeChart.dispose()
-      reportVolumeChart = echarts.init(reportVolumeChartRef.value)
-      const series: echarts.SeriesOption[] = []
+      reportVolumeChart = init(reportVolumeChartRef.value)
+      const series: LineSeriesOption[] = []
       const legend: string[] = []
       const colors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
       const channelVolumeUnits: Record<string, string> = {}

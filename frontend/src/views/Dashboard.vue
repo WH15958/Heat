@@ -97,14 +97,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import * as echarts from 'echarts'
+import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import { useWebSocket, type RealtimeData } from '../composables/useWebSocket'
 
 const { data: realtimeData, connected: wsConnected } = useWebSocket()
 const tempChartRef = ref<HTMLElement>()
 const flowChartRef = ref<HTMLElement>()
-let tempChart: echarts.ECharts | null = null
-let flowChart: echarts.ECharts | null = null
+let tempChart: ECharts | null = null
+let flowChart: ECharts | null = null
 const maxPoints = 300
 
 interface HeaterSeriesData {
@@ -138,7 +138,7 @@ function initCharts() {
   try {
     if (tempChartRef.value) {
       if (tempChart) tempChart.dispose()
-      tempChart = echarts.init(tempChartRef.value)
+      tempChart = init(tempChartRef.value)
       tempChart.setOption({
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0 },
@@ -150,7 +150,7 @@ function initCharts() {
     }
     if (flowChartRef.value) {
       if (flowChart) flowChart.dispose()
-      flowChart = echarts.init(flowChartRef.value)
+      flowChart = init(flowChartRef.value)
       flowChart.setOption({
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0 },
@@ -212,7 +212,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       heaterDataMap[id].sv = heaterDataMap[id].sv.slice(-maxPoints)
     }
 
-    const tempSeries: echarts.SeriesOption[] = []
+    const tempSeries: LineSeriesOption[] = []
     const tempLegend: string[] = []
     for (const [id, s] of Object.entries(heaterDataMap)) {
       if (s.pv.length === 0) continue
@@ -248,7 +248,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       }
     }
 
-    const flowSeries: echarts.SeriesOption[] = []
+    const flowSeries: LineSeriesOption[] = []
     const flowLegend: string[] = []
     for (const [pumpId, pData] of Object.entries(pumpDataMap)) {
       for (const [chId, chSeries] of Object.entries(pData.channels)) {
