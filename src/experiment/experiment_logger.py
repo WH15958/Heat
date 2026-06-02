@@ -1,0 +1,327 @@
+import json
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
+from typing import Optional, List, Callable
+from enum import Enum
+
+from src.utils.logger import get_logger
+from src.science.sample_id import generate_unique_sample_id
+from src.science.sample_record import write_sample_record
+
+logger = get_logger(__name__)
+
+LOGS_DIR = Path("output/experiment_logs")
+
+
+class StepStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class RunStatus(Enum):
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+
+@dataclass
+class StepLog:
+    step_index: int
+    step_id: str
+    action_type: str
+    params: dict
+    status: str = StepStatus.PENDING.value
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    duration: float = 0.0
+    result: Optional[str] = None
+    error: Optional[str] = None
+    wait_type: str = "none"
+    wait_duration: float = 0.0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExperimentRun:
+    run_id: str
+    experiment_name: str
+    experiment_file: str
+    status: str = RunStatus.RUNNING.value
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    total_duration: float = 0.0
+    total_steps: int = 0
+    completed_steps: int = 0
+    failed_steps: int = 0
+    steps: List[dict] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+    sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class ExperimentLogger:
+    def __init__(self, save_log: bool = True):
+        self._active_run: Optional[ExperimentRun] = None
+        self._step_logs: dict[int, StepLog] = {}
+        self._on_log: Optional[Callable] = None
+        self._save_log = save_log
+        if save_log:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def active_run(self) -> Optional[ExperimentRun]:
+        return self._active_run
+
+    def on_log(self, callback: Callable):
+        self._on_log = callback
+
+    def record_sensor_data(self, realtime_payload: dict):
+        if not self._active_run or not realtime_payload:
+            return
+        elapsed = 0.0
+        if self._active_run.started_at:
+            start = datetime.fromisoformat(self._active_run.started_at)
+            elapsed = (datetime.now() - start).total_seconds()
+        point = {"t": round(elapsed, 1)}
+        heaters_recorded = 0
+        pumps_recorded = 0
+        for hid, hdata in (realtime_payload.get("heaters") or {}).items():
+            if hdata.get("error"):
+                continue
+            if hid not in self._active_run.sensor_data["heaters"]:
+                self._active_run.sensor_data["heaters"][hid] = {"pv": [], "sv": []}
+            self._active_run.sensor_data["heaters"][hid]["pv"].append(
+                {"t": point["t"], "v": hdata.get("pv")}
+            )
+            self._active_run.sensor_data["heaters"][hid]["sv"].append(
+                {"t": point["t"], "v": hdata.get("sv")}
+            )
+            heaters_recorded += 1
+        for pid, pdata in (realtime_payload.get("pumps") or {}).items():
+            if pdata.get("error") or not pdata.get("channels"):
+                continue
+            if pid not in self._active_run.sensor_data["pumps"]:
+                self._active_run.sensor_data["pumps"][pid] = {}
+            for chid, chdata in pdata["channels"].items():
+                if chid not in self._active_run.sensor_data["pumps"][pid]:
+                    self._active_run.sensor_data["pumps"][pid][chid] = {
+                        "flow_rate": [],
+                        "volume": [],
+                        "flow_unit": chdata.get("flow_unit", "ML_MIN"),
+                    }
+                self._active_run.sensor_data["pumps"][pid][chid]["flow_rate"].append(
+                    {"t": point["t"], "v": chdata.get("flow_rate", 0)}
+                )
+                self._active_run.sensor_data["pumps"][pid][chid]["volume"].append(
+                    {"t": point["t"], "v": chdata.get("volume", 0)}
+                )
+                pumps_recorded += 1
+        if heaters_recorded > 0 or pumps_recorded > 0:
+            logger.info(f"[{self._active_run.run_id}] Sensor recorded: heaters={heaters_recorded}, pumps={pumps_recorded}")
+
+    def start_run(self, experiment_name: str, experiment_file: str, total_steps: int, metadata: dict = None) -> str:
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+        started_at = datetime.now().isoformat()
+        merged_metadata = dict(metadata or {})
+        merged_metadata["recipe_file"] = merged_metadata.get("recipe_file", experiment_file)
+        merged_metadata["started_at"] = merged_metadata.get("started_at", started_at)
+
+        batch_id = merged_metadata.get("batch_id", "")
+        sample_index = merged_metadata.get("sample_index", 1)
+        merged_metadata["sample_id"] = generate_unique_sample_id(merged_metadata)
+
+        self._active_run = ExperimentRun(
+            run_id=run_id,
+            experiment_name=experiment_name,
+            experiment_file=experiment_file,
+            started_at=started_at,
+            total_steps=total_steps,
+            metadata=merged_metadata,
+        )
+        self._step_logs = {}
+        self._emit("run_started", self._active_run.to_dict())
+        logger.info(f"Experiment run started: {run_id} ({experiment_name}), sample_id={merged_metadata.get('sample_id', 'N/A')}")
+        return run_id
+
+    def start_step(self, step_index: int, step_id: str, action_type: str, params: dict, wait_type: str = "none"):
+        step_log = StepLog(
+            step_index=step_index,
+            step_id=step_id,
+            action_type=action_type,
+            params=params,
+            status=StepStatus.RUNNING.value,
+            started_at=datetime.now().isoformat(),
+            wait_type=wait_type,
+        )
+        self._step_logs[step_index] = step_log
+        self._emit("step_started", step_log.to_dict())
+        logger.info(f"Step started: [{step_index}] {step_id} ({action_type})")
+
+    def finish_step(self, step_index: int, success: bool, error: str = None, wait_duration: float = 0.0):
+        if step_index not in self._step_logs:
+            return
+        step_log = self._step_logs[step_index]
+        step_log.finished_at = datetime.now().isoformat()
+        step_log.status = StepStatus.COMPLETED.value if success else StepStatus.FAILED.value
+        step_log.error = error
+        step_log.wait_duration = wait_duration
+        if step_log.started_at:
+            start = datetime.fromisoformat(step_log.started_at)
+            step_log.duration = (datetime.now() - start).total_seconds()
+
+        if self._active_run:
+            self._active_run.steps.append(step_log.to_dict())
+            self._active_run.completed_steps = sum(
+                1 for s in self._step_logs.values() if s.status == StepStatus.COMPLETED.value
+            )
+            self._active_run.failed_steps = sum(
+                1 for s in self._step_logs.values() if s.status == StepStatus.FAILED.value
+            )
+
+        self._emit("step_finished", step_log.to_dict())
+        status_text = "completed" if success else f"failed: {error}"
+        logger.info(f"Step {status_text}: [{step_index}] {step_log.step_id}")
+
+    def skip_step(self, step_index: int, reason: str = ""):
+        if step_index not in self._step_logs:
+            return
+        step_log = self._step_logs[step_index]
+        step_log.status = StepStatus.SKIPPED.value
+        step_log.error = reason
+        if self._active_run:
+            self._active_run.steps.append(step_log.to_dict())
+        self._emit("step_skipped", step_log.to_dict())
+
+    def pause_run(self):
+        if self._active_run:
+            self._active_run.status = RunStatus.PAUSED.value
+            self._emit("run_paused", {"run_id": self._active_run.run_id})
+
+    def resume_run(self):
+        if self._active_run:
+            self._active_run.status = RunStatus.RUNNING.value
+            self._emit("run_resumed", {"run_id": self._active_run.run_id})
+
+    def finish_run(self, status: str):
+        if not self._active_run:
+            return
+        self._active_run.status = status
+        self._active_run.finished_at = datetime.now().isoformat()
+        if self._active_run.started_at:
+            start = datetime.fromisoformat(self._active_run.started_at)
+            self._active_run.total_duration = (datetime.now() - start).total_seconds()
+        self._save_to_file()
+        try:
+            self._write_sample_record(status)
+        except Exception as e:
+            logger.error(f"Failed to write sample record: {e}")
+        self._emit("run_finished", self._active_run.to_dict())
+        logger.info(f"Experiment run {status}: {self._active_run.run_id}")
+
+    def _write_sample_record(self, status: str):
+        run = self._active_run
+        metadata = run.metadata or {}
+        metadata["finished_at"] = run.finished_at
+
+        log_path = ""
+        if self._save_log:
+            log_filename = f"{run.run_id}_{run.experiment_name}.json"
+            log_path = str(LOGS_DIR / log_filename)
+
+        error_flag = status in (RunStatus.FAILED.value, RunStatus.STOPPED.value)
+
+        write_sample_record(
+            run_id=run.run_id,
+            metadata=metadata,
+            status=status,
+            error_flag=error_flag,
+            log_file_path=log_path,
+        )
+
+    def _save_to_file(self):
+        if not self._save_log or not self._active_run:
+            return
+        try:
+            filename = f"{self._active_run.run_id}_{self._active_run.experiment_name}.json"
+            filepath = LOGS_DIR / filename
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(self._active_run.to_dict(), f, ensure_ascii=False, indent=2)
+            logger.info(f"Experiment log saved: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save experiment log: {e}")
+
+    def _emit(self, event_type: str, data: dict):
+        if self._on_log:
+            try:
+                self._on_log(event_type, data)
+            except Exception as e:
+                logger.error(f"Log callback error: {e}")
+
+
+def list_experiment_runs() -> List[dict]:
+    runs = []
+    if not LOGS_DIR.exists():
+        return runs
+    for filepath in sorted(LOGS_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["log_file"] = filepath.name
+            runs.append(data)
+        except Exception:
+            continue
+    return runs
+
+
+def get_experiment_run(run_id: str) -> Optional[dict]:
+    if not LOGS_DIR.exists():
+        return None
+    for filepath in LOGS_DIR.glob("*.json"):
+        if filepath.name.startswith(run_id + "_"):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return None
+    return None
+
+
+def delete_experiment_run(run_id: str) -> bool:
+    if not LOGS_DIR.exists():
+        return False
+    for filepath in LOGS_DIR.glob("*.json"):
+        if filepath.name.startswith(run_id + "_"):
+            try:
+                filepath.unlink(missing_ok=True)
+                logger.info(f"Experiment log deleted: {filepath}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete experiment log: {e}")
+                return False
+    return False
+
+
+def delete_all_experiment_runs() -> int:
+    if not LOGS_DIR.exists():
+        return 0
+    count = 0
+    for filepath in LOGS_DIR.glob("*.json"):
+        try:
+            filepath.unlink(missing_ok=True)
+            count += 1
+        except Exception as e:
+            logger.error(f"Failed to delete experiment log {filepath}: {e}")
+    logger.info(f"Deleted {count} experiment logs")
+    return count

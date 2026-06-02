@@ -84,7 +84,7 @@ class ModbusRTUProtocol:
     实现标准的MODBUS RTU通信协议，支持读写保持寄存器操作。
     
     Example:
-        >>> protocol = ModbusRTUProtocol(port="COM3", baudrate=9600)
+        >>> protocol = ModbusRTUProtocol(port="COM3", baudrate=19200)
         >>> protocol.connect()
         >>> values = protocol.read_holding_registers(slave_address=1, start_address=0, count=10)
         >>> protocol.write_single_register(slave_address=1, address=0, value=100)
@@ -96,8 +96,8 @@ class ModbusRTUProtocol:
     def __init__(
         self,
         port: str,
-        baudrate: int = 9600,
-        parity: str = 'N',
+        baudrate: int = 19200,
+        parity: str = 'E',
         stopbits: int = 1,
         bytesize: int = 8,
         timeout: float = 2.0,
@@ -217,10 +217,9 @@ class ModbusRTUProtocol:
 
         try:
             self._serial.reset_input_buffer()
-            self._serial.reset_output_buffer()
             self._serial.write(full_frame)
             self._serial.flush()
-            time.sleep(0.05)
+            time.sleep(0.1)
             return True
         except Exception as e:
             logger.error(f"Failed to send frame: {e}")
@@ -240,8 +239,6 @@ class ModbusRTUProtocol:
         if not self.is_connected:
             return None
 
-        time.sleep(0.1)
-
         try:
             response = bytearray()
             deadline = time.time() + self.timeout
@@ -257,7 +254,7 @@ class ModbusRTUProtocol:
                 response.extend(chunk)
 
                 if len(response) >= min_length:
-                    time.sleep(0.05)
+                    time.sleep(0.03)
                     remaining = self._serial.in_waiting
                     if remaining > 0:
                         continue
@@ -271,7 +268,8 @@ class ModbusRTUProtocol:
                 return None
 
             if len(response) < min_length:
-                logger.debug(f"Received partial frame: {len(response)} bytes")
+                logger.debug(f"Received partial frame: {len(response)} bytes (min: {min_length})")
+                return None
 
             return bytes(response)
         except Exception as e:
@@ -305,12 +303,12 @@ class ModbusRTUProtocol:
     ) -> Optional[List[int]]:
         """
         读保持寄存器（功能码0x03）
-        
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
             count: 寄存器数量
-        
+
         Returns:
             Optional[List[int]]: 寄存器值列表，失败返回None
         """
@@ -322,37 +320,41 @@ class ModbusRTUProtocol:
             (count >> 8) & 0xFF,
             count & 0xFF,
         ])
-        
+
         if not self._send_frame(frame):
             return None
-        
+
         expected_length = 3 + count * 2 + 2
         response = self._receive_frame(5, expected_length)
-        
+
         if response is None:
+            logger.debug(f"MODBUS read no response: slave={slave_address}, addr={start_address}, count={count}")
             return None
-        
+
         if not self._validate_response(response):
-            logger.debug(f"CRC validation failed")
+            logger.warning(f"MODBUS CRC failed: slave={slave_address}, addr={start_address}")
             return None
 
         func_code = response[1]
         if func_code >= 0x80:
             exception_code = response[2]
-            if exception_code in (ModbusException.SLAVE_DEVICE_BUSY, ModbusException.ILLEGAL_DATA_ADDRESS):
+            if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
+                logger.warning(f"Read: slave device busy, will need retry")
+                return None
+            if exception_code == ModbusException.ILLEGAL_DATA_ADDRESS:
                 logger.info(f"Read: {ModbusException(exception_code).name} (ignored)")
                 return None
             logger.error(f"Read: {ModbusException(exception_code).name}")
             return None
-        
+
         byte_count = response[2]
         data = response[3:3 + byte_count]
-        
+
         values = []
         for i in range(0, len(data), 2):
             value = (data[i] << 8) | data[i + 1]
             values.append(value)
-        
+
         return values
     
     def write_single_register(
@@ -382,11 +384,13 @@ class ModbusRTUProtocol:
         ])
         
         if not self._send_frame(frame):
+            logger.warning(f"WriteSingle: send failed addr={address} value={value}")
             return False
         
         response = self._receive_frame(5, 8)
         
         if response is None:
+            logger.warning(f"WriteSingle: no response addr={address} value={value}")
             return False
         
         if not self._validate_response(response):
@@ -397,8 +401,8 @@ class ModbusRTUProtocol:
         if func_code >= 0x80:
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
-                logger.info(f"Write: {ModbusException(exception_code).name} (ignored)")
-                return True
+                logger.warning(f"Write: slave device busy, write may not have succeeded")
+                return False
             logger.warning(f"Write: {ModbusException(exception_code).name}")
             return False
 
@@ -453,9 +457,9 @@ class ModbusRTUProtocol:
         if func_code >= 0x80:
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
-                logger.info(f"WriteMultiple: {ModbusException(exception_code).name} (ignored)")
-                return True
-            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name}")
+                logger.warning(f"WriteMultiple: slave device busy, write may not have succeeded")
+                return False
+            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name} addr={start_address} count={count} values={values}")
             return False
 
         return True
@@ -468,21 +472,26 @@ class ModbusRTUProtocol:
     ) -> bool:
         """
         写浮点数到寄存器（占用2个寄存器，4字节）
-        
+
+        协议规定功能码10H用于写long/float型到保持寄存器，浮点数必须使用0x10批量写入。
+        使用0x06单写浮点数的第二个寄存器会返回ILLEGAL_DATA_ADDRESS，
+        因为浮点数的低字寄存器不是独立寄存器，必须与高字寄存器原子写入。
+
+        浮点数使用大端序（高字节在前）发送。
+        例如 5.0 的 IEEE754 表示为 0x40A00000，发送为寄存器 [0x40A0, 0x0000]。
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
             value: 浮点数值
-        
+
         Returns:
             bool: 写入成功返回True
         """
         float_bytes = struct.pack('>f', value)
-        values = [
-            (float_bytes[0] << 8) | float_bytes[1],
-            (float_bytes[2] << 8) | float_bytes[3],
-        ]
-        return self.write_multiple_registers(slave_address, start_address, values)
+        reg_high = (float_bytes[0] << 8) | float_bytes[1]
+        reg_low = (float_bytes[2] << 8) | float_bytes[3]
+        return self.write_multiple_registers(slave_address, start_address, [reg_high, reg_low])
     
     def read_float_register(
         self,
@@ -491,23 +500,25 @@ class ModbusRTUProtocol:
     ) -> Optional[float]:
         """
         读浮点数寄存器（占用2个寄存器，4字节）
-        
+
+        寄存器字序为ABCD（大端序，高字在前）：第一个寄存器=高字，第二个寄存器=低字。
+
         Args:
             slave_address: 从站地址
             start_address: 起始地址
-        
+
         Returns:
             Optional[float]: 浮点数值，失败返回None
         """
         values = self.read_holding_registers(slave_address, start_address, 2)
         if values is None or len(values) < 2:
             return None
-        
+
         float_bytes = bytes([
             (values[0] >> 8) & 0xFF,
             values[0] & 0xFF,
             (values[1] >> 8) & 0xFF,
             values[1] & 0xFF,
         ])
-        
+
         return struct.unpack('>f', float_bytes)[0]

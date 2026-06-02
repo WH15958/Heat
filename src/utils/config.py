@@ -27,8 +27,11 @@ class BaseConfig:
     
     @classmethod
     def from_dict(cls: Type[T], data: Dict[str, Any]) -> T:
-        """从字典创建实例"""
-        return cls(**data)
+        """从字典创建实例，忽略多余键"""
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
     
     def validate(self) -> List[str]:
         """
@@ -159,9 +162,9 @@ class PumpDeviceConfig(BaseConfig):
     """蠕动泵设备配置"""
     device_id: str = "pump1"
     name: str = "蠕动泵"
-    connection: DeviceConnectionConfig = field(default_factory=DeviceConnectionConfig)
+    connection: DeviceConnectionConfig = field(default_factory=lambda: DeviceConnectionConfig(baudrate=19200, parity="E"))
     slave_address: int = 1
-    parity: str = "N"
+    parity: str = "E"
     stopbits: int = 1
     bytesize: int = 8
     timeout: float = 2.0
@@ -402,7 +405,7 @@ class ConfigManager:
         heaters = []
         for heater_data in data.get("heaters", []):
             conn_data = heater_data.get("connection", {})
-            connection = DeviceConnectionConfig(**conn_data)
+            connection = DeviceConnectionConfig.from_dict(conn_data)
             heater = HeaterDeviceConfig(
                 **{k: v for k, v in heater_data.items() if k != "connection"},
                 connection=connection
@@ -412,7 +415,7 @@ class ConfigManager:
         pumps = []
         for pump_data in data.get("pumps", []):
             conn_data = pump_data.get("connection", {})
-            connection = DeviceConnectionConfig(**conn_data)
+            connection = DeviceConnectionConfig.from_dict(conn_data)
             
             channels = []
             for ch_data in pump_data.get("channels", []):

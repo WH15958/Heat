@@ -202,6 +202,7 @@ class AIBUSProtocol:
                 self._logger.info("Serial port closed")
             except Exception as e:
                 self._logger.error(f"Error closing serial port: {e}")
+                return False
             finally:
                 self._serial = None
         return True
@@ -391,6 +392,7 @@ class AIBUSProtocol:
         self._serial.reset_output_buffer()
         
         self._serial.write(command)
+        self._serial.flush()
         self._logger.debug(f"Sent: {command.hex().upper()}")
         
         response = self._serial.read(10)
@@ -450,17 +452,21 @@ class AIBUSProtocol:
         command = self._build_write_command(param_code, int_value)
         return self._send_and_receive(command)
     
-    def read_pv_sv(self) -> Tuple[float, float, int, int]:
+    def read_pv_sv(self, decimal_places: int = 1) -> Tuple[float, float, int, int]:
         """
         快速读取测量值(PV)和设定值(SV)
         
         通过读取参数代号0（给定值），同时获取PV和SV。
         
+        Args:
+            decimal_places: 小数位数，默认1（对应dPt=1），可通过读取参数代号8(dPt)获取
+        
         Returns:
             Tuple[float, float, int, int]: (测量值, 设定值, MV输出, 报警状态)
         """
         _, response = self.read_parameter(0)
-        return response.pv, response.sv, response.mv, response.alarm_status
+        divisor = 10 ** decimal_places
+        return response.pv / divisor, response.sv / divisor, response.mv, response.alarm_status
     
     def __enter__(self):
         """上下文管理器入口"""

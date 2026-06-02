@@ -9,6 +9,7 @@ import io
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
@@ -498,7 +499,7 @@ class ReportGenerator:
         alarm_section = ""
         if alarm_events:
             alarm_items = "".join([
-                f"<li>{e['time']}: {', '.join(e['alarms'])}</li>"
+                f"<li>{html_escape(e['time'])}: {html_escape(', '.join(e['alarms']))}</li>"
                 for e in alarm_events[:20]
             ])
             alarm_section = f"""
@@ -521,14 +522,14 @@ class ReportGenerator:
                     <td>{dp.pv:.2f}</td>
                     <td>{dp.sv:.2f}</td>
                     <td>{dp.mv}</td>
-                    <td>{', '.join(dp.alarms) if dp.alarms else '-'}</td>
+                    <td>{html_escape(', '.join(dp.alarms)) if dp.alarms else '-'}</td>
                 </tr>"""
                 for dp in sampled_data
             ])
         
         html = self.HTML_TEMPLATE
-        html = html.replace("{{title}}", title)
-        html = html.replace("{{device_id}}", device_id)
+        html = html.replace("{{title}}", html_escape(title))
+        html = html.replace("{{device_id}}", html_escape(device_id))
         html = html.replace("{{generated_time}}", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         html = html.replace("{{time_range}}", 
             f"{start_time.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -782,7 +783,7 @@ class ReportGenerator:
 
             section = f"""
             <div class="device-section">
-                <h2>{device_id}</h2>
+                <h2>{html_escape(device_id)}</h2>
                 <div class="meta-info">
                     <p><strong>数据点数量:</strong> {len(data_points)}</p>
                     <p><strong>时间范围:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -826,6 +827,7 @@ class ReportGenerator:
                 
                 channels = sorted(set(dp.channel for dp in data_points))
                 channel_info = ", ".join([f"通道{ch}" for ch in channels])
+                channel_info = html_escape(channel_info)
                 
                 running_count = sum(1 for dp in data_points if dp.running)
                 total_count = len(data_points)
@@ -843,7 +845,7 @@ class ReportGenerator:
 
                 section = f"""
                 <div class="device-section" style="border-left: 4px solid #2196F3;">
-                    <h2>{device_id} (蠕动泵)</h2>
+                    <h2>{html_escape(device_id)} (蠕动泵)</h2>
                     <div class="meta-info">
                         <p><strong>数据点数量:</strong> {len(data_points)}</p>
                         <p><strong>时间范围:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -884,7 +886,7 @@ class ReportGenerator:
             duration_str = f"{mins}分{secs}秒"
 
         html = self.COMBINED_HTML_TEMPLATE
-        html = html.replace("{{title}}", title)
+        html = html.replace("{{title}}", html_escape(title))
         html = html.replace("{{generated_time}}", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         html = html.replace("{{device_count}}", str(len(devices_data)))
         html = html.replace("{{duration}}", duration_str)

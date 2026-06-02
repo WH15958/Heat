@@ -1,0 +1,41 @@
+name: cspbbr3_baseline
+description: metadata demo / heating-only placeholder, not full synthesis recipe
+metadata:
+  material_system: CsPbBr3
+  batch_id: CsPbBr3_20260528_B01
+  condition_id: T140_t180_R2
+  sample_index: 3
+  operator: WH
+  recipe_version: v0.1
+steps:
+  - id: heat_up
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 140.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 1.0
+      timeout: 600
+
+  - id: hold_reaction
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 180
+
+  - id: cool_down
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 25.0
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 2.0
+      timeout: 900
+
+  - id: stop_all
+    type: emergency_stop

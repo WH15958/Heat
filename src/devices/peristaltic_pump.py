@@ -17,6 +17,8 @@ import time
 import threading
 import copy
 import atexit
+import weakref
+import struct
 
 from devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
@@ -26,7 +28,7 @@ from protocols.modbus_rtu import ModbusRTUProtocol, ModbusException
 from protocols.pump_params import (
     PumpRunMode, PumpRunStatus, PumpDirection, TimeUnit, FlowUnit,
     get_channel_address, get_register_info,
-    CHANNEL_CONTROL_REGISTERS, PARAMETER_REGISTERS, STATUS_REGISTERS,
+    CHANNEL_CONTROL_REGISTERS, PARAMETER_REGISTERS,
     CALIBRATION_REGISTERS, PUMP_HEAD_MODELS, PUMP_TUBE_MODELS,
 )
 
@@ -39,7 +41,7 @@ class PumpChannelConfig:
     channel: int
     enabled: bool = True
     pump_head: int = 5
-    tube_model: int = 0
+    tube_model: int = 1
     suck_back_angle: int = 0
     default_direction: PumpDirection = PumpDirection.CLOCKWISE
     max_flow_rate: float = 100.0
@@ -69,11 +71,13 @@ class PeristalticPumpConfig(DeviceConfig):
     """蠕动泵配置"""
     channels: List[PumpChannelConfig] = field(default_factory=list)
     slave_address: int = 1
-    baudrate: int = 9600
-    parity: str = 'N'
+    baudrate: int = 19200
+    parity: str = 'E'
     stopbits: int = 1
     bytesize: int = 8
     default_run_mode: PumpRunMode = PumpRunMode.FLOW_MODE
+    timeout: float = 2.0
+    poll_interval: float = 1.0
 
 
 @dataclass
@@ -130,7 +134,10 @@ class LabSmartPumpDevice(BaseDevice):
     ]
     
     MAX_CHANNELS = 4
-    
+    _atexit_refs: List[weakref.ref] = []
+    _atexit_registered = False
+    _atexit_lock = threading.Lock()
+
     def __init__(self, config: PeristalticPumpConfig, info: Optional[DeviceInfo] = None):
         """
         初始化蠕动泵设备
@@ -139,10 +146,11 @@ class LabSmartPumpDevice(BaseDevice):
             config: 蠕动泵配置对象
             info: 设备信息对象（可选）
         """
-        self._lock = threading.RLock()
         self._closed = False
         self._protocol: Optional[ModbusRTUProtocol] = None
         self._channel_data: Dict[int, PumpChannelData] = {}
+        self._consecutive_failures = 0
+        self._max_failures_before_reconnect = 5
         
         if info is None:
             info = DeviceInfo(
@@ -157,7 +165,22 @@ class LabSmartPumpDevice(BaseDevice):
         for ch_config in config.channels:
             self._channel_data[ch_config.channel] = PumpChannelData(channel=ch_config.channel)
         
-        atexit.register(self._force_disconnect)
+        self._weak_self = weakref.ref(self)
+        with LabSmartPumpDevice._atexit_lock:
+            LabSmartPumpDevice._atexit_refs.append(self._weak_self)
+            if not LabSmartPumpDevice._atexit_registered:
+                atexit.register(LabSmartPumpDevice._atexit_cleanup)
+                LabSmartPumpDevice._atexit_registered = True
+    
+    @classmethod
+    def _atexit_cleanup(cls):
+        with cls._atexit_lock:
+            refs = list(cls._atexit_refs)
+            cls._atexit_refs.clear()
+        for ref in refs:
+            obj = ref()
+            if obj is not None:
+                obj._force_disconnect()
     
     @property
     def protocol(self) -> Optional[ModbusRTUProtocol]:
@@ -166,8 +189,8 @@ class LabSmartPumpDevice(BaseDevice):
     
     @property
     def channel_data(self) -> Dict[int, PumpChannelData]:
-        """获取通道数据"""
-        return self._channel_data
+        """获取通道数据（深拷贝）"""
+        return copy.deepcopy(self._channel_data)
     
     def get_serial_handle(self):
         """获取串口句柄"""
@@ -182,19 +205,23 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 连接成功返回True
         """
-        if self.status == DeviceStatus.CONNECTED:
-            return True
+        with self._lock:
+            if self.status == DeviceStatus.CONNECTED:
+                return True
+            if self._status == DeviceStatus.CONNECTING:
+                self._logger.error("Connection already in progress")
+                return False
+            self.status = DeviceStatus.CONNECTING
         
-        self.status = DeviceStatus.CONNECTING
-        
+        protocol = None
         try:
             port = self.config.connection_params.get("port", "COM4")
-            baudrate = self.config.connection_params.get("baudrate", 9600)
-            parity = self.config.connection_params.get("parity", "N")
+            baudrate = self.config.connection_params.get("baudrate", 19200)
+            parity = self.config.connection_params.get("parity", "E")
             stopbits = self.config.connection_params.get("stopbits", 1)
             bytesize = self.config.connection_params.get("bytesize", 8)
             
-            self._protocol = ModbusRTUProtocol(
+            protocol = ModbusRTUProtocol(
                 port=port,
                 baudrate=baudrate,
                 parity=parity,
@@ -203,25 +230,30 @@ class LabSmartPumpDevice(BaseDevice):
                 timeout=self.config.timeout,
             )
             
-            if not self._protocol.connect():
-                self.status = DeviceStatus.ERROR
+            if not protocol.connect():
+                with self._lock:
+                    self.status = DeviceStatus.ERROR
                 return False
             
-            self.status = DeviceStatus.CONNECTED
+            if not protocol.is_connected:
+                protocol.disconnect()
+                with self._lock:
+                    self.status = DeviceStatus.ERROR
+                return False
+            
+            with self._lock:
+                if self.status == DeviceStatus.CONNECTED:
+                    protocol.disconnect()
+                    return True
+                self._protocol = protocol
+                self._closed = False
+                self.status = DeviceStatus.CONNECTED
+                protocol = None
+            
             self._logger.info(f"Pump {self.config.device_id} connected on {port} ({baudrate}, {parity})")
             
             try:
                 self._initialize_channels()
-                # 验证连接：尝试读取通道1状态，确保设备真的在响应
-                try:
-                    status = self.read_channel_status(1)
-                    self._logger.info(f"Connection verified: channel 1 status = {status}")
-                except Exception as verify_err:
-                    self._logger.error(f"Connection verification failed: {verify_err}")
-                    self._protocol.disconnect()
-                    self._protocol = None
-                    self.status = DeviceStatus.ERROR
-                    return False
             except Exception as e:
                 self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
             
@@ -229,7 +261,13 @@ class LabSmartPumpDevice(BaseDevice):
             
         except Exception as e:
             self._logger.error(f"Failed to connect pump: {e}")
-            self.status = DeviceStatus.ERROR
+            if protocol is not None:
+                try:
+                    protocol.disconnect()
+                except Exception as close_err:
+                    self._logger.warning(f"Failed to disconnect protocol during error cleanup: {close_err}")
+            with self._lock:
+                self.status = DeviceStatus.ERROR
             return False
     
     def disconnect(self) -> bool:
@@ -250,12 +288,19 @@ class LabSmartPumpDevice(BaseDevice):
             return True
     
     def _force_disconnect(self):
-        """强制断开 - 用于atexit回调"""
+        """强制断开 - 用于atexit回调，非阻塞"""
         try:
-            if self._protocol is not None:
-                self._protocol.disconnect()
-                self._protocol = None
-            self._closed = True
+            if self._lock.acquire(blocking=False):
+                try:
+                    if self._protocol is not None:
+                        self._protocol.disconnect()
+                        self._protocol = None
+                    self._closed = True
+                finally:
+                    self._lock.release()
+            else:
+                self._closed = True
+                self._logger.warning("Force disconnect: lock unavailable, marked closed")
         except Exception:
             pass
     
@@ -264,15 +309,46 @@ class LabSmartPumpDevice(BaseDevice):
         return self._closed
     
     def _initialize_channels(self):
-        """初始化所有通道"""
+        """初始化所有通道
+
+        按协议要求顺序：先使能通道(n000=1)，再设置软管/方向/模式等参数。
+        控制寄存器(n000-n006)必须单独设置，不可连续写多个。
+        n003(泵头型号)不可写，写操作返回ILLEGAL_DATA_ADDRESS，泵头出厂已固定。
+        流速适配通过软管型号(n004)实现，n004是设置流速范围的关键。
+        """
         for ch_config in self.config.channels:
             channel = ch_config.channel
             if ch_config.enabled:
-                self.enable_channel(channel, True)
-                self.set_pump_head(channel, ch_config.pump_head)
-                self.set_tube_model(channel, ch_config.tube_model)
-                if ch_config.suck_back_angle > 0:
-                    self.set_suck_back_angle(channel, ch_config.suck_back_angle)
+                try:
+                    self.stop_channel(channel)
+                    time.sleep(0.05)
+                    self.enable_channel(channel, True)
+                    time.sleep(0.1)
+                except Exception as e:
+                    self._logger.error(f"CH{channel} enable failed: {e}")
+                    continue
+                try:
+                    result = self.set_tube_model(channel, ch_config.tube_model)
+                    self._logger.info(f"CH{channel} set_tube_model={ch_config.tube_model} result={result}")
+                    time.sleep(0.1)
+                except Exception as e:
+                    self._logger.error(f"CH{channel} set_tube_model failed: {e}")
+                try:
+                    self.set_direction(channel, ch_config.default_direction)
+                    time.sleep(0.1)
+                except Exception as e:
+                    self._logger.error(f"CH{channel} set_direction failed: {e}")
+                try:
+                    self.set_run_mode(channel, PumpRunMode.FLOW_MODE)
+                    time.sleep(0.1)
+                except Exception as e:
+                    self._logger.error(f"CH{channel} set_run_mode failed: {e}")
+                try:
+                    if ch_config.suck_back_angle > 0:
+                        self.set_suck_back_angle(channel, ch_config.suck_back_angle)
+                        time.sleep(0.1)
+                except Exception as e:
+                    self._logger.error(f"CH{channel} set_suck_back_angle failed: {e}")
     
     def _get_slave_address(self) -> int:
         """获取从站地址"""
@@ -291,12 +367,16 @@ class LabSmartPumpDevice(BaseDevice):
         """
         with self._lock:
             if self._closed or self._protocol is None:
+                logger.warning(f"_write_register: closed={self._closed} protocol={type(self._protocol).__name__ if self._protocol else None} addr={address}")
                 return False
-            return self._protocol.write_single_register(
+            result = self._protocol.write_single_register(
                 self._get_slave_address(),
                 address,
                 value
             )
+            if not result:
+                logger.warning(f"_write_register FAILED: slave={self._get_slave_address()} addr={address} value={value}")
+            return result
     
     def _write_float(self, address: int, value: float) -> bool:
         """
@@ -317,27 +397,119 @@ class LabSmartPumpDevice(BaseDevice):
                 address,
                 value
             )
+
+    def _write_float_with_unit(self, float_addr: int, float_val: float,
+                                unit_addr: int, unit_val: int) -> bool:
+        """写浮点数和单位寄存器
+
+        协议功能码10H定义：写一个long/float型到保持寄存器（恰好2个寄存器）。
+        泵不支持0x10写3个寄存器，因此单位(0x06)和浮点数(0x10)必须分开写。
+        顺序：先写单位，再写浮点数——泵需要先知道单位才能验证流速值范围。
+
+        寄存器字序：ABCD（大端序，高字在前）。实测验证：0.1 mL/min和50.0 RPM
+        用ABCD写入成功并读回一致，CDAB写入返回ILLEGAL_DATA_VALUE。
+
+        Args:
+            float_addr: 浮点数寄存器地址
+            float_val: 浮点数值
+            unit_addr: 单位寄存器地址
+            unit_val: 单位值
+
+        Returns:
+            bool: 全部成功返回True
+        """
+        with self._lock:
+            if self._closed or self._protocol is None:
+                return False
+            current_unit = self._protocol.read_holding_registers(
+                self._get_slave_address(), unit_addr, 1
+            )
+            unit_known = current_unit is not None and len(current_unit) > 0
+            need_write_unit = not unit_known or current_unit[0] != int(unit_val)
+            if need_write_unit:
+                logger.info(f"_write_float_with_unit: unit addr={unit_addr} current={current_unit} target={unit_val} need_write=True")
+                if not self._protocol.write_single_register(
+                    self._get_slave_address(), unit_addr, int(unit_val)
+                ):
+                    if unit_known and current_unit[0] != int(unit_val):
+                        logger.error(f"_write_float_with_unit: unit write failed addr={unit_addr} val={unit_val}, current={current_unit[0]}, abort float write")
+                        return False
+                    logger.warning(f"_write_float_with_unit: unit write failed addr={unit_addr} val={unit_val}, unit unknown, trying float anyway")
+                else:
+                    time.sleep(0.1)
+            float_bytes = struct.pack('>f', float_val)
+            reg_high = (float_bytes[0] << 8) | float_bytes[1]
+            reg_low = (float_bytes[2] << 8) | float_bytes[3]
+            logger.info(f"_write_float_with_unit: float addr={float_addr} val={float_val} regs=[{reg_high}, {reg_low}]")
+            return self._protocol.write_multiple_registers(
+                self._get_slave_address(), float_addr, [reg_high, reg_low]
+            )
     
     def _read_registers(self, start_address: int, count: int) -> Optional[List[int]]:
         """
         读多个寄存器
-        
+
         Args:
             start_address: 起始地址
             count: 寄存器数量
-        
+
         Returns:
             Optional[List[int]]: 寄存器值列表
         """
         with self._lock:
             if self._closed or self._protocol is None:
                 return None
-            return self._protocol.read_holding_registers(
+            result = self._protocol.read_holding_registers(
                 self._get_slave_address(),
                 start_address,
                 count
             )
-    
+            if result is not None:
+                self._consecutive_failures = 0
+            else:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self._max_failures_before_reconnect:
+                    logger.warning(f"Pump {self.config.device_id}: reconnecting after {self._consecutive_failures} failures")
+                    self._try_reconnect_locked()
+            return result
+
+    def _try_reconnect_locked(self):
+        """尝试重新连接串口（在锁内调用）"""
+        if self._protocol is not None:
+            try:
+                self._protocol.disconnect()
+            except Exception:
+                pass
+            self._protocol = None
+
+        try:
+            port = self.config.connection_params.get("port", "COM4")
+            baudrate = self.config.connection_params.get("baudrate", 19200)
+            parity = self.config.connection_params.get("parity", "E")
+            stopbits = self.config.connection_params.get("stopbits", 1)
+            bytesize = self.config.connection_params.get("bytesize", 8)
+
+            protocol = ModbusRTUProtocol(
+                port=port,
+                baudrate=baudrate,
+                parity=parity,
+                stopbits=stopbits,
+                bytesize=bytesize,
+                timeout=self.config.timeout,
+            )
+
+            if protocol.connect():
+                self._protocol = protocol
+                self._consecutive_failures = 0
+                self.status = DeviceStatus.CONNECTED
+                logger.info(f"Pump {self.config.device_id} reconnected successfully")
+            else:
+                self.status = DeviceStatus.ERROR
+                logger.error(f"Pump {self.config.device_id} reconnect failed")
+        except Exception as e:
+            self.status = DeviceStatus.ERROR
+            logger.error(f"Pump {self.config.device_id} reconnect error: {e}")
+
     def _read_float(self, address: int) -> Optional[float]:
         """
         读浮点数寄存器
@@ -373,6 +545,7 @@ class LabSmartPumpDevice(BaseDevice):
         address = get_channel_address(0, channel)
         value = 1 if enable else 0
         result = self._write_register(address, value)
+        logger.info(f"CH{channel} enable({enable}) addr={address} result={result}")
         
         if result and channel in self._channel_data:
             self._channel_data[channel].enabled = enable
@@ -382,45 +555,46 @@ class LabSmartPumpDevice(BaseDevice):
     def start_channel(self, channel: int) -> bool:
         """
         启动通道
-        
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
+
         address = get_channel_address(1, channel)
         result = self._write_register(address, PumpRunStatus.START)
-        
+        logger.info(f"CH{channel} start addr={address} val={PumpRunStatus.START} result={result}")
+
         if result and channel in self._channel_data:
             self._channel_data[channel].running = True
             self._channel_data[channel].paused = False
-        
+
         return result
-    
+
     def stop_channel(self, channel: int) -> bool:
         """
         停止通道
-        
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
+
         address = get_channel_address(1, channel)
         result = self._write_register(address, PumpRunStatus.STOP)
-        
+
         if result and channel in self._channel_data:
             self._channel_data[channel].running = False
             self._channel_data[channel].paused = False
-        
+
         return result
     
     def pause_channel(self, channel: int) -> bool:
@@ -509,64 +683,66 @@ class LabSmartPumpDevice(BaseDevice):
     def set_run_mode(self, channel: int, mode: PumpRunMode) -> bool:
         """
         设置运行模式
-        
+
+        协议5.1：控制寄存器(n006)可读可写，不需要先停止通道。
+        但协议5.2：参数寄存器(n100-n112)除n110外必须在停止状态下设置。
+        因此切换模式后如需设置参数，应先停止通道。
+
         Args:
             channel: 通道号(1-4)
             mode: 运行模式
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
-        self.stop_channel(channel)
-        
+
         address = get_channel_address(6, channel)
         result = self._write_register(address, mode)
-        
+
         if result and channel in self._channel_data:
             self._channel_data[channel].run_mode = mode
-        
+
         return result
     
     def set_flow_rate(self, channel: int, flow_rate: float, unit: FlowUnit = FlowUnit.ML_MIN) -> bool:
-        """
-        设置流速
-        
+        """设置流速
+
+        协议5.2：除流速(n110)外，其余参数寄存器必须在停止状态下设置。
+        n112(流速单位)属于参数寄存器，必须在通道停止时写入。
+        调用方需确保通道已停止。
+
         Args:
             channel: 通道号(1-4)
             flow_rate: 流速值
             unit: 流速单位
-        
+
         Returns:
             bool: 成功返回True
         """
         if not self._validate_channel(channel):
             return False
-        
+
         flow_addr = get_channel_address(110, channel)
         unit_addr = get_channel_address(112, channel)
-        
-        if not self._write_float(flow_addr, flow_rate):
-            return False
-        
-        if not self._write_register(unit_addr, unit):
-            return False
-        
-        if channel in self._channel_data:
+
+        result = self._write_float_with_unit(flow_addr, flow_rate, unit_addr, unit)
+
+        if result and channel in self._channel_data:
             self._channel_data[channel].flow_rate = flow_rate
             self._channel_data[channel].flow_unit = unit
-        
-        return True
+
+        return result
     
-    def set_dispense_volume(self, channel: int, volume: float) -> bool:
+    def set_dispense_volume(self, channel: int, volume: float, unit: int = 1) -> bool:
         """
         设置分装液量
         
         Args:
             channel: 通道号(1-4)
-            volume: 液量(mL)
+            volume: 液量
+            unit: 液量单位 (0=uL, 1=mL, 2=L)
         
         Returns:
             bool: 成功返回True
@@ -574,8 +750,10 @@ class LabSmartPumpDevice(BaseDevice):
         if not self._validate_channel(channel):
             return False
         
-        address = get_channel_address(104, channel)
-        result = self._write_float(address, volume)
+        volume_addr = get_channel_address(104, channel)
+        unit_addr = get_channel_address(106, channel)
+        
+        result = self._write_float_with_unit(volume_addr, volume, unit_addr, unit)
         
         if result and channel in self._channel_data:
             self._channel_data[channel].remaining_volume = volume
@@ -617,13 +795,7 @@ class LabSmartPumpDevice(BaseDevice):
         time_addr = get_channel_address(107, channel)
         unit_addr = get_channel_address(109, channel)
         
-        if not self._write_float(time_addr, time_value):
-            return False
-        
-        if not self._write_register(unit_addr, unit):
-            return False
-        
-        return True
+        return self._write_float_with_unit(time_addr, time_value, unit_addr, unit)
     
     def set_repeat_count(self, channel: int, count: int) -> bool:
         """
@@ -660,13 +832,7 @@ class LabSmartPumpDevice(BaseDevice):
         time_addr = get_channel_address(101, channel)
         unit_addr = get_channel_address(103, channel)
         
-        if not self._write_float(time_addr, time_value):
-            return False
-        
-        if not self._write_register(unit_addr, unit):
-            return False
-        
-        return True
+        return self._write_float_with_unit(time_addr, time_value, unit_addr, unit)
     
     def set_pump_head(self, channel: int, pump_head: int) -> bool:
         """
@@ -691,7 +857,7 @@ class LabSmartPumpDevice(BaseDevice):
         
         Args:
             channel: 通道号(1-4)
-            tube_model: 软管型号编号
+            tube_model: 软管型号编号(0-13)
         
         Returns:
             bool: 成功返回True
@@ -699,8 +865,43 @@ class LabSmartPumpDevice(BaseDevice):
         if not self._validate_channel(channel):
             return False
         
+        if not (0 <= tube_model <= 13):
+            self._logger.warning(f"CH{channel} invalid tube_model={tube_model}, must be 0-13")
+            return False
+        
         address = get_channel_address(4, channel)
         return self._write_register(address, tube_model)
+
+    def get_tube_model(self, channel: int) -> Optional[int]:
+        """读取软管型号
+
+        Args:
+            channel: 通道号(1-4)
+
+        Returns:
+            Optional[int]: 软管型号，失败返回None
+        """
+        if not self._validate_channel(channel):
+            return None
+        address = get_channel_address(4, channel)
+        values = self._read_registers(address, 1)
+        if values is not None and len(values) > 0:
+            return values[0]
+        return None
+
+    def get_channel_config(self, channel: int) -> Optional["PumpChannelConfig"]:
+        """获取通道配置
+
+        Args:
+            channel: 通道号(1-4)
+
+        Returns:
+            Optional[PumpChannelConfig]: 通道配置，不存在返回None
+        """
+        for ch_config in self.config.channels:
+            if ch_config.channel == channel:
+                return ch_config
+        return None
     
     def set_suck_back_angle(self, channel: int, angle: int) -> bool:
         """
@@ -794,47 +995,86 @@ class LabSmartPumpDevice(BaseDevice):
     def read_channel_status(self, channel: int) -> Optional[PumpChannelData]:
         """
         读取通道状态
-        
+
+        协议5.1：控制寄存器(n000-n006)必须单独设置，不接收一条指令连续设置多个寄存器。
+        经测试，该限制同样适用于读取操作，因此控制寄存器改为逐个读取。
+        参数寄存器(n100-n112)支持同时设置多个寄存器，因此可以批量读取。
+
         Args:
             channel: 通道号(1-4)
-        
+
         Returns:
             Optional[PumpChannelData]: 通道数据的深拷贝
         """
         if not self._validate_channel(channel):
             return None
-        
+
         data = copy.deepcopy(self._channel_data.get(channel, PumpChannelData(channel=channel)))
-        
-        enable_addr = get_channel_address(300, channel)
-        run_addr = get_channel_address(301, channel)
-        dir_addr = get_channel_address(302, channel)
-        mode_addr = get_channel_address(303, channel)
-        remain_time_addr = get_channel_address(304, channel)
-        remain_vol_addr = get_channel_address(306, channel)
-        current_flow_addr = get_channel_address(308, channel)
-        current_speed_addr = get_channel_address(310, channel)
-        dispensed_vol_addr = get_channel_address(312, channel)
-        repeat_addr = get_channel_address(314, channel)
-        
-        values = self._read_registers(enable_addr, 16)
-        if values is not None:
-            data.enabled = bool(values[0])
-            run_status = values[1]
-            data.running = run_status == PumpRunStatus.START or run_status == PumpRunStatus.FULL_SPEED
+
+        control_base = get_channel_address(0, channel)
+        param_base = get_channel_address(100, channel)
+
+        # 协议5.1：控制寄存器必须单独读写，不支持批量操作
+        control_values = []
+        for offset in range(7):
+            reg_val = self._read_registers(control_base + offset, 1)
+            if reg_val is not None and len(reg_val) >= 1:
+                control_values.append(reg_val[0])
+            else:
+                control_values.append(None)
+
+        if all(v is not None for v in control_values):
+            logger.debug(f"CH{channel} control regs: {control_values}")
+            data.enabled = bool(control_values[0])
+            run_status = control_values[1]
+            data.running = run_status in (PumpRunStatus.START, PumpRunStatus.FULL_SPEED)
             data.paused = run_status == PumpRunStatus.PAUSE
-            data.direction = PumpDirection(values[2])
-            data.run_mode = PumpRunMode(values[3])
-            data.completed_repeats = values[14]
-        
-        data.remaining_time = self._read_float(remain_time_addr) or 0.0
-        data.remaining_volume = self._read_float(remain_vol_addr) or 0.0
-        data.flow_rate = self._read_float(current_flow_addr) or 0.0
-        data.current_speed = self._read_float(current_speed_addr) or 0.0
-        data.dispensed_volume = self._read_float(dispensed_vol_addr) or 0.0
-        
+            data.direction = self._safe_enum(PumpDirection, control_values[2], PumpDirection.CLOCKWISE)
+            data.run_mode = self._safe_enum(PumpRunMode, control_values[6], PumpRunMode.FLOW_MODE)
+        else:
+            logger.debug(f"CH{channel} control read failed: {control_values}")
+            self._channel_data[channel] = data
+            return data
+
+        param_values = self._read_registers(param_base, 13)
+        if param_values is not None and len(param_values) >= 13:
+            data.completed_repeats = param_values[0]
+            data.remaining_volume = self._parse_float_from_registers(param_values[4], param_values[5])
+            data.flow_rate = self._parse_float_from_registers(param_values[10], param_values[11])
+            data.remaining_time = self._parse_float_from_registers(param_values[7], param_values[8])
+        else:
+            logger.debug(f"CH{channel} param read failed, trying key fields only")
+            flow_addr = get_channel_address(110, channel)
+            _flow_rate = self._read_float(flow_addr)
+            if _flow_rate is not None:
+                data.flow_rate = _flow_rate
+
         self._channel_data[channel] = data
         return data
+
+    @staticmethod
+    def _parse_float_from_registers(reg_high: int, reg_low: int) -> float:
+        """从两个MODBUS寄存器解析IEEE754浮点数
+
+        寄存器字序为ABCD（大端序，高字在前）：values[0]=高字, values[1]=低字。
+
+        Args:
+            reg_high: 高位寄存器值（低地址，values[0]）
+            reg_low: 低位寄存器值（高地址，values[1]）
+
+        Returns:
+            float: 解析后的浮点数
+        """
+        try:
+            float_bytes = bytes([
+                (reg_high >> 8) & 0xFF,
+                reg_high & 0xFF,
+                (reg_low >> 8) & 0xFF,
+                reg_low & 0xFF,
+            ])
+            return struct.unpack('>f', float_bytes)[0]
+        except Exception:
+            return 0.0
     
     def is_connected(self) -> bool:
         """
@@ -901,6 +1141,23 @@ class LabSmartPumpDevice(BaseDevice):
         
         return pump_data
     
+    @staticmethod
+    def _safe_enum(enum_cls, value, default):
+        """安全枚举转换，越界时返回默认值
+
+        Args:
+            enum_cls: 枚举类
+            value: 原始值
+            default: 默认值
+
+        Returns:
+            枚举值
+        """
+        try:
+            return enum_cls(value)
+        except (ValueError, KeyError):
+            return default
+
     def _validate_channel(self, channel: int) -> bool:
         """
         验证通道号

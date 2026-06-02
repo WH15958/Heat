@@ -100,9 +100,8 @@ class ParameterCode(IntEnum):
     MV_ALARM = 77
     OUTPUT_STATUS = 78
     ROOM_TEMP = 79
-    MV_EXT = 80
     MODEL_CODE = 21
-    
+
     SP1 = 80
     T1 = 81
     SP2 = 82

@@ -9,6 +9,13 @@ class: text-center
 
 ## 从通信协议到项目实现
 
+> 说明：本文件是组会演示材料，部分代码片段和接口示意用于讲解演进过程，不作为当前项目的唯一事实来源。  
+> 当前有效的使用与开发规范请优先参考：
+> - `README.md`
+> - `docs/user_guide.md`
+> - `docs/developer_guide.md`
+> - `context/PROJECT_CONTEXT.md`
+
 ---
 layout: default
 ---
