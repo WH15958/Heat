@@ -184,3 +184,62 @@ git push github develop-web
 - 文档与真实行为冲突
 - 工作区混入无关产物
 - 仅做了“页面层面验证”，但改动实际触及硬件控制语义
+
+---
+
+## 9. 分支管理规则
+
+当前仓库正式采用任务分支制：
+
+- `master` 是唯一长期保留的稳定主线
+- 日常开发不直接在 `master` 上进行
+- 每个独立项目或功能从最新 `master` 切出新分支
+- 一个分支只承载一个明确主题
+- 合并进 `master` 后，任务分支默认删除本地和远程引用
+
+推荐命名：
+
+- `feature/<topic>`
+- `fix/<topic>`
+- `docs/<topic>`
+
+示例：
+
+- `feature/automation-valve-microwave`
+- `fix/experiment-stop-flow`
+- `docs/branch-policy`
+
+只有在以下情况，才允许保留阶段性集成分支：
+
+- 大项目拆成多个子功能并行推进
+- 短期内不适合频繁直接合入 `master`
+- 分支创建时已经写明用途、生命周期和删除条件
+
+### 9.1 标准生命周期
+
+```bash
+git checkout master
+git pull <remote> master
+git checkout -b feature/<topic>
+git push origin feature/<topic>
+git push github feature/<topic>
+```
+
+合并回 `master` 后默认执行：
+
+```bash
+git branch -d feature/<topic>
+git push origin --delete feature/<topic>
+git push github --delete feature/<topic>
+```
+
+### 9.2 当前仓库的收尾判定
+
+如果一个阶段分支满足以下条件，通常应删除：
+
+- `master` 已包含该分支关键提交
+- 工作区干净
+- 两个远程的 `master` 已同步
+- 该分支不再承担长期集成职责
+
+当前仓库中的 `develop-web` 就属于这种情况：它是已完成并已合入主线的阶段性开发分支，不应继续承载下一轮硬件集成开发。

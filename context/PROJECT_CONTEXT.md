@@ -3,8 +3,8 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-06-01  
-版本：v3.0-doc-reorg
+最后更新：2026-06-02  
+版本：v3.1-branch-policy
 
 ---
 
@@ -255,6 +255,19 @@ AI 不应做的是：
 - `src/science/sample_record.py`
 - `src/experiment/experiment_logger.py`
 - YAML metadata 字段是否与当前规范一致
+
+---
+
+## 8. 当前分支执行原则
+
+- 当前长期主线是 `master`
+- 当前仓库正式采用任务分支制，而不是长期 `develop` 模式
+- 每个新需求应从最新 `master` 切出独立任务分支
+- 任务分支合并进 `master` 后默认删除
+- `develop-web` 已完成阶段使命；后续不应继续承载新需求开发
+- AI 不要在 `master` 上直接展开常规开发
+- AI 不要默认复用已经合并完成的旧开发分支
+- 当前下一阶段计划分支名：`feature/automation-valve-microwave`
 
 ---
 
