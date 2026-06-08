@@ -32,8 +32,26 @@
 
 1. 关闭其他串口软件
 2. 确认旧的 Python 进程已退出
-3. 查看 `docs/lock_cleanup_usage.md`
-4. 必要时使用 `scripts/cleanup_locks.py`
+3. 必要时使用锁文件清理工具：
+
+```bash
+# 列出所有锁文件
+python scripts/cleanup_locks.py --list
+
+# 清理过期锁文件
+python scripts/cleanup_locks.py
+
+# 强制清理所有锁文件，仅限确认没有其他 Heat/串口进程时使用
+python scripts/cleanup_locks.py --force
+```
+
+锁文件清理能力也集成在 `src/utils/serial_manager.py`：
+
+- `list_all_serial_locks()`：列出当前锁文件
+- `cleanup_all_stale_serial_locks()`：清理过期锁文件
+- `cleanup_all_stale_serial_locks(include_current_process=True)`：强制清理所有锁文件
+
+生产或真实联调环境中慎用 `--force`，它可能清理其他仍在运行进程持有的锁。
 
 ---
 

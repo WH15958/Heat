@@ -243,3 +243,55 @@ git push github --delete feature/<topic>
 - 该分支不再承担长期集成职责
 
 当前仓库中的 `develop-web` 就属于这种情况：它是已完成并已合入主线的阶段性开发分支，不应继续承载下一轮硬件集成开发。
+
+---
+
+## 10. Codex `/git` 判断式流程
+
+Codex 收到 `/git` 时，按以下含义执行：
+
+```text
+按需验证 -> 按需更新文档 -> 提交 -> 等待用户确认后推送
+```
+
+### 10.1 按变更类型选择验证
+
+不是所有提交都需要完整编译验证：
+
+| 变更类型 | 默认验证 |
+| --- | --- |
+| 仅文档、规则、Skill | `git diff --check -- <paths>` + 内容一致性检查 |
+| Python 后端 | `python tests\test_metadata.py` + 相关 import 检查 |
+| Campaign / planner | 后端检查 + `import src.web.api.campaigns; import src.campaigns.store; import src.ml.planner` |
+| 前端源码 | `cd frontend; npm run build -- --mode production` |
+| YAML parser / ExperimentEngine | metadata 测试 + 定向行为或 import 检查 |
+| 硬件控制语义 | 软件检查 + 用户/实验室实机 smoke test 确认 |
+
+### 10.2 文档同步对应关系
+
+| 变更场景 | 应同步文档 |
+| --- | --- |
+| 新页面、新按钮、新用户操作流程 | `docs/user_guide.md` |
+| API、请求/响应字段、后端架构或开发流程 | `docs/developer_guide.md` |
+| YAML action、wait type、metadata 字段或实验文件格式 | `docs/experiment_yaml_spec.md` |
+| `sample_id`、`samples.csv`、campaign、trial、recommendation、characterization | `docs/campaign_workflow.md`；用户可见时也更新 `docs/user_guide.md` |
+| 验证、分支、提交、合并、推送或 `/git` 流程 | `docs/testing_and_merge_flow.md` |
+| 项目定位、主要能力、启动方式 | `README.md` |
+| AI 长期需要知道的项目事实、硬件边界、agent 规则 | `context/PROJECT_CONTEXT.md` 和/或 `AGENTS.md` |
+
+### 10.3 PowerShell 性能约定
+
+当前 Windows 工作区中，宽泛 PowerShell 输出可能明显变慢。默认优先使用：
+
+- `rg` / `rg --files`
+- `git status --short -- <paths>`
+- `git diff -- <paths>`
+- Node `spawnSync` 或定向文件读取处理大输出
+
+避免把递归目录扫描、大 diff、无路径限定的 `git status`、大 `Format-Table` 输出作为默认路径。
+
+### 10.4 推送与清理
+
+- `/git` 不自动推送；必须等待用户明确确认。
+- `frontend/auto-imports.d.ts` 和 `frontend/components.d.ts` 是生成声明文件，提交前先看内容 diff 和 EOL 状态。
+- Git 提示 unreachable loose objects 通常是对象积累，不是代码错误；不放入 `/git` 默认流程。需要维护时单独执行 `git count-objects -v` 和 `git gc`，更激进的 `git gc --prune=now` 需用户确认。
