@@ -1,0 +1,171 @@
+# AGENTS.md
+
+Codex project instructions for Heat.
+
+Heat is a lab automation and experiment-control system. Treat it as a hardware-adjacent control project, not as a generic web app. Be conservative, verify behavior, and keep device safety and experiment traceability ahead of convenience.
+
+## 1. Ground Truth
+
+- Read `context/PROJECT_CONTEXT.md` before non-trivial code changes.
+- Use current code as the source of truth when docs and implementation disagree.
+- For development details, check `docs/developer_guide.md`.
+- For user-facing behavior, check `docs/user_guide.md`.
+- For YAML experiments, check `docs/experiment_yaml_spec.md`.
+- For testing and merge workflow, check `docs/testing_and_merge_flow.md`.
+- For Campaign / human-in-the-loop optimization work, check `docs/campaign_workflow.md`.
+
+## 2. Core Safety Rules
+
+- Do not rewrite synchronous device drivers into async/threaded drivers.
+- Do not add polling, heartbeats, or command queues inside `src/devices/`.
+- Device calls should remain synchronous; async bridging belongs in the Web or orchestration layer.
+- Do not bypass existing serial/resource management.
+- Do not let WebSocket connect/disconnect events start, stop, or otherwise control hardware.
+- Treat device return values seriously. A `False` return or timeout must not be logged as success.
+- Preserve stop/pause/resume semantics and make long waits interruptible.
+- Planner or ML code may recommend parameters, but must not directly control hardware.
+
+## 3. Change Discipline
+
+- Make the smallest change that solves the request.
+- Do not refactor adjacent code unless the task requires it.
+- Match the existing style even when it is not your preferred style.
+- Do not invent unsupported actions, wait types, routes, device capabilities, or chemistry recipes.
+- Keep generated/runtime data out of commits unless the project already tracks that exact artifact intentionally.
+- In this repo, broad PowerShell scans can be slow. Prefer targeted reads, `rg`, and file-specific git commands.
+
+## 4. Documentation Rules
+
+Update docs when changes affect:
+
+- public routes or pages
+- API paths, request bodies, or response shapes
+- YAML actions, wait types, or metadata fields
+- stop/pause/resume/wait/log behavior
+- sample tracking, `sample_id`, `samples.csv`, campaigns, trials, or characterization flow
+- build, test, merge, or push workflow
+
+Doc ownership:
+
+- `README.md`: project entry and high-level usage
+- `context/PROJECT_CONTEXT.md`: AI-facing system constraints and current project facts
+- `docs/user_guide.md`: user-facing operation and behavior
+- `docs/developer_guide.md`: architecture and maintenance
+- `docs/experiment_yaml_spec.md`: YAML schema and examples
+- `docs/testing_and_merge_flow.md`: validation, commit, merge, and push workflow
+- `docs/campaign_workflow.md`: human-in-the-loop batch optimization workflow
+
+If an existing long Chinese document displays with mojibake in the terminal, avoid rewriting it wholesale. Prefer targeted edits or add a focused new doc.
+
+## 5. Validation
+
+Run the narrowest checks that match the change. For most software changes, use:
+
+```powershell
+python tests\test_metadata.py
+python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"
+cd frontend
+npm run build -- --mode production
+```
+
+For Campaign-related changes, also include:
+
+```powershell
+python -c "import src.web.api.campaigns; import src.campaigns.store; import src.ml.planner"
+```
+
+If `pytest` is installed, run targeted pytest files such as:
+
+```powershell
+python -m pytest tests\test_campaigns.py -q
+```
+
+If `pytest` is not installed, say so and use an equivalent targeted Python validation when practical.
+
+Hardware timing, protocol writes, serial resource behavior, or real start/stop behavior require human/lab confirmation or real-device smoke testing. Software checks do not replace that.
+
+## 6. Git Workflow
+
+Use task branches for normal development. Do not start routine work directly on `master`.
+
+Before committing:
+
+1. Inspect the worktree with targeted `git status --short` and relevant diffs.
+2. Distinguish real source changes from generated files and line-ending churn.
+3. Run validation.
+4. Update documentation when required.
+5. Stage only relevant files.
+6. Run `git diff --cached --check`.
+7. Commit with a concise message.
+
+Recommended commit prefixes:
+
+- `feat:`
+- `fix:`
+- `docs:`
+- `refactor:`
+- `test:`
+
+Do not push unless the user explicitly confirms.
+
+When the user says `/git`, interpret it as:
+
+```text
+compile/validate -> update docs -> commit -> wait for user confirmation before push
+```
+
+`/git` does not mean:
+
+```text
+push automatically
+reset unrelated files
+clean untracked files
+overwrite user changes
+```
+
+If pushing after user confirmation, push the current branch to both configured remotes when available:
+
+```powershell
+git push origin <branch>
+git push github <branch>
+```
+
+## 7. Generated Files
+
+- `frontend/auto-imports.d.ts` is generated by `unplugin-auto-import`.
+- `frontend/components.d.ts` is generated by `unplugin-vue-components`.
+- These files may change after frontend builds.
+- Check content diffs before deciding whether to commit them.
+- Do not delete or revert generated declaration files blindly.
+
+## 8. Human-in-the-loop Optimization Boundary
+
+The current intelligent-experiment direction is batch, human-in-the-loop optimization:
+
+- Heat records campaigns, trials, recommendations, samples, and offline characterization results.
+- `ManualPlanner` is the default planner.
+- Future ML planners should reuse the planner interface and Campaign history.
+- Offline characterization is manually entered in v1.
+- Trial parameters are not automatically injected into YAML in v1.
+- Experiment execution remains explicit and human-supervised through the existing experiment workflow.
+
+## 9. Responsibility Split
+
+Codex can:
+
+- modify software
+- add tests
+- update docs
+- prepare templates and checklists
+- validate imports/builds
+- reason about architecture and data flow
+
+The user/lab must confirm:
+
+- actual device identity and wiring
+- safety authorization
+- SOP changes
+- reagent compatibility
+- real hardware behavior
+- vendor/procurement decisions
+- whether a result is scientifically valid for planner feedback
