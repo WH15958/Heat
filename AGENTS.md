@@ -8,6 +8,7 @@ Heat is a lab automation and experiment-control system. Treat it as a hardware-a
 
 - Read `context/PROJECT_CONTEXT.md` before non-trivial code changes.
 - Use current code as the source of truth when docs and implementation disagree.
+- Check `.codex/skills/` for project-level skills before handling matching workflow requests, such as `/git`, commit, validation, or push tasks.
 - Check these docs when the change touches their area:
   - `docs/user_guide.md`: user-facing operation and behavior.
   - `docs/developer_guide.md`: architecture, APIs, and maintenance.
