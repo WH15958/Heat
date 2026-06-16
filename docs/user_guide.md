@@ -86,6 +86,7 @@ npm run build
 
 如果你只需要会用，直接在页面里选模式、填参数即可。  
 如果你需要理解 YAML 字段和单位，请看 [experiment_yaml_spec.md](experiment_yaml_spec.md)。
+如果你要把蠕动泵接入前驱体管路、微波入口或长管路定量输运，请先按 [system_engineering_design.md](system_engineering_design.md) 做死体积、预灌和真实流量标定。
 
 ---
 

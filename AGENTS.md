@@ -42,6 +42,8 @@ Heat is a lab automation and experiment-control system. Treat it as a hardware-a
 This workspace can stall on broad PowerShell output. Prefer narrow, low-output commands.
 
 - Use `rg` or `rg --files` for search.
+- For simple filename-only directory listings, prefer `cmd /c dir /b "<path>"` over PowerShell object formatting.
+- Prefer PowerShell for normal project commands such as `git`, `python`, `npm`, and targeted `rg` searches.
 - Prefer path-scoped git commands such as `git status --short -- <paths>` and `git diff -- <paths>`.
 - For large reads or noisy git output, use Node `spawnSync` or targeted file reads instead of broad PowerShell pipelines.
 - Avoid defaulting to recursive `Get-ChildItem`, large `Format-Table` output, unscoped `git status`, or huge diffs through PowerShell.
