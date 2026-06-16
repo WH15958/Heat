@@ -94,6 +94,8 @@ python -m pytest tests\test_campaigns.py -q
 
 If `pytest` is not installed, say so and use an equivalent targeted Python validation when practical.
 
+When a validation command fails because a Python package is missing, judge whether that package is essential for the requested validation. If it is essential, ask the user whether to install it, recommend the minimal package/command, and wait for confirmation instead of automatically switching to a weaker fallback. Use a fallback only when the missing package is non-essential for the current change, a practical equivalent check exists, or the user declines installation.
+
 ## 7. Git Workflow
 
 Use task branches for normal development. Do not start routine work directly on `master`.
