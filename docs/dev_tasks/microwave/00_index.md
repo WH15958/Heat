@@ -6,8 +6,8 @@
 
 - 分支：`feature/automation-valve-microwave`
 - 资料来源：
-  - `MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc`
-  - `26.6.10-单模modbus地址.xlsx`
+  - `docs/device_materials/MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc`
+  - `docs/device_materials/微波反应仪通信协议.md`（由 `26.6.10-单模modbus地址.xlsx` 转换并校验一致）
   - 当前代码：`src/devices/`、`src/protocols/`、`src/web/`、`src/experiment/`、`frontend/src/`
 - 全局状态：目标文档已拆分，真实开发尚未开始。
 

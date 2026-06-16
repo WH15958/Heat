@@ -288,7 +288,7 @@ class StartPumpRequest(BaseModel):
 
 **学习资源**：
 - 《MODBUS 协议中文版》（网上可搜到）
-- 本项目 `多通道蠕动泵MODBUS通信协议.md`
+- 本项目 `docs/device_materials/多通道蠕动泵MODBUS通信协议.md`
 
 ### 5.3 struct 模块
 

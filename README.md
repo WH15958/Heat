@@ -76,6 +76,7 @@ python run_server.py
 
 - [docs/user_guide.md](docs/user_guide.md)：系统启动、页面使用、实验执行、行为语义、常见问题
 - [docs/system_engineering_design.md](docs/system_engineering_design.md)：前驱体加热、蠕动泵、管路、微波入口、收集与标定的工程连接层设计
+- [docs/device_materials/](docs/device_materials/)：设备说明书、通信协议原始资料和转换版资料
 - [docs/experiment_yaml_spec.md](docs/experiment_yaml_spec.md)：实验 YAML 规范与示例
 - [docs/troubleshooting.md](docs/troubleshooting.md)：常见故障排查
 

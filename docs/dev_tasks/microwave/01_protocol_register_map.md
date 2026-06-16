@@ -6,8 +6,8 @@
 
 ## 输入资料
 
-- `MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc`
-- `26.6.10-单模modbus地址.xlsx`
+- `docs/device_materials/MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc`
+- `docs/device_materials/微波反应仪通信协议.md`（由 `26.6.10-单模modbus地址.xlsx` 转换并校验一致）
 - 参考现有协议代码：
   - `src/protocols/modbus_rtu.py`
   - `src/protocols/pump_params.py`
@@ -33,9 +33,9 @@
 - 默认串口：9600 baud，8 data bits，1 stop bit，无校验。
 - 默认站号：1。
 - DB9 通信接口：3 = 485A，8 = 485B。
-- Excel 里的 `40001` 风格地址是人类可读保持寄存器地址；代码必须转换为 PDU 地址。
-- Excel 工作表名称为 `26.6.`，有效数据范围为 `B2:G143`。
-- Word 说明书未给出 Modbus 细节；通信事实以 Excel 为准，设备安全和操作语义以 Word 为准。
+- 原 Excel / 转换版 Markdown 里的 `40001` 风格地址是人类可读保持寄存器地址；代码必须转换为 PDU 地址。
+- 原 Excel 工作表名称为 `26.6.`，有效数据范围为 `B2:G143`；转换版 Markdown 已按合并单元格展开校验一致。
+- Word 说明书未给出 Modbus 细节；通信事实以原 Excel / 转换版协议表为准，设备安全和操作语义以 Word 为准。
 
 ## 地址换算
 
