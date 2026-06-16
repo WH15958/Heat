@@ -39,6 +39,15 @@ from .pump_params import (
     PUMP_HEAD_MODELS,
     PUMP_TUBE_MODELS,
 )
+from .microwave_params import (
+    MicrowaveMode,
+    holding_address,
+    CONTROL_CONSTANT_RATE,
+    CONTROL_AUTO_POWER,
+    CONTROL_MANUAL_POWER,
+    CONTROL_MICROWAVE_START,
+    CONTROL_WORD,
+)
 
 __all__ = [
     'AIBUSProtocol',
@@ -73,4 +82,11 @@ __all__ = [
     'CALIBRATION_REGISTERS',
     'PUMP_HEAD_MODELS',
     'PUMP_TUBE_MODELS',
+    'MicrowaveMode',
+    'holding_address',
+    'CONTROL_CONSTANT_RATE',
+    'CONTROL_AUTO_POWER',
+    'CONTROL_MANUAL_POWER',
+    'CONTROL_MICROWAVE_START',
+    'CONTROL_WORD',
 ]

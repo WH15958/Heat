@@ -165,6 +165,27 @@ git diff --check -- src tests config
 
 ## 完成记录
 
-- 状态：未开始。
-- 验证：未运行。
-- 交接：下一任务 `03_backend_api_ws.md` 负责把驱动暴露给 Web 层。
+- 状态：2026-06-16 已完成本任务范围内的同步后端驱动、协议常量、配置模型、`DeviceManager` 注册和 fake Modbus 单元测试。真实寄存器写入由 `MicrowaveConfig.enable_control_writes=false` 默认阻断，实验自动控制入口字段 `allow_experiment_control=false` 已保留但未接入 YAML。
+- 已完成：
+  - 新增 `src/protocols/microwave_params.py`，统一使用 PDU 地址，覆盖 `MicrowaveMode`、`holding_address()`、模式/状态/控制字寄存器和 bit mask。
+  - 新增 `src/devices/microwave.py`，实现同步 `MicrowaveDevice`、`MicrowaveSegment`、`MicrowaveStatus`、`MicrowaveConfig`、`MicrowaveData`，不添加线程、轮询、心跳或命令队列。
+  - 更新 `src/utils/config.py` 和 `config/system_config.yaml`，默认微波仪禁用，真实写入禁用，实验自动控制禁用。
+  - 更新 `src/web/device_manager.py`，增加微波仪集合、注册、连接、读取、配置、start/stop、状态汇总和清理方法；未新增 REST API、WebSocket、前端或 YAML 自动化。
+  - 新增 `tests/test_microwave.py`，使用 fake Modbus 覆盖地址转换、控制字、参数校验、状态读取、失败传播和默认写入保护。
+- 验证：
+  - `python tests\test_metadata.py`：通过，36 passed, 0 failed。
+  - `python -m pytest tests\test_microwave.py -q`：未执行成功，当前环境缺少 `pytest`（`No module named pytest`）。
+  - `python tests\test_microwave.py`：通过，10 passed, 0 failed，作为 pytest 不可用时的等价 fallback。
+  - `python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"`：通过，退出码 0。
+  - `git diff --check -- src tests config`：通过，退出码 0；仅提示部分已编辑文本下次 Git 触碰时 LF/CRLF 转换，无 whitespace error。
+- 遗留问题：
+  - 真实硬件未连接、未写入、未 smoke test；`enable_control_writes` 必须保持默认关闭，直到实验室确认串口、接线、安全授权和真实写入时序。
+  - `40118`/`40119` 浮点温度字节序/字序仍为软件假设，fake 测试仅覆盖成功和回退路径，不能当作实机确认。
+  - `40151` stop 当前实现写入 `0`，只在 fake protocol 中验证；真实设备 stop 语义需 smoke test 确认。
+  - 温度、功率、电流寄存器比例系数仍未确认，驱动先按原始寄存器值读写。
+  - API、WebSocket、前端和 YAML 自动化均未实现，按任务拆分留给后续窗口。
+- 交接给 03：
+  - `03_backend_api_ws.md` 可以从 `DeviceManager` 的 `read_microwave_data()`、`configure_microwave_*()`、`start_microwave()`、`stop_microwave()` 暴露 Web 层接口。
+  - Web 层只做同步驱动的桥接，异步入口使用既有 `run_in_executor` 风格；不要让 WebSocket connect/disconnect 控制硬件生命周期。
+  - API/WS 必须保留并展示 `enable_control_writes=false` 和 `allow_experiment_control=false` 的安全默认，不得默认开放真实 start/stop 或 YAML 自动启动。
+  - 任何驱动返回 `False`、读取异常或通信失败都必须向调用方传播为失败，不得记录成成功。

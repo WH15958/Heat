@@ -2,8 +2,10 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
+from devices.microwave import MicrowaveSegment
+from protocols.microwave_params import MicrowaveMode
 from protocols.pump_params import PumpDirection, PumpRunMode
 
 router = APIRouter(tags=["devices"])
@@ -36,6 +38,33 @@ class StopPumpRequest(BaseModel):
     channel: Optional[int] = None
 
 
+class MicrowaveSegmentRequest(BaseModel):
+    """微波仪段参数请求"""
+    segment: int
+    heating_temperature: float = 0.0
+    target_temperature: Optional[float] = None
+    holding_temperature: float = 0.0
+    heating_power_percent: Optional[int] = None
+    holding_power_percent: Optional[int] = None
+    holding_deviation: float = 0.0
+    hours: int = 0
+    minutes: int = 0
+    seconds: int = 0
+    ramp_hours: int = 0
+    ramp_minutes: int = 0
+    ramp_seconds: int = 0
+
+
+class MicrowaveConfigureRequest(BaseModel):
+    """微波仪配置请求"""
+    segments: List[MicrowaveSegmentRequest]
+
+
+class MicrowaveStartRequest(BaseModel):
+    """微波仪启动请求"""
+    mode: str
+
+
 def get_dm(request: Request) -> "DeviceManager":
     """从应用状态获取设备管理器
 
@@ -46,6 +75,44 @@ def get_dm(request: Request) -> "DeviceManager":
         DeviceManager: 设备管理器
     """
     return request.app.state.device_manager
+
+
+def _microwave_segments(
+    body: MicrowaveConfigureRequest,
+    allow_power_fields: bool,
+) -> List[MicrowaveSegment]:
+    """转换微波仪段请求，避免非手动模式携带功率字段"""
+    segments = []
+    for segment in body.segments:
+        if not allow_power_fields and (
+            segment.heating_power_percent is not None
+            or segment.holding_power_percent is not None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="power fields are only allowed for manual_power mode",
+            )
+        segments.append(MicrowaveSegment(
+            segment=segment.segment,
+            heating_temperature=segment.heating_temperature,
+            heating_power_percent=segment.heating_power_percent or 0,
+            holding_temperature=segment.holding_temperature,
+            holding_power_percent=segment.holding_power_percent or 0,
+            holding_deviation=segment.holding_deviation,
+            hours=segment.hours,
+            minutes=segment.minutes,
+            seconds=segment.seconds,
+            target_temperature=segment.target_temperature,
+            ramp_hours=segment.ramp_hours,
+            ramp_minutes=segment.ramp_minutes,
+            ramp_seconds=segment.ramp_seconds,
+        ))
+    return segments
+
+
+def _raise_if_false(result: bool, action: str):
+    if not result:
+        raise HTTPException(status_code=400, detail=f"Microwave {action} failed")
 
 
 @router.get("/devices")
@@ -182,6 +249,161 @@ async def stop_heater(device_id: str, request: Request):
         return {"success": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/connect")
+async def connect_microwave(device_id: str, request: Request):
+    """连接微波仪"""
+    dm = get_dm(request)
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.connect_microwave, device_id)
+        _raise_if_false(result, "connect")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/disconnect")
+async def disconnect_microwave(device_id: str, request: Request):
+    """断开微波仪"""
+    dm = get_dm(request)
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.disconnect_microwave, device_id)
+        _raise_if_false(result, "disconnect")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/microwave/{device_id}/data")
+async def read_microwave_data(device_id: str, request: Request):
+    """读取微波仪数据"""
+    dm = get_dm(request)
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, dm.read_microwave_data, device_id)
+    except IOError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/configure/manual")
+async def configure_microwave_manual(
+    device_id: str, body: MicrowaveConfigureRequest, request: Request
+):
+    """配置微波仪手动功率模式"""
+    dm = get_dm(request)
+    try:
+        segments = _microwave_segments(body, allow_power_fields=True)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, dm.configure_microwave_manual, device_id, segments
+        )
+        _raise_if_false(result, "configure manual")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/configure/auto_power")
+async def configure_microwave_auto_power(
+    device_id: str, body: MicrowaveConfigureRequest, request: Request
+):
+    """配置微波仪自动功率模式"""
+    dm = get_dm(request)
+    try:
+        segments = _microwave_segments(body, allow_power_fields=False)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, dm.configure_microwave_auto_power, device_id, segments
+        )
+        _raise_if_false(result, "configure auto_power")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/configure/constant_rate")
+async def configure_microwave_constant_rate(
+    device_id: str, body: MicrowaveConfigureRequest, request: Request
+):
+    """配置微波仪恒速率模式"""
+    dm = get_dm(request)
+    try:
+        segments = _microwave_segments(body, allow_power_fields=False)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, dm.configure_microwave_constant_rate, device_id, segments
+        )
+        _raise_if_false(result, "configure constant_rate")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/start")
+async def start_microwave(
+    device_id: str, body: MicrowaveStartRequest, request: Request
+):
+    """启动微波仪输出"""
+    dm = get_dm(request)
+    try:
+        mode = MicrowaveMode.from_value(body.mode)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unsupported microwave mode: {body.mode}")
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.start_microwave, device_id, mode)
+        _raise_if_false(result, "start")
+        return {"success": True, "device_id": device_id, "mode": mode.value}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/microwave/{device_id}/stop")
+async def stop_microwave(device_id: str, request: Request):
+    """停止微波仪输出"""
+    dm = get_dm(request)
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, dm.stop_microwave, device_id)
+        _raise_if_false(result, "stop")
+        return {"success": True, "device_id": device_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -330,8 +552,8 @@ async def emergency_stop(request: Request):
     """
     dm = get_dm(request)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, dm.emergency_stop_all)
-    return {"success": True}
+    result = await loop.run_in_executor(None, dm.emergency_stop_all)
+    return {"success": bool(result)}
 
 
 @router.get("/pump/{device_id}/diagnose")

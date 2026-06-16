@@ -20,6 +20,13 @@ from .peristaltic_pump import (
     PumpChannelConfig,
     PumpChannelData,
 )
+from .microwave import (
+    MicrowaveConfig,
+    MicrowaveData,
+    MicrowaveDevice,
+    MicrowaveSegment,
+    MicrowaveStatus,
+)
 
 __all__ = [
     'BaseDevice',
@@ -36,4 +43,9 @@ __all__ = [
     'PeristalticPumpData',
     'PumpChannelConfig',
     'PumpChannelData',
+    'MicrowaveConfig',
+    'MicrowaveData',
+    'MicrowaveDevice',
+    'MicrowaveSegment',
+    'MicrowaveStatus',
 ]

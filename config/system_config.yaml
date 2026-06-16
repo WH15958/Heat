@@ -79,6 +79,25 @@ pumps:
         suck_back_angle: 0
         max_flow_rate: 18.75
 
+microwaves:
+  - device_id: "microwave1"
+    name: "MKM-AH1E微波合成仪"
+    connection:
+      port: "COM1"
+      baudrate: 9600
+      address: 1
+      parity: "N"
+      timeout: 2.0
+    slave_address: 1
+    max_temperature: 300.0
+    max_power_percent: 100
+    poll_interval: 1.0
+    retry_count: 3
+    retry_delay: 0.5
+    enabled: false
+    allow_experiment_control: false
+    enable_control_writes: false
+
 monitor:
   enabled: true
   log_interval: 1.0

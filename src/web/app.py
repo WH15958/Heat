@@ -68,6 +68,26 @@ def create_device_manager() -> DeviceManager:
             )
             logger.info(f"Registered pump: {p_cfg.device_id}")
 
+        for m_cfg in config.microwaves:
+            if not m_cfg.enabled:
+                continue
+            dm.add_microwave(
+                device_id=m_cfg.device_id,
+                port=m_cfg.connection.port,
+                baudrate=m_cfg.connection.baudrate,
+                slave_address=m_cfg.slave_address,
+                parity=m_cfg.connection.parity,
+                timeout=m_cfg.connection.timeout,
+                max_temperature=m_cfg.max_temperature,
+                max_power_percent=m_cfg.max_power_percent,
+                poll_interval=m_cfg.poll_interval,
+                retry_count=m_cfg.retry_count,
+                retry_delay=m_cfg.retry_delay,
+                allow_experiment_control=m_cfg.allow_experiment_control,
+                enable_control_writes=m_cfg.enable_control_writes,
+            )
+            logger.info(f"Registered microwave: {m_cfg.device_id}")
+
     except Exception as e:
         logger.warning(f"Failed to load config, starting with empty devices: {e}")
     return dm

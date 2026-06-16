@@ -223,6 +223,61 @@ class PumpDeviceConfig(BaseConfig):
 
 
 @dataclass
+class MicrowaveDeviceConfig(BaseConfig):
+    """微波仪设备配置"""
+    device_id: str = "microwave1"
+    name: str = "MKM-AH1E微波合成仪"
+    connection: DeviceConnectionConfig = field(
+        default_factory=lambda: DeviceConnectionConfig(
+            baudrate=9600,
+            address=1,
+            parity="N",
+            timeout=2.0,
+        )
+    )
+    slave_address: int = 1
+    max_temperature: float = 300.0
+    max_power_percent: int = 100
+    poll_interval: float = 1.0
+    retry_count: int = 3
+    retry_delay: float = 0.5
+    enabled: bool = False
+    allow_experiment_control: bool = False
+    enable_control_writes: bool = False
+
+    def validate(self) -> List[str]:
+        """验证配置"""
+        errors = []
+
+        if not self.device_id:
+            errors.append("设备ID不能为空")
+
+        if not self.name:
+            errors.append("设备名称不能为空")
+
+        if not (1 <= self.slave_address <= 247):
+            errors.append(f"从站地址无效: {self.slave_address}，范围: 1-247")
+
+        if self.max_temperature <= 0:
+            errors.append(f"最高温度无效: {self.max_temperature}，必须大于0")
+
+        if not (0 < self.max_power_percent <= 100):
+            errors.append(f"最大功率百分比无效: {self.max_power_percent}，范围: 1-100")
+
+        if self.poll_interval <= 0:
+            errors.append(f"轮询间隔无效: {self.poll_interval}，必须大于0")
+
+        if self.retry_count < 0:
+            errors.append(f"重试次数无效: {self.retry_count}，必须大于等于0")
+
+        if self.retry_delay < 0:
+            errors.append(f"重试延迟无效: {self.retry_delay}，必须大于等于0")
+
+        errors.extend(self.connection.validate())
+        return errors
+
+
+@dataclass
 class MonitorConfig(BaseConfig):
     """监控配置"""
     enabled: bool = True
@@ -309,6 +364,7 @@ class SystemConfig(BaseConfig):
     version: str = "1.0.0"
     heaters: List[HeaterDeviceConfig] = field(default_factory=list)
     pumps: List[PumpDeviceConfig] = field(default_factory=list)
+    microwaves: List[MicrowaveDeviceConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -342,6 +398,16 @@ class SystemConfig(BaseConfig):
             if pump.device_id in seen_pump_ids:
                 errors.append(f"蠕动泵{pump.device_id}: 重复的设备ID")
             seen_pump_ids.add(pump.device_id)
+
+        seen_microwave_ids = set()
+        for i, microwave in enumerate(self.microwaves):
+            microwave_errors = microwave.validate()
+            for err in microwave_errors:
+                errors.append(f"微波仪{microwave.device_id}: {err}")
+
+            if microwave.device_id in seen_microwave_ids:
+                errors.append(f"微波仪{microwave.device_id}: 重复的设备ID")
+            seen_microwave_ids.add(microwave.device_id)
         
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
@@ -361,6 +427,13 @@ class SystemConfig(BaseConfig):
         for pump in self.pumps:
             if pump.device_id == device_id:
                 return pump
+        return None
+
+    def get_microwave_config(self, device_id: str) -> Optional[MicrowaveDeviceConfig]:
+        """根据ID获取微波仪配置"""
+        for microwave in self.microwaves:
+            if microwave.device_id == device_id:
+                return microwave
         return None
 
 
@@ -427,12 +500,23 @@ class ConfigManager:
                 channels=channels
             )
             pumps.append(pump)
+
+        microwaves = []
+        for microwave_data in data.get("microwaves", []):
+            conn_data = microwave_data.get("connection", {})
+            connection = DeviceConnectionConfig.from_dict(conn_data)
+            microwave = MicrowaveDeviceConfig(
+                **{k: v for k, v in microwave_data.items() if k != "connection"},
+                connection=connection
+            )
+            microwaves.append(microwave)
         
         return SystemConfig(
             name=data.get("name", "自动化控制系统"),
             version=data.get("version", "1.0.0"),
             heaters=heaters,
             pumps=pumps,
+            microwaves=microwaves,
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),

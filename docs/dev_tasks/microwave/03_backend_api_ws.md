@@ -177,6 +177,29 @@ git diff --check -- src tests
 
 ## 完成记录
 
-- 状态：未开始。
-- 验证：未运行。
-- 交接：下一任务 `04_frontend_control_dashboard.md` 负责前端接入。
+- 状态：2026-06-16 已完成本任务范围内的后端 API、WebSocket payload、配置注册和全局急停接入。未改前端、未改 YAML parser/executor，未连接真实硬件。
+- 已完成：
+  - 在 `src/web/api/devices.py` 新增 `/api/microwave/{device_id}/...` 路由：connect、disconnect、data、configure/manual、configure/auto_power、configure/constant_rate、start、stop。
+  - 新增 `MicrowaveSegmentRequest`、`MicrowaveConfigureRequest`、`MicrowaveStartRequest`，非手动模式拒绝功率字段；Web 层通过 `run_in_executor` 调用同步 `DeviceManager`/`MicrowaveDevice`。
+  - 微波 API 对设备返回 `False` 显式返回 HTTP 400，不把失败包装成成功；读取异常按现有设备接口风格返回失败状态码。
+  - `src/web/api/ws.py` 的实时 payload 增加 `microwaves` key，微波读取走 `run_in_executor`，timeout 或异常写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 路径不启动、停止或改变硬件状态。
+  - `src/web/app.py` 从配置注册 enabled microwave，保留 `allow_experiment_control=false` 和 `enable_control_writes=false` 安全默认。
+  - `src/web/device_manager.py` 统一微波状态 payload，`/api/devices` 和数据 payload 展示微波安全开关；`emergency_stop_all()` 调用微波 `emergency_stop()`，单个设备返回 `False` 或异常时记录失败并继续停止其他设备。
+  - 新增 `tests/test_microwave_api_ws.py`，使用 fake manager/device 覆盖 API、WS payload、失败传播、WS 断开无停机副作用和急停微波调用。
+- 验证：
+  - `python tests\test_metadata.py`：通过，36 passed, 0 failed。
+  - `python -c "import src.web.app; import src.web.api.devices; import src.web.api.ws"`：通过，退出码 0。
+  - `python -m pytest tests\test_microwave_api_ws.py -q`：未执行成功，当前环境缺少 `pytest`（`No module named pytest`）。
+  - `python tests\test_microwave_api_ws.py`：通过，7 passed, 0 failed，作为 pytest 不可用时的等价 fallback。
+  - `python tests\test_microwave.py`：通过，10 passed, 0 failed。
+  - `git diff --check -- src tests`：通过，退出码 0；仅提示部分已编辑文本下次 Git 触碰时 LF/CRLF 转换，无 whitespace error。
+- 遗留问题：
+  - 真实硬件未连接、未写入、未 smoke test；`enable_control_writes` 仍必须默认关闭，直到实验室确认串口、接线、安全授权和真实写入时序。
+  - 协议未提供明确运行状态、模式枚举和故障 bit 映射；当前 API/WS 保留 `mode="unknown"`、暴露 `current_mode_code` 和原始 `fault_code`，`faults` 暂为空列表。
+  - `running` 仅由实时功率是否非零做保守展示，不能替代实机确认的运行状态寄存器。
+  - `40151` stop 写 `0` 仍只在 fake protocol 中验证，真实设备 stop 语义需 smoke test 确认。
+- 交接给 04：
+  - 前端只调用本任务新增的 `/api/microwave/...` 接口和 WS `microwaves` payload，不直接假设微波仪已允许真实写入。
+  - 前端应清楚展示 `enable_control_writes=false`、`allow_experiment_control=false`、`mode="unknown"`、`fault_code` 和读取失败状态，不把禁用或失败显示为成功。
+  - 前端按钮可以接手动连接、读取、配置和 stop/emergency stop；真实 start 控件必须尊重后端失败返回和实验室 smoke-test 门槛。
+  - 不要在 04 中加入 YAML 自动化；YAML 接入仍留给 `05_experiment_yaml_automation.md`。

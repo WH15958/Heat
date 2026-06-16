@@ -3,6 +3,7 @@ import time
 from typing import Dict, Optional
 
 from devices.heater import AIHeaterDevice, HeaterConfig
+from devices.microwave import MicrowaveConfig, MicrowaveDevice
 from devices.peristaltic_pump import (
     LabSmartPumpDevice,
     PeristalticPumpConfig,
@@ -19,6 +20,7 @@ class DeviceManager:
     def __init__(self):
         self._heaters: Dict[str, AIHeaterDevice] = {}
         self._pumps: Dict[str, LabSmartPumpDevice] = {}
+        self._microwaves: Dict[str, MicrowaveDevice] = {}
         self._lock = threading.Lock()
         self._pump_locks: Dict[str, threading.Lock] = {}
         self._pump_channel_index: Dict[str, int] = {}
@@ -111,6 +113,48 @@ class DeviceManager:
         logger.info(f"Registered pump: {device_id} on {port}")
         return device_id
 
+    def add_microwave(
+        self,
+        device_id: str,
+        port: str,
+        baudrate: int = 9600,
+        slave_address: int = 1,
+        parity: str = "N",
+        timeout: float = 2.0,
+        max_temperature: float = 300.0,
+        max_power_percent: int = 100,
+        poll_interval: float = 1.0,
+        retry_count: int = 3,
+        retry_delay: float = 0.5,
+        allow_experiment_control: bool = False,
+        enable_control_writes: bool = False,
+    ) -> str:
+        """添加微波仪配置"""
+        config = MicrowaveConfig(
+            device_id=device_id,
+            connection_params={
+                "port": port,
+                "baudrate": baudrate,
+                "parity": parity,
+                "stopbits": 1,
+                "bytesize": 8,
+            },
+            slave_address=slave_address,
+            baudrate=baudrate,
+            parity=parity,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            retry_count=retry_count,
+            retry_delay=retry_delay,
+            max_temperature=max_temperature,
+            max_power_percent=max_power_percent,
+            allow_experiment_control=allow_experiment_control,
+            enable_control_writes=enable_control_writes,
+        )
+        self._microwaves[device_id] = MicrowaveDevice(config)
+        logger.info(f"Registered microwave: {device_id} on {port}")
+        return device_id
+
     def connect_heater(self, device_id: str) -> bool:
         """连接加热器
 
@@ -178,6 +222,20 @@ class DeviceManager:
         if pump is None:
             raise ValueError(f"Pump not found: {device_id}")
         return pump.disconnect()
+
+    def connect_microwave(self, device_id: str) -> bool:
+        """连接微波仪"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        return microwave.connect()
+
+    def disconnect_microwave(self, device_id: str) -> bool:
+        """断开微波仪"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        return microwave.disconnect()
 
     def read_heater_data(self, device_id: str) -> dict:
         """读取加热器数据
@@ -261,19 +319,100 @@ class DeviceManager:
             "channels": dict(self._pump_channel_cache[device_id]),
         }
 
-    def emergency_stop_all(self):
+    def read_microwave_data(self, device_id: str) -> dict:
+        """读取微波仪数据"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            raise IOError("Device not connected")
+        data = microwave.read_data()
+        return self._microwave_payload(microwave, data.data)
+
+    def configure_microwave_manual(self, device_id: str, segments) -> bool:
+        """配置微波仪手动功率模式参数"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            logger.warning(f"Microwave {device_id} not connected")
+            return False
+        return microwave.configure_manual(segments)
+
+    def configure_microwave_auto_power(self, device_id: str, segments) -> bool:
+        """配置微波仪自动功率模式参数"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            logger.warning(f"Microwave {device_id} not connected")
+            return False
+        return microwave.configure_auto_power(segments)
+
+    def configure_microwave_constant_rate(self, device_id: str, segments) -> bool:
+        """配置微波仪恒速率模式参数"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            logger.warning(f"Microwave {device_id} not connected")
+            return False
+        return microwave.configure_constant_rate(segments)
+
+    def start_microwave(self, device_id: str, mode) -> bool:
+        """启动微波仪输出"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            logger.warning(f"Microwave {device_id} not connected")
+            return False
+        return microwave.start(mode)
+
+    def stop_microwave(self, device_id: str) -> bool:
+        """停止微波仪输出"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        if not microwave.is_connected():
+            logger.warning(f"Microwave {device_id} not connected")
+            return False
+        return microwave.stop()
+
+    def emergency_stop_all(self) -> bool:
         """紧急停止所有设备"""
         logger.warning("EMERGENCY STOP ALL DEVICES")
+        success = True
         for heater in self._heaters.values():
             try:
-                heater.emergency_stop()
+                result = heater.emergency_stop()
+                if result is False:
+                    success = False
+                    logger.error(f"Emergency stop heater returned false: {heater.config.device_id}")
             except Exception as e:
+                success = False
                 logger.error(f"Emergency stop heater failed: {e}")
         for pump in self._pumps.values():
             try:
-                pump.emergency_stop()
+                result = pump.emergency_stop()
+                if result is False:
+                    success = False
+                    logger.error(f"Emergency stop pump returned false: {pump.config.device_id}")
             except Exception as e:
+                success = False
                 logger.error(f"Emergency stop pump failed: {e}")
+        for microwave in self._microwaves.values():
+            try:
+                result = microwave.emergency_stop()
+                if result is False:
+                    success = False
+                    logger.error(
+                        f"Emergency stop microwave returned false: {microwave.config.device_id}"
+                    )
+            except Exception as e:
+                success = False
+                logger.error(f"Emergency stop microwave failed: {e}")
+        return success
 
     def get_all_status(self) -> dict:
         """获取所有设备状态摘要
@@ -293,7 +432,43 @@ class DeviceManager:
                 "connected": p.is_connected(),
                 "status": p.status.name,
             }
-        return {"heaters": heaters, "pumps": pumps}
+        microwaves = {}
+        for did, m in self._microwaves.items():
+            microwaves[did] = {
+                "connected": m.is_connected(),
+                "status": m.status.name,
+                "allow_experiment_control": bool(
+                    getattr(m.config, "allow_experiment_control", False)
+                ),
+                "enable_control_writes": bool(
+                    getattr(m.config, "enable_control_writes", False)
+                ),
+            }
+        return {"heaters": heaters, "pumps": pumps, "microwaves": microwaves}
+
+    def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
+        device_id = microwave.config.device_id
+        power_percent = data.get("power_percent", 0)
+        return {
+            "device_id": device_id,
+            "running": bool(power_percent),
+            "mode": "unknown",
+            "current_segment": data.get("current_segment", 0),
+            "material_temperature": data.get("material_temperature"),
+            "temperature_source": data.get("material_temperature_source", "unknown"),
+            "power_percent": power_percent,
+            "current": data.get("current", 0),
+            "runtime_seconds": data.get("runtime_seconds", 0),
+            "fault_code": data.get("fault_code", 0),
+            "faults": [],
+            "current_mode_code": data.get("current_mode_code", 0),
+            "allow_experiment_control": bool(
+                getattr(microwave.config, "allow_experiment_control", False)
+            ),
+            "enable_control_writes": bool(
+                getattr(microwave.config, "enable_control_writes", False)
+            ),
+        }
 
     def get_heater(self, device_id: str) -> Optional[AIHeaterDevice]:
         """获取加热器设备实例
@@ -319,6 +494,11 @@ class DeviceManager:
         with self._lock:
             return self._pumps.get(device_id)
 
+    def get_microwave(self, device_id: str) -> Optional[MicrowaveDevice]:
+        """获取微波仪设备实例"""
+        with self._lock:
+            return self._microwaves.get(device_id)
+
     def get_all_heaters(self) -> Dict[str, AIHeaterDevice]:
         """获取所有加热器（快照）
 
@@ -336,6 +516,11 @@ class DeviceManager:
         """
         with self._lock:
             return dict(self._pumps)
+
+    def get_all_microwaves(self) -> Dict[str, MicrowaveDevice]:
+        """获取所有微波仪（快照）"""
+        with self._lock:
+            return dict(self._microwaves)
 
     def set_temperature(self, device_id: str, temperature: float) -> bool:
         """设置加热器目标温度
@@ -674,5 +859,11 @@ class DeviceManager:
             try:
                 if pump.is_connected():
                     pump.disconnect()
+            except Exception:
+                pass
+        for microwave in self._microwaves.values():
+            try:
+                if microwave.is_connected():
+                    microwave.disconnect()
             except Exception:
                 pass
