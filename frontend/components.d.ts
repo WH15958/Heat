@@ -39,6 +39,7 @@ declare module 'vue' {
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     ElTag: typeof import('element-plus/es')['ElTag']
     HeaterControl: typeof import('./src/components/HeaterControl.vue')['default']
+    MicrowaveControl: typeof import('./src/components/MicrowaveControl.vue')['default']
     PumpControl: typeof import('./src/components/PumpControl.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

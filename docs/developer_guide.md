@@ -32,8 +32,8 @@ Vue 前端
 
 - `src/web/`：REST API、WebSocket、应用生命周期
 - `src/experiment/`：YAML 解析、状态机、步骤执行、实验日志
-- `src/devices/`：加热器和泵的同步设备驱动
-- `src/protocols/`：AIBUS、MODBUS RTU、参数定义
+- `src/devices/`：加热器、泵和微波仪的同步设备驱动
+- `src/protocols/`：AIBUS、MODBUS RTU、参数定义和微波仪寄存器常量
 - `src/utils/`：配置、日志、串口资源管理
 - `src/science/`：`sample_id` 和 `samples.csv` 记录链路
 
@@ -92,7 +92,7 @@ FastAPI 是异步的，但设备是同步的。
 ### 3.1 Web 层
 
 - `src/web/app.py`：创建 FastAPI 应用、加载配置、挂载静态资源、启动推送循环
-- `src/web/api/devices.py`：设备连接、控制、状态接口
+- `src/web/api/devices.py`：设备连接、控制、状态接口；包含微波仪 `/api/microwave/{device_id}/...` 路由
 - `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史
 - `src/web/api/ws.py`：WebSocket 推送与连接管理
 
@@ -108,8 +108,10 @@ FastAPI 是异步的，但设备是同步的。
 
 - `src/devices/heater.py`：加热器同步控制
 - `src/devices/peristaltic_pump.py`：多通道泵同步控制
+- `src/devices/microwave.py`：MKM-AH1E 微波仪同步 Modbus 控制
 - `src/protocols/aibus.py`：加热器协议实现
 - `src/protocols/modbus_rtu.py`：泵协议实现
+- `src/protocols/microwave_params.py`：微波仪 Modbus 地址、模式和控制字常量
 
 ### 3.4 样品与记录
 
@@ -146,6 +148,21 @@ FastAPI 是异步的，但设备是同步的。
 - 直接在 Web 层拼协议帧
 - 为新设备绕过 `DeviceManager`
 - 在驱动内偷偷起线程
+
+### 4.4 微波仪当前接入事实
+
+微波仪接入遵守与其他设备相同的同步驱动边界，但安全等级更高：
+
+- 驱动：`MicrowaveDevice` 是同步阻塞驱动，不创建后台线程、轮询、心跳或命令队列。
+- 协议：原始协议表使用 `40001` 风格保持寄存器地址；代码必须通过 `holding_address()` 转成 PDU 地址，例如 `40001 -> 0`、`40151 -> 150`。
+- 控制字：`40151` 对应 PDU 地址 `150`，bit15 为恒速率、bit14 为自动功率、bit13 为手动功率、bit12 为微波启动；当前 stop 实现写 `0`，真实语义仍需实机确认。
+- 状态：`DeviceManager.read_microwave_data()` 暴露 `running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`enable_control_writes`。
+- API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。
+- WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
+- 安全默认：`enable_control_writes=false` 阻断真实寄存器写入，`allow_experiment_control=false` 阻断 YAML 自动 configure/start。二者都必须默认关闭。
+- 实验引擎：`microwave.configure_*` 和 `microwave.start` 必须先检查 `allow_experiment_control`；`microwave.stop` 允许在自动控制禁用时执行，用于安全停机。
+
+fake 测试只能证明地址换算、参数校验、失败传播、API/WS payload 和 executor gate。真实串口、接线、写入顺序、浮点字序、运行状态、故障码 bit 和 stop 语义必须由实验室按 [microwave_smoke_test.md](microwave_smoke_test.md) 人工确认。
 
 ---
 
@@ -198,6 +215,7 @@ FastAPI 是异步的，但设备是同步的。
 - 协议写寄存器顺序变化
 - 泵模式参数写入策略变化
 - 真实设备 stop / start 时序变化
+- 微波仪 `enable_control_writes`、`allow_experiment_control`、start/stop、控制字或状态寄存器语义变化
 
 ### 6.3 本项目测试重点
 
@@ -209,6 +227,7 @@ FastAPI 是异步的，但设备是同步的。
 - 单实验保护
 - stop / wait 语义
 - WebSocket 断开不影响设备
+- 微波仪默认禁用真实写入和自动启动
 
 ---
 
@@ -292,6 +311,7 @@ FastAPI 是异步的，但设备是同步的。
 - 是否忽略了设备返回值
 - 是否让 stop / timeout 语义变模糊
 - 是否让页面连接状态影响设备状态
+- 是否把微波仪真实硬件确认误写成软件验证结论
 - 是否同步了 YAML 文档 / 用户文档 / AI 文档
 - 是否把运行产物错误纳入版本控制
 

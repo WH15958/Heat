@@ -184,6 +184,34 @@ git diff --check -- src tests docs/experiment_yaml_spec.md
 
 ## 完成记录
 
-- 状态：未开始。
-- 验证：未运行。
-- 交接：下一任务 `06_docs_and_smoke_test.md` 负责正式用户/开发/YAML 文档同步和实机验证清单。
+- 状态：2026-06-17 已完成本任务范围内的实验 YAML 自动化接入。未改前端，未新增 REST API，未连接真实硬件，未做用户/开发文档收口。
+- 已完成：
+  - 在 `src/experiment/actions.py` 新增微波仪动作：`microwave.configure_manual`、`microwave.configure_auto_power`、`microwave.configure_constant_rate`、`microwave.start`、`microwave.stop`。
+  - 在 `src/experiment/actions.py` 新增等待类型：`microwave_temperature_reached`、`microwave_complete`，并为等待条件补 `target_temperature` 字段。
+  - 在 `src/experiment/parser.py` 新增动作和等待类型映射，`microwave_temperature_reached` 支持 `target_temperature`，兼容 `temperature` 别名。
+  - 在 `src/experiment/executor.py` 接入微波仪 configure/start/stop。`microwave.configure_*` 和 `microwave.start` 执行前检查 `allow_experiment_control`，禁用时返回 `False`、记录明确日志，并且不调用设备方法。
+  - `microwave.stop` 不受 `allow_experiment_control=false` 限制，仍允许通过 `DeviceManager.stop_microwave()` 做安全停机。
+  - `microwave_temperature_reached` 通过 `DeviceManager.read_microwave_data()` 读取 `material_temperature` 并比较目标温度，timeout 返回失败，stop 请求可中断。
+  - `microwave_complete` 通过微波仪 payload 的 `running` 判断完成，timeout 返回失败，stop 请求可中断。
+  - 在 `src/web/device_manager.py` 新增只读薄方法 `is_microwave_experiment_control_allowed(device_id)`，供 executor 查询安全闸。
+  - 新增 `tests/test_microwave_experiment.py`，覆盖 parser 识别、成功配置/启动、禁用拒绝、stop 放行、设备返回 `False`、两个等待条件的成功/timeout/stop 中断。
+  - 对 `docs/experiment_yaml_spec.md` 做最小同步，记录微波仪动作、等待类型和默认禁用安全闸；正式示例、用户/开发说明和 smoke test 清单留给 06。
+- 验证：
+  - `python tests\test_microwave_experiment.py`：通过，12 passed, 0 failed。
+  - `python tests\test_metadata.py`：通过，36 passed, 0 failed。
+  - `python -m pytest tests\test_microwave_experiment.py -q`：未执行成功，当前环境缺少 `pytest`（`No module named pytest`）。
+  - `python -c "import src.experiment.actions; import src.experiment.parser; import src.experiment.executor"`：通过，退出码 0。
+  - `python tests\test_microwave.py`：通过，10 passed, 0 failed。
+  - `python tests\test_microwave_api_ws.py`：通过，7 passed, 0 failed。
+  - `python -c "import src.web.device_manager; import src.web.api.devices; import src.web.api.ws"`：通过，退出码 0。
+- 遗留问题：
+  - 真实硬件未连接、未写入、未 smoke test；微波仪真实 start/stop 和自动实验控制仍不能视为实验室确认可用。
+  - `allow_experiment_control` 和 `enable_control_writes` 必须继续默认关闭，直到实验室确认串口、接线、安全授权、协议写入顺序和真实停机语义。
+  - `microwave_complete` 当前依赖 API/WS 任务留下的保守 `running` payload；该字段仍不是实机确认的运行状态寄存器。
+  - `docs/experiment_yaml_spec.md` 只是最小事实同步，尚未形成正式用户示例或 smoke-test 操作文档。
+  - `context/PROJECT_CONTEXT.md` 中的“当前实验动作与等待类型”仍需在 06 文档收口时统一更新，避免本窗口扩大范围。
+- 交接给 06：
+  - `06_docs_and_smoke_test.md` 需要正式同步用户/开发/YAML 文档，补微波仪动作和等待类型的审核说明，但不要提供可直接照抄的真实化学配方。
+  - smoke test 清单必须继续强调：真实微波 start/自动实验控制只有在实验室确认设备身份、接线、安全授权、协议写入顺序和停机语义后才能启用。
+  - 06 应检查 `context/PROJECT_CONTEXT.md`、`docs/user_guide.md`、`docs/developer_guide.md` 和 `docs/experiment_yaml_spec.md` 的事实一致性，尤其是动作/等待类型清单和 `allow_experiment_control=false` 默认拒绝语义。
+  - 前端相关改动属于 04 的范围，本任务未修改；06 如需收口，应先区分已有 04 工作树改动与本任务后端/YAML 改动。

@@ -23,10 +23,29 @@ export interface PumpRealtimeData {
   error?: string
 }
 
+export interface MicrowaveRealtimeData {
+  device_id?: string
+  running?: boolean
+  mode?: string
+  current_segment?: number
+  material_temperature?: number | null
+  temperature_source?: string
+  power_percent?: number
+  current?: number
+  runtime_seconds?: number
+  fault_code?: number
+  faults?: string[]
+  current_mode_code?: number
+  allow_experiment_control?: boolean
+  enable_control_writes?: boolean
+  error?: string
+}
+
 export interface RealtimeData {
   type: string
   heaters: Record<string, HeaterRealtimeData>
   pumps: Record<string, PumpRealtimeData>
+  microwaves: Record<string, MicrowaveRealtimeData>
 }
 
 const sharedData = ref<RealtimeData | null>(null)
@@ -62,7 +81,13 @@ function connect() {
 
   ws.onmessage = (event) => {
     try {
-      sharedData.value = JSON.parse(event.data)
+      const parsed = JSON.parse(event.data)
+      sharedData.value = {
+        ...parsed,
+        heaters: parsed.heaters ?? {},
+        pumps: parsed.pumps ?? {},
+        microwaves: parsed.microwaves ?? {},
+      }
     } catch (e) {
       console.error('[WS] parse error:', e)
     }

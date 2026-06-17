@@ -8,6 +8,11 @@ class ActionType(Enum):
     HEATER_SET_TEMP = "heater.set_temperature"
     HEATER_START = "heater.start"
     HEATER_STOP = "heater.stop"
+    MICROWAVE_CONFIGURE_MANUAL = "microwave.configure_manual"
+    MICROWAVE_CONFIGURE_AUTO_POWER = "microwave.configure_auto_power"
+    MICROWAVE_CONFIGURE_CONSTANT_RATE = "microwave.configure_constant_rate"
+    MICROWAVE_START = "microwave.start"
+    MICROWAVE_STOP = "microwave.stop"
     PUMP_START = "pump.start"
     PUMP_STOP = "pump.stop"
     PUMP_STOP_CHANNEL = "pump.stop_channel"
@@ -21,6 +26,8 @@ class WaitType(Enum):
     NONE = "none"
     DURATION = "duration"
     TEMPERATURE_REACHED = "temperature_reached"
+    MICROWAVE_TEMPERATURE_REACHED = "microwave_temperature_reached"
+    MICROWAVE_COMPLETE = "microwave_complete"
     PUMP_COMPLETE = "pump_complete"
 
 
@@ -35,6 +42,7 @@ class WaitCondition:
         tolerance: 温度容差（TEMPERATURE_REACHED使用）
         timeout: 超时秒数
         channel: 泵通道号（PUMP_COMPLETE使用）
+        target_temperature: 目标温度（MICROWAVE_TEMPERATURE_REACHED使用）
     """
     type: WaitType = WaitType.NONE
     seconds: float = 0
@@ -42,6 +50,7 @@ class WaitCondition:
     tolerance: float = 1.0
     timeout: float = 3600
     channel: int = 0
+    target_temperature: Optional[float] = None
 
 
 @dataclass

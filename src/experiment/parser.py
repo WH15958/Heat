@@ -39,6 +39,11 @@ ACTION_MAP = {
     "heater.set_temperature": ActionType.HEATER_SET_TEMP,
     "heater.start": ActionType.HEATER_START,
     "heater.stop": ActionType.HEATER_STOP,
+    "microwave.configure_manual": ActionType.MICROWAVE_CONFIGURE_MANUAL,
+    "microwave.configure_auto_power": ActionType.MICROWAVE_CONFIGURE_AUTO_POWER,
+    "microwave.configure_constant_rate": ActionType.MICROWAVE_CONFIGURE_CONSTANT_RATE,
+    "microwave.start": ActionType.MICROWAVE_START,
+    "microwave.stop": ActionType.MICROWAVE_STOP,
     "pump.start": ActionType.PUMP_START,
     "pump.stop": ActionType.PUMP_STOP,
     "pump.stop_channel": ActionType.PUMP_STOP_CHANNEL,
@@ -51,6 +56,8 @@ WAIT_MAP = {
     "none": WaitType.NONE,
     "duration": WaitType.DURATION,
     "temperature_reached": WaitType.TEMPERATURE_REACHED,
+    "microwave_temperature_reached": WaitType.MICROWAVE_TEMPERATURE_REACHED,
+    "microwave_complete": WaitType.MICROWAVE_COMPLETE,
     "pump_complete": WaitType.PUMP_COMPLETE,
 }
 
@@ -89,6 +96,9 @@ def parse_experiment(filepath: str) -> dict:
             tolerance=wait_data.get("tolerance", 1.0),
             timeout=wait_data.get("timeout", 3600),
             channel=wait_data.get("channel", 0),
+            target_temperature=wait_data.get(
+                "target_temperature", wait_data.get("temperature")
+            ),
         )
         action_type = ACTION_MAP.get(s.get("type", ""))
         if action_type is None:

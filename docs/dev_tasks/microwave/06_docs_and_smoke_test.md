@@ -73,6 +73,8 @@
 
 实机验证必须由用户/实验室确认，软件测试不能替代。
 
+本窗口已将可执行清单收口到 `docs/microwave_smoke_test.md`。下列内容保留为任务目标摘要；执行时以 `docs/microwave_smoke_test.md` 的记录模板和人工确认项为准。
+
 ### 0. 准备
 
 - 设备型号与说明书一致。
@@ -145,6 +147,26 @@ git diff --check -- docs context
 
 ## 完成记录
 
-- 状态：未开始。
-- 验证：未运行。
-- 交接：完成后可进入实机联调；联调结果应回填到本文或新增 smoke test 记录。
+- 状态：2026-06-17 已完成文档收口和微波仪实机 smoke test 清单。未新增功能代码，未修改前端/测试，未执行真实设备操作。
+- 已完成：
+  - `docs/user_guide.md` 增加微波仪控制页说明、启动前人工确认、状态字段、WebSocket 断开边界、默认安全闸和常见拒绝原因。
+  - `docs/developer_guide.md` 增加微波仪同步驱动结构、Modbus `40001 -> 0` 地址换算、`40151` 控制字 bit、API/WS payload、默认禁用、fake 测试与实机验证边界。
+  - `docs/experiment_yaml_spec.md` 将 05 留下的临时微波 YAML 说明收口为正式动作、参数、等待类型和低风险结构示例，并明确示例不是化学工艺建议。
+  - `context/PROJECT_CONTEXT.md` 更新当前动作/等待类型清单和长期微波安全边界：`enable_control_writes=false`、`allow_experiment_control=false` 默认关闭，实机 smoke test 通过前不得启用真实自动启动。
+  - 新增 `docs/microwave_smoke_test.md`，作为实验室人工执行的微波仪实机 smoke test 清单与记录模板。
+- 必须由实验室人工确认：
+  - 设备型号、RS485 接线、站号、串口号、电源、接地、炉门联锁、散热空间和现场环境。
+  - 反应瓶非空载、光纤探头没入物料、现场有人看护、SOP 和试剂兼容性已批准。
+  - `40118`/`40119` 浮点字序、`40151` stop 写 `0` 的真实语义、真实 start/stop、故障码 bit 和运行状态判断。
+  - 是否临时或长期启用 `enable_control_writes=true`、`allow_experiment_control=true`。
+- 验证：
+  - `git diff --check -- docs`：通过，退出码 0；仅提示部分已编辑文本下次 Git 触碰时 LF/CRLF 转换，无 whitespace error。
+  - `git diff --check -- docs context`：通过，退出码 0；仅提示部分已编辑文本下次 Git 触碰时 LF/CRLF 转换，无 whitespace error。
+- 遗留问题：
+  - 真实硬件未连接、未写入、未 smoke test；软件文档收口不能替代实验室实机确认。
+  - 微波仪实际联调结果尚未回填；通过/失败、厂家建议 stop 控制字、故障码解释和状态枚举都需实验室记录。
+  - 当前 `running` 仍基于后端保守 payload，不能替代实机确认的运行状态寄存器。
+- 最终交接：
+  - 下一步是实验室按 `docs/microwave_smoke_test.md` 执行人工 smoke test，并把记录结果回填到该文档或追加专门联调记录。
+  - smoke test 通过前，保持 `enable_control_writes=false` 和 `allow_experiment_control=false` 默认关闭。
+  - 若实验室确认需要修改 stop 控制字、状态枚举、故障码解释或自动控制默认值，应另开新窗口处理代码、测试和文档同步。

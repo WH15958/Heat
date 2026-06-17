@@ -1,0 +1,177 @@
+# 微波仪实机 Smoke Test 清单
+
+本文用于 MKM-AH1E 环形聚焦单模微波化学合成仪接入 Heat 后的实验室实机确认。本文不是普通用户操作流程，也不是化学工艺建议。
+
+## 适用范围
+
+- 设备：`MKM-AH1E环形聚焦单模微波化学合成仪`
+- 接口：RS485 / Modbus RTU
+- 默认串口参数：9600 baud、8 data bits、1 stop bit、无校验、站号 1
+- Heat 设备 ID 示例：`microwave1`
+
+## 不可替代的人工确认
+
+以下事项必须由用户/实验室确认，Codex 和软件测试不能代替：
+
+- 实物型号、串口接线、站号和串口号。
+- 电源、接地、炉门联锁、散热空间和现场环境符合说明书。
+- 反应瓶非空载，光纤探头已没入物料。
+- 微波运行期间有人现场看护。
+- SOP、试剂兼容性和安全授权已经批准。
+- 控制字 stop 写入、真实启动、真实停止和故障响应符合实验室预期。
+
+## 安全默认
+
+联调开始时必须保持：
+
+```yaml
+allow_experiment_control: false
+enable_control_writes: false
+```
+
+含义：
+
+- `enable_control_writes=false`：驱动阻断真实寄存器写入。
+- `allow_experiment_control=false`：YAML 自动 configure/start 被 executor 拒绝。
+
+只有完成本文前置检查并由实验室负责人确认后，才可以临时打开目标设备的写入或自动控制。验证结束后应恢复默认关闭，除非实验室明确决定保留。
+
+## 0. 准备检查
+
+实验室人工确认：
+
+- [ ] 设备型号与说明书一致。
+- [ ] DB9 接线已确认：3=485A，8=485B。
+- [ ] 设备 AC220V / 50Hz 供电、接地和急停/断电手段可靠。
+- [ ] 炉门关闭且联锁正常。
+- [ ] 设备四周散热空间大于 30 cm，现场通风和环境符合说明书。
+- [ ] 反应瓶非空载；弱吸波或极少量物料不作为安全负载。
+- [ ] 光纤探头已没入物料。
+- [ ] 现场有人全程看护。
+- [ ] 当前配置仍保持 `allow_experiment_control=false` 和 `enable_control_writes=false`。
+
+软件检查：
+
+- [ ] 后端可启动。
+- [ ] `config/system_config.yaml` 中目标设备串口号、站号和安全开关已复核。
+- [ ] 前端页面已更新到包含微波仪控制和仪表盘的版本。
+
+## 1. 只读连接
+
+目的：确认连接和只读状态不会启动微波。
+
+步骤：
+
+1. 保持 `enable_control_writes=false`。
+2. 启动后端。
+3. 在 `/control` 页面连接 `microwave1`。
+4. 刷新状态或调用 `GET /api/microwave/microwave1/data`。
+5. 观察 `/` 仪表盘的微波仪卡片。
+
+验收：
+
+- [ ] 未发生微波启动。
+- [ ] 状态可读，或失败原因明确。
+- [ ] payload 包含 `device_id`、`running`、`material_temperature`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`enable_control_writes`。
+- [ ] `fault_code` 只按原始值记录，不解释未确认 bit。
+
+## 2. 地址基准确认
+
+目的：确认 `40001 -> 0` 的 PDU 地址换算正确。
+
+仅在实验室批准真实写入后执行：
+
+1. 临时将目标设备 `enable_control_writes=true`，仍保持 `allow_experiment_control=false`。
+2. 在不启动微波的前提下写入一个安全参数，例如手动段 1 的参数。
+3. 读回同一寄存器或通过设备 HMI 复核。
+4. 记录写入值、读回值和设备显示。
+
+验收：
+
+- [ ] 写入未启动微波。
+- [ ] 读回或 HMI 显示与写入一致。
+- [ ] 地址换算未出现一位偏移。
+
+## 3. 停止控制字验证
+
+目的：确认当前实现 `CONTROL_STOP = 0` 不会导致异常启动，并能形成实验室认可的停机语义。
+
+仅在设备处于安全可停状态时执行：
+
+1. 保持现场看护和可断电手段。
+2. 执行页面停止或 `POST /api/microwave/microwave1/stop`。
+3. 观察 HMI、状态 payload 和设备行为。
+
+验收：
+
+- [ ] stop 写入未导致异常启动。
+- [ ] 设备停机或保持停止状态。
+- [ ] 失败时 API/日志没有伪装成成功。
+- [ ] 实验室确认 stop 写 `0` 是否可作为正式语义；如不能，记录厂家建议值。
+
+## 4. 最小启动/停止验证
+
+仅在 0-3 全部通过并获得实验室授权后执行。
+
+实验室人工确认：
+
+- [ ] 当前负载安全、非空载。
+- [ ] 温度、功率和时间参数为实验室批准的最低风险参数。
+- [ ] 现场有授权人员看护。
+- [ ] 有立即停机和断电手段。
+
+步骤：
+
+1. 保持 `allow_experiment_control=false`。
+2. 临时保持或打开 `enable_control_writes=true`，按实验室决定执行。
+3. 在 `/control` 页面配置最低风险参数。
+4. 通过页面二次确认启动。
+5. 立即执行停止。
+6. 记录 API 返回、HMI 状态、仪表盘状态、日志和实际设备行为。
+
+验收：
+
+- [ ] start 返回成功只在设备确实进入运行时出现。
+- [ ] stop 后设备确实停止。
+- [ ] WebSocket 断开或页面刷新没有触发启动或停止。
+- [ ] 日志没有把失败、超时或设备返回 `False` 记录成成功。
+
+## 5. YAML 自动控制验证
+
+仅在 0-4 全部通过并获得实验室授权后执行。
+
+步骤：
+
+1. 临时将目标设备 `allow_experiment_control=true`。
+2. 使用只包含结构验证和最低风险参数的 YAML；不要使用未经批准的化学配方。
+3. 验证 `microwave.configure_*`、`microwave.start`、`microwave_temperature_reached` 或 `microwave_complete`、`microwave.stop`。
+4. 手动触发 stop，确认等待可中断。
+5. 验证结束后恢复 `allow_experiment_control=false`，除非实验室明确决定保留。
+
+验收：
+
+- [ ] `allow_experiment_control=false` 时 configure/start 被拒绝且不调用设备方法。
+- [ ] `allow_experiment_control=true` 时仅执行实验室批准的目标设备。
+- [ ] wait timeout 会失败，不会静默继续。
+- [ ] stop 能中断微波等待。
+- [ ] 实验日志、设备实际行为和最终状态一致。
+
+## 6. 记录模板
+
+| 项目 | 记录 |
+| --- | --- |
+| 日期 / 操作人 |  |
+| 设备序列号或实验室编号 |  |
+| 串口号 / 站号 |  |
+| 只读连接结果 |  |
+| 地址基准结果 |  |
+| stop 控制字结果 |  |
+| 最小启动/停止结果 |  |
+| YAML 自动控制结果 |  |
+| 是否允许保留 `enable_control_writes=true` |  |
+| 是否允许保留 `allow_experiment_control=true` |  |
+| 未解决风险或厂家待确认项 |  |
+
+## 通过标准
+
+只有当实验室完成记录并确认风险可接受时，才能认为微波仪实机 smoke test 通过。软件测试通过、前端构建通过或 Codex 文档检查通过，都不能单独作为实机通过结论。

@@ -122,6 +122,25 @@ git diff -- frontend/auto-imports.d.ts frontend/components.d.ts
 
 ## 完成记录
 
-- 状态：未开始。
-- 验证：未运行。
-- 交接：下一任务可以执行 `05_experiment_yaml_automation.md`，但前端不依赖 YAML 自动化。
+- 状态：2026-06-17 已完成本任务范围内的微波仪前端手动控制和仪表盘展示。未改后端、未改 YAML parser/executor，未连接真实硬件。
+- 已完成：
+  - 新增 `frontend/src/components/MicrowaveControl.vue`，作为独立微波仪控制卡片接入连接/断开、刷新状态、模式选择、段号 1-5、温度、手动功率、时/分/秒、配置、启动、停止和实时状态展示。
+  - `MicrowaveControl.vue` 明确展示 `enable_control_writes` 与 `allow_experiment_control` 安全状态；配置和真实启动在控制写入禁用时不可点击，页面加载和 WebSocket 连接不会自动控制设备。
+  - 启动按钮增加二次确认，确认文案包含炉门已关闭、反应瓶非空载且光纤探头已没入物料、温度和功率已核对、运行期间有人看护；用户取消时不调用 `/api/microwave/{device_id}/start`。
+  - `frontend/src/api/devices.ts` 增加微波仪 REST API 方法、模式枚举和配置 payload 类型，调用后端既有 `/api/microwave/...` 接口。
+  - `frontend/src/composables/useWebSocket.ts` 增加 `MicrowaveRealtimeData` 和 `RealtimeData.microwaves`，并兼容后端暂时没有 `microwaves` key 的旧 payload。
+  - `frontend/src/views/ControlPanel.vue` 增加 `microwaves` state、微波参数 localStorage 保存/恢复、REST 状态刷新缓存和微波控制事件处理。
+  - `frontend/src/views/Dashboard.vue` 增加微波设备卡片，展示运行/停止/异常、物料温度、功率、电流、运行时间、当前段、当前模式和故障码；温度曲线增加微波温度 series。
+  - `frontend/components.d.ts` 由构建生成并新增 `MicrowaveControl` 声明；`frontend/auto-imports.d.ts` 无变化。
+- 验证：
+  - `cd frontend; npm run build -- --mode production`：通过，`vue-tsc -b` 与 `vite build --mode production` 均完成。
+  - `git diff -- frontend/auto-imports.d.ts frontend/components.d.ts`：确认仅 `components.d.ts` 增加 `MicrowaveControl` 组件声明，属于本次新增组件的有意义生成声明更新。
+- 遗留问题：
+  - 未做真实硬件 smoke test；微波仪真实写入仍受后端 `enable_control_writes=false` 默认安全门禁限制，实验室确认前前端不会绕过该限制。
+  - 后端当前仍保留 `mode="unknown"`、原始 `current_mode_code` 和原始 `fault_code`，前端只展示原始状态，不解释协议未确认的模式枚举或故障 bit。
+  - `running` 仍沿用后端“实时功率非零”的保守判断，不能替代真实设备运行状态寄存器或实机确认。
+  - 停止/急停写入语义仍需后续真实设备 smoke test 复核；本任务只做前端调用与失败提示，不改变后端 stop 行为。
+- 交接给 05：
+  - 下一任务可以执行 `05_experiment_yaml_automation.md`，但必须继续保持 YAML 自动化默认禁用真实微波启动，只有显式配置和实验室 smoke-test 门槛通过后才能允许。
+  - 05 可复用本任务中的 `MicrowaveMode` 文案和 `/api/microwave/...` 前端调用经验，但不要让 YAML 动作继承前端手动启动确认作为安全替代；自动化应有独立的后端安全门禁。
+  - 前端已能展示 `allow_experiment_control=false` 和 `enable_control_writes=false`，05 若改变这些语义，需同步用户/开发/YAML 文档并重新验证前端展示。

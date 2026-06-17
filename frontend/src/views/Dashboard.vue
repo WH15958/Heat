@@ -62,6 +62,54 @@
           </div>
         </el-card>
       </el-col>
+
+      <el-col :span="12" v-for="(microwave, id) in realtimeData?.microwaves" :key="'m-'+id">
+        <el-card shadow="hover" class="device-card">
+          <template #header>
+            <div class="card-header">
+              <span class="device-title">微波仪 {{ id }}</span>
+              <el-tag :type="microwaveStatusType(microwave)" size="small">
+                {{ microwaveStatusText(microwave) }}
+              </el-tag>
+            </div>
+          </template>
+          <div class="microwave-info">
+            <div class="metric-block">
+              <span class="metric-label">物料温度</span>
+              <span class="metric-value">{{ formatNumber(microwave.material_temperature, 1, '°C') }}</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">功率</span>
+              <span class="metric-value">{{ formatNumber(microwave.power_percent, 0, '%') }}</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">电流</span>
+              <span class="metric-value">{{ formatNumber(microwave.current, 2, 'A') }}</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">运行时间</span>
+              <span class="metric-value">{{ formatRuntime(microwave.runtime_seconds) }}</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">当前段</span>
+              <span class="metric-value">{{ microwave.current_segment ?? '--' }}</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">当前模式</span>
+              <span class="metric-value">{{ microwaveModeLabel(microwave.mode) }}</span>
+            </div>
+          </div>
+          <div class="alarms">
+            <el-tag :type="Number(microwave.fault_code || 0) ? 'danger' : 'info'" size="small">
+              故障码 {{ microwave.fault_code ?? 0 }}
+            </el-tag>
+            <el-tag v-if="microwave.error" type="danger" size="small" style="margin: 2px">读取失败</el-tag>
+            <el-tag v-for="fault in microwave.faults || []" :key="fault" type="warning" size="small" style="margin: 2px">
+              {{ fault }}
+            </el-tag>
+          </div>
+        </el-card>
+      </el-col>
     </el-row>
 
     <el-row :gutter="20" style="margin-top: 20px">
@@ -98,7 +146,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
-import { useWebSocket, type RealtimeData } from '../composables/useWebSocket'
+import { useWebSocket, type MicrowaveRealtimeData, type RealtimeData } from '../composables/useWebSocket'
+
+type TagType = 'success' | 'info' | 'danger'
 
 const { data: realtimeData, connected: wsConnected } = useWebSocket()
 const tempChartRef = ref<HTMLElement>()
@@ -112,6 +162,11 @@ interface HeaterSeriesData {
   sv: [number, number][]
 }
 const heaterDataMap: Record<string, HeaterSeriesData> = {}
+
+interface MicrowaveSeriesData {
+  temperature: [number, number][]
+}
+const microwaveDataMap: Record<string, MicrowaveSeriesData> = {}
 
 interface PumpSeriesData {
   channels: Record<string, [number, number][]>
@@ -130,6 +185,44 @@ const FLOW_UNIT_LABELS: Record<string, string> = {
 
 function flowUnitLabel(unit: string | undefined): string {
   return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
+}
+
+function microwaveModeLabel(mode: string | undefined): string {
+  const labels: Record<string, string> = {
+    manual_power: '手动功率',
+    auto_power: '自动功率',
+    constant_rate: '恒速率',
+    unknown: '未知',
+  }
+  return labels[mode || 'unknown'] || mode || '--'
+}
+
+function formatNumber(value: number | null | undefined, digits: number, unit: string): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '--'
+  return `${value.toFixed(digits)}${unit}`
+}
+
+function formatRuntime(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '--'
+  const whole = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(whole / 3600)
+  const m = Math.floor((whole % 3600) / 60)
+  const s = whole % 60
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+}
+
+function microwaveStatusType(microwave: MicrowaveRealtimeData): TagType {
+  if (microwave.error) return 'danger'
+  if (Number(microwave.fault_code || 0)) return 'danger'
+  if (microwave.running) return 'success'
+  return 'info'
+}
+
+function microwaveStatusText(microwave: MicrowaveRealtimeData): string {
+  if (microwave.error) return '异常'
+  if (Number(microwave.fault_code || 0)) return '异常'
+  if (microwave.running) return '运行中'
+  return '停止'
 }
 
 let resizeObserver: ResizeObserver | null = null
@@ -199,10 +292,11 @@ watch(realtimeData, (newData: RealtimeData | null) => {
 
   const heaterKeys = Object.keys(newData.heaters || {})
   const pumpKeys = Object.keys(newData.pumps || {})
-  if (heaterKeys.length === 0 && pumpKeys.length === 0) return
+  const microwaveKeys = Object.keys(newData.microwaves || {})
+  if (heaterKeys.length === 0 && pumpKeys.length === 0 && microwaveKeys.length === 0) return
 
   if (tempChart) {
-    for (const [id, heater] of Object.entries(newData.heaters)) {
+    for (const [id, heater] of Object.entries(newData.heaters || {})) {
       if (heater.error) continue
       if (typeof heater.pv !== 'number' || typeof heater.sv !== 'number') continue
       if (!heaterDataMap[id]) heaterDataMap[id] = { pv: [], sv: [] }
@@ -210,6 +304,13 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       heaterDataMap[id].sv.push([now, heater.sv])
       heaterDataMap[id].pv = heaterDataMap[id].pv.slice(-maxPoints)
       heaterDataMap[id].sv = heaterDataMap[id].sv.slice(-maxPoints)
+    }
+    for (const [id, microwave] of Object.entries(newData.microwaves || {})) {
+      if (microwave.error) continue
+      if (typeof microwave.material_temperature !== 'number') continue
+      if (!microwaveDataMap[id]) microwaveDataMap[id] = { temperature: [] }
+      microwaveDataMap[id].temperature.push([now, microwave.material_temperature])
+      microwaveDataMap[id].temperature = microwaveDataMap[id].temperature.slice(-maxPoints)
     }
 
     const tempSeries: LineSeriesOption[] = []
@@ -222,6 +323,12 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
       )
     }
+    for (const [id, s] of Object.entries(microwaveDataMap)) {
+      if (s.temperature.length === 0) continue
+      const name = `${id} 微波温度`
+      tempLegend.push(name)
+      tempSeries.push({ name, type: 'line', data: s.temperature, smooth: true, showSymbol: false })
+    }
     if (tempSeries.length > 0) {
       tempChart.setOption(
         { legend: { data: tempLegend }, series: tempSeries },
@@ -231,7 +338,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
   }
 
   if (flowChart) {
-    for (const [pumpId, pump] of Object.entries(newData.pumps)) {
+    for (const [pumpId, pump] of Object.entries(newData.pumps || {})) {
       if (pump.error) continue
       if (!pump.channels) continue
       if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
@@ -298,4 +405,29 @@ watch(realtimeData, (newData: RealtimeData | null) => {
 .channel-row:last-child { border-bottom: none; }
 .channel-label { font-weight: 500; min-width: 60px; }
 .channel-detail { color: #606266; font-size: 13px; }
+.microwave-info {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 5px 0;
+}
+.metric-block {
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  padding: 10px;
+  min-width: 0;
+}
+.metric-label {
+  display: block;
+  color: #909399;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.metric-value {
+  display: block;
+  color: #303133;
+  font-weight: 600;
+  font-size: 16px;
+  word-break: break-word;
+}
 </style>

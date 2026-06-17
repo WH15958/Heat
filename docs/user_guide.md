@@ -48,8 +48,8 @@ npm run build
 
 | 页面 | 路径 | 作用 |
 |------|------|------|
-| 实时仪表盘 | `/` | 查看实时温度、泵状态与推送数据 |
-| 设备控制 | `/control` | 连接设备、控制加热器与泵 |
+| 实时仪表盘 | `/` | 查看实时温度、泵状态、微波仪状态与推送数据 |
+| 设备控制 | `/control` | 连接设备、控制加热器、泵与微波仪 |
 | 实验页面 | `/experiment` | 选择 YAML 实验、启动、暂停、恢复、停止 |
 | 历史记录 | `/history` | 查看实验历史记录和已保存日志 |
 
@@ -87,6 +87,32 @@ npm run build
 如果你只需要会用，直接在页面里选模式、填参数即可。  
 如果你需要理解 YAML 字段和单位，请看 [experiment_yaml_spec.md](experiment_yaml_spec.md)。
 如果你要把蠕动泵接入前驱体管路、微波入口或长管路定量输运，请先按 [system_engineering_design.md](system_engineering_design.md) 做死体积、预灌和真实流量标定。
+
+### 2.5 微波仪操作
+
+微波仪是高压、加热、微波输出设备，不能按普通加热器处理。当前页面支持连接、断开、刷新状态、配置参数、启动和停止，但真实写入默认受后端安全开关限制。
+
+启动微波前，页面会要求二次确认。实验室人员必须人工确认：
+
+- 炉门已关闭。
+- 反应瓶非空载，光纤探头已没入物料。
+- 温度、功率和时间参数已核对。
+- 设备运行期间有人现场看护。
+- 设备电源、接地、通风和散热空间符合说明书要求。
+
+微波仪状态字段：
+
+| 字段 | 含义 |
+|------|------|
+| 物料温度 | 当前从设备状态读到的物料温度；浮点字序仍需实机确认 |
+| 功率 | 当前实时功率百分数 |
+| 电流 | 当前工作电流原始显示值 |
+| 运行时间 | 由时、分、秒状态组合得到 |
+| 当前段 | 当前段号，来自设备状态 |
+| 当前模式 | 当前后端可识别模式；未知枚举会显示为未知 |
+| 故障码 | 原始故障码；协议未确认 bit 含义前不解释成具体故障 |
+
+如果页面显示 `enable_control_writes=false`，配置和启动会保持禁用；如果 `allow_experiment_control=false`，YAML 自动配置和启动会被拒绝。不要把这些拒绝当成故障，它们是当前默认安全边界。
 
 ---
 
@@ -160,14 +186,22 @@ npm run build
 浏览器刷新、关闭或 WebSocket 重连不会等同于“停止实验”或“停止泵”。  
 如果你要真正停设备，请使用页面按钮或明确的控制接口。
 
-### 4.4 日志保存开关的影响
+这条规则同样适用于微波仪：WebSocket 断开不会自动停止微波输出。微波仪运行时必须由现场人员看护，并通过页面按钮、实验停止、设备 stop 或急停流程明确停机。
+
+### 4.4 微波仪自动控制边界
+
+微波仪 YAML 自动控制默认关闭。只有实验室完成实机 smoke test，并且人工确认设备身份、接线、安全授权、写入顺序和停机语义后，才可以把目标设备配置为 `allow_experiment_control=true`。
+
+软件测试和页面二次确认不能替代实验室确认。实机验证清单见 [microwave_smoke_test.md](microwave_smoke_test.md)。
+
+### 4.5 日志保存开关的影响
 
 启动实验时可选择是否保存日志：
 
 - 开启：实验日志会写入历史记录与原始日志文件
 - 关闭：仍可实时看到日志，但不保存原始日志文件
 
-### 4.5 `samples.csv`、历史记录、原始日志的关系
+### 4.6 `samples.csv`、历史记录、原始日志的关系
 
 - `samples.csv`：面向样品追踪，记录 `sample_id`、batch、condition、状态等
 - 历史记录：面向实验运行查看
@@ -185,6 +219,7 @@ npm run build
 - 文件后缀必须是 `.yaml` 或 `.yml`
 - 每个实验至少要有 `steps`
 - 每个步骤至少要有 `id` 和 `type`
+- 微波仪 `configure` 和 `start` 动作默认会被 `allow_experiment_control=false` 阻断
 
 最小示例：
 
@@ -277,10 +312,20 @@ curl http://localhost:8000/api/experiments/simple_heat_test.yaml/progress
 这是当前设计的预期行为。  
 stop 会尽快中断等待并结束实验，而不是等完整等待时间走完。
 
+### 8.5 微波仪为什么配置或启动被拒绝
+
+常见原因：
+
+- 设备配置中的 `enable_control_writes` 仍为 `false`，后端禁止真实寄存器写入。
+- YAML 自动控制时，目标设备的 `allow_experiment_control` 仍为 `false`。
+- 微波仪未连接，或驱动返回失败。
+- 实验室尚未完成 smoke test，不应打开真实启动能力。
+
 ---
 
 ## 9. 去哪继续看
 
 - YAML 规范： [experiment_yaml_spec.md](experiment_yaml_spec.md)
+- 微波实机 smoke test： [microwave_smoke_test.md](microwave_smoke_test.md)
 - 故障排查： [troubleshooting.md](troubleshooting.md)
 - 开发维护： [developer_guide.md](developer_guide.md)

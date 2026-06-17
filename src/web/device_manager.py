@@ -379,6 +379,13 @@ class DeviceManager:
             return False
         return microwave.stop()
 
+    def is_microwave_experiment_control_allowed(self, device_id: str) -> bool:
+        """返回微波仪是否允许实验 YAML 自动控制"""
+        microwave = self._microwaves.get(device_id)
+        if microwave is None:
+            raise ValueError(f"Microwave not found: {device_id}")
+        return bool(getattr(microwave.config, "allow_experiment_control", False))
+
     def emergency_stop_all(self) -> bool:
         """紧急停止所有设备"""
         logger.warning("EMERGENCY STOP ALL DEVICES")

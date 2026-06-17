@@ -6,6 +6,7 @@ from src.experiment.actions import (
     ActionType,
     WaitType,
 )
+from devices.microwave import MicrowaveSegment
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +54,69 @@ class StepExecutor:
                 result = await loop.run_in_executor(None, self._dm.stop_heater, step.params["device_id"])
                 if not result:
                     logger.error(f"Step {step.id}: stop_heater returned False")
+                    return False
+
+            elif step.type == ActionType.MICROWAVE_CONFIGURE_MANUAL:
+                if not self._microwave_experiment_control_allowed(step):
+                    return False
+                segments = self._microwave_segments(step.params.get("segments", []))
+                result = await loop.run_in_executor(
+                    None,
+                    self._dm.configure_microwave_manual,
+                    step.params["device_id"],
+                    segments,
+                )
+                if not result:
+                    logger.error(f"Step {step.id}: configure_microwave_manual returned False")
+                    return False
+
+            elif step.type == ActionType.MICROWAVE_CONFIGURE_AUTO_POWER:
+                if not self._microwave_experiment_control_allowed(step):
+                    return False
+                segments = self._microwave_segments(step.params.get("segments", []))
+                result = await loop.run_in_executor(
+                    None,
+                    self._dm.configure_microwave_auto_power,
+                    step.params["device_id"],
+                    segments,
+                )
+                if not result:
+                    logger.error(f"Step {step.id}: configure_microwave_auto_power returned False")
+                    return False
+
+            elif step.type == ActionType.MICROWAVE_CONFIGURE_CONSTANT_RATE:
+                if not self._microwave_experiment_control_allowed(step):
+                    return False
+                segments = self._microwave_segments(step.params.get("segments", []))
+                result = await loop.run_in_executor(
+                    None,
+                    self._dm.configure_microwave_constant_rate,
+                    step.params["device_id"],
+                    segments,
+                )
+                if not result:
+                    logger.error(f"Step {step.id}: configure_microwave_constant_rate returned False")
+                    return False
+
+            elif step.type == ActionType.MICROWAVE_START:
+                if not self._microwave_experiment_control_allowed(step):
+                    return False
+                result = await loop.run_in_executor(
+                    None,
+                    self._dm.start_microwave,
+                    step.params["device_id"],
+                    step.params["mode"],
+                )
+                if not result:
+                    logger.error(f"Step {step.id}: start_microwave returned False")
+                    return False
+
+            elif step.type == ActionType.MICROWAVE_STOP:
+                result = await loop.run_in_executor(
+                    None, self._dm.stop_microwave, step.params["device_id"]
+                )
+                if not result:
+                    logger.error(f"Step {step.id}: stop_microwave returned False")
                     return False
 
             elif step.type == ActionType.PUMP_START:
@@ -146,6 +210,71 @@ class StepExecutor:
             logger.error(f"Step {step.id} failed: {e}")
             return False
 
+    def _microwave_experiment_control_allowed(self, step: ExperimentStep) -> bool:
+        device_id = step.params["device_id"]
+        checker = getattr(self._dm, "is_microwave_experiment_control_allowed", None)
+        if callable(checker):
+            allowed = bool(checker(device_id))
+        else:
+            microwave = self._dm.get_microwave(device_id)
+            allowed = bool(getattr(getattr(microwave, "config", None), "allow_experiment_control", False))
+        if not allowed:
+            logger.error(
+                f"Step {step.id}: microwave experiment control is disabled for {device_id}"
+            )
+        return allowed
+
+    def _microwave_segments(self, raw_segments):
+        segments = []
+        for raw in raw_segments:
+            if isinstance(raw, MicrowaveSegment):
+                segments.append(raw)
+                continue
+            segments.append(MicrowaveSegment(
+                segment=raw["segment"],
+                heating_temperature=self._value(
+                    raw,
+                    "heating_temperature",
+                    "heat_temperature",
+                    "ramp_target_temperature",
+                    "target_temperature",
+                    default=0.0,
+                ),
+                heating_power_percent=self._value(
+                    raw, "heating_power_percent", "heat_power", default=0
+                ),
+                holding_temperature=self._value(
+                    raw,
+                    "holding_temperature",
+                    "hold_temperature",
+                    "hold_target_temperature",
+                    default=0.0,
+                ),
+                holding_power_percent=self._value(
+                    raw, "holding_power_percent", "hold_power", default=0
+                ),
+                holding_deviation=self._value(
+                    raw, "holding_deviation", "hold_deviation", default=0.0
+                ),
+                hours=self._value(raw, "hours", "hold_hours", default=0),
+                minutes=self._value(raw, "minutes", "hold_minutes", default=0),
+                seconds=self._value(raw, "seconds", "hold_seconds", default=0),
+                target_temperature=self._value(
+                    raw, "target_temperature", "ramp_target_temperature", default=None
+                ),
+                ramp_hours=self._value(raw, "ramp_hours", default=0),
+                ramp_minutes=self._value(raw, "ramp_minutes", default=0),
+                ramp_seconds=self._value(raw, "ramp_seconds", default=0),
+            ))
+        return segments
+
+    @staticmethod
+    def _value(data, *names, default=None):
+        for name in names:
+            if name in data:
+                return data[name]
+        return default
+
     async def _wait_condition(self, condition):
         """等待条件满足
 
@@ -192,6 +321,71 @@ class StepExecutor:
                 except Exception as e:
                     logger.warning(f"Temperature wait read failed for {condition.device_id}: {e}")
                 await asyncio.sleep(1.0)
+
+        elif condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED:
+            target_temperature = condition.target_temperature
+            if target_temperature is None:
+                logger.error("Microwave temperature wait requires target_temperature")
+                return False
+            logger.info(
+                f"Waiting for microwave {condition.device_id} to reach "
+                f"{target_temperature}C (tolerance={condition.tolerance}C, "
+                f"timeout={condition.timeout}s)"
+            )
+            while True:
+                if self._should_stop():
+                    logger.info("Microwave temperature wait interrupted by stop request")
+                    return False
+                elapsed = time.time() - start_time
+                if elapsed > condition.timeout:
+                    logger.warning(f"Microwave temperature wait timeout after {condition.timeout}s")
+                    return False
+                try:
+                    data = await loop.run_in_executor(
+                        None, self._dm.read_microwave_data, condition.device_id
+                    )
+                    material_temperature = data.get("material_temperature")
+                    if material_temperature is not None and abs(
+                        float(material_temperature) - float(target_temperature)
+                    ) <= condition.tolerance:
+                        logger.info(
+                            f"Microwave temperature reached: "
+                            f"{float(material_temperature):.1f}C ~ "
+                            f"{float(target_temperature):.1f}C"
+                        )
+                        return True
+                except Exception as e:
+                    logger.warning(
+                        f"Microwave temperature wait read failed for "
+                        f"{condition.device_id}: {e}"
+                    )
+                await asyncio.sleep(0.2)
+
+        elif condition.type == WaitType.MICROWAVE_COMPLETE:
+            logger.info(
+                f"Waiting for microwave {condition.device_id} to complete "
+                f"(timeout={condition.timeout}s)"
+            )
+            while True:
+                if self._should_stop():
+                    logger.info("Microwave complete wait interrupted by stop request")
+                    return False
+                elapsed = time.time() - start_time
+                if elapsed > condition.timeout:
+                    logger.warning(f"Microwave complete wait timeout after {condition.timeout}s")
+                    return False
+                try:
+                    data = await loop.run_in_executor(
+                        None, self._dm.read_microwave_data, condition.device_id
+                    )
+                    if not data.get("running", False):
+                        logger.info(f"Microwave {condition.device_id} completed")
+                        return True
+                except Exception as e:
+                    logger.warning(
+                        f"Microwave complete wait read failed for {condition.device_id}: {e}"
+                    )
+                await asyncio.sleep(0.2)
 
         elif condition.type == WaitType.PUMP_COMPLETE:
             logger.info(

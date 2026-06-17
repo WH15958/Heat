@@ -206,7 +206,153 @@
 | `device_id` | 是 | 泵 ID |
 | `channel` | 是 | 通道号 |
 
-### 4.7 `wait`
+### 4.7 微波仪动作
+
+微波仪动作用于实验流程中配置、启动或停止已注册的 MKM-AH1E 微波仪。该能力属于硬件邻近自动控制，默认受设备配置 `allow_experiment_control: false` 阻断。
+
+当前动作表：
+
+| 动作 | 说明 |
+|------|------|
+| `microwave.configure_manual` | 配置手动功率模式段参数 |
+| `microwave.configure_auto_power` | 配置自动功率模式段参数 |
+| `microwave.configure_constant_rate` | 配置恒速率模式段参数 |
+| `microwave.start` | 按指定模式启动微波输出 |
+| `microwave.stop` | 停止微波输出 |
+
+规则：
+
+- `microwave.configure_*` 和 `microwave.start` 在 `allow_experiment_control` 为 `false` 时会被拒绝，不会调用设备方法。
+- `enable_control_writes=false` 时，底层驱动会阻断真实寄存器写入。
+- `microwave.stop` 可在自动控制禁用时执行，用于安全停机。
+- 启用真实自动启动前，必须完成 [microwave_smoke_test.md](microwave_smoke_test.md) 中的实验室人工确认。
+- 以下示例只说明 YAML 结构，不是化学工艺建议，也不能作为真实实验参数直接照抄。
+
+`microwave.configure_manual` 参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 微波仪 ID |
+| `segments` | 是 | 段参数列表，段号范围 1-5 |
+
+手动功率段字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `segment` | 是 | 段号，1-5 |
+| `heating_temperature` | 是 | 加热目标温度 |
+| `heating_power_percent` | 是 | 加热功率百分数 |
+| `holding_temperature` | 是 | 保温温度 |
+| `holding_power_percent` | 是 | 保温功率百分数 |
+| `holding_deviation` | 否 | 保温偏差，默认 `0` |
+| `hours` / `minutes` / `seconds` | 是 | 保温时间 |
+
+结构示例：
+
+```yaml
+- id: mw_manual_config_structure_only
+  type: microwave.configure_manual
+  params:
+    device_id: microwave1
+    segments:
+      - segment: 1
+        heating_temperature: 40
+        heating_power_percent: 5
+        holding_temperature: 40
+        holding_power_percent: 5
+        holding_deviation: 1
+        hours: 0
+        minutes: 0
+        seconds: 5
+```
+
+`microwave.configure_auto_power` 参数：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `segment` | 是 | 段号，1-5 |
+| `target_temperature` | 是 | 升温目标值 |
+| `holding_temperature` | 是 | 保温目标值 |
+| `hours` / `minutes` / `seconds` | 是 | 保温时间 |
+
+结构示例：
+
+```yaml
+- id: mw_auto_power_config_structure_only
+  type: microwave.configure_auto_power
+  params:
+    device_id: microwave1
+    segments:
+      - segment: 1
+        target_temperature: 40
+        holding_temperature: 40
+        hours: 0
+        minutes: 0
+        seconds: 5
+```
+
+`microwave.configure_constant_rate` 参数：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `segment` | 是 | 段号，1-5 |
+| `ramp_hours` / `ramp_minutes` / `ramp_seconds` | 是 | 升温时长 |
+| `target_temperature` | 是 | 升温目标温度 |
+| `hours` / `minutes` / `seconds` | 是 | 保温时长 |
+| `holding_temperature` | 是 | 保温温度 |
+
+结构示例：
+
+```yaml
+- id: mw_constant_rate_config_structure_only
+  type: microwave.configure_constant_rate
+  params:
+    device_id: microwave1
+    segments:
+      - segment: 1
+        ramp_hours: 0
+        ramp_minutes: 0
+        ramp_seconds: 5
+        target_temperature: 40
+        hours: 0
+        minutes: 0
+        seconds: 5
+        holding_temperature: 40
+```
+
+`microwave.start` 参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 微波仪 ID |
+| `mode` | 是 | `manual_power`、`auto_power` 或 `constant_rate` |
+
+`microwave.stop` 参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 微波仪 ID |
+
+最小结构示例：
+
+```yaml
+- id: mw_start_structure_only
+  type: microwave.start
+  params:
+    device_id: microwave1
+    mode: manual_power
+  wait:
+    type: microwave_complete
+    device_id: microwave1
+    timeout: 30
+
+- id: mw_stop
+  type: microwave.stop
+  params:
+    device_id: microwave1
+```
+
+### 4.8 `wait`
 
 用途：不执行设备动作，仅依赖 `wait` 字段实现等待。
 
@@ -221,13 +367,13 @@
     seconds: 60
 ```
 
-### 4.8 `emergency_stop`
+### 4.9 `emergency_stop`
 
 用途：执行全局紧急停止。
 
 参数：无强制参数。
 
-### 4.9 `log`
+### 4.10 `log`
 
 用途：在实验日志中写入一条消息。
 
@@ -290,6 +436,42 @@
 
 说明：
 
+- 超时会导致步骤失败
+- stop 会中断该等待
+
+### 5.5 `microwave_temperature_reached`
+
+等待微波仪物料温度达到目标温度。
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 微波仪 ID |
+| `target_temperature` | 是 | 目标温度 |
+| `tolerance` | 否 | 容差，默认 `1.0` |
+| `timeout` | 否 | 超时秒数，默认 `3600` |
+
+说明：
+
+- 判断逻辑基于 `DeviceManager.read_microwave_data()` 返回的 `material_temperature`
+- 超时会导致步骤失败
+- stop 会中断该等待
+
+### 5.6 `microwave_complete`
+
+等待微波仪运行完成。
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `device_id` | 是 | 微波仪 ID |
+| `timeout` | 否 | 超时秒数，默认 `3600` |
+
+说明：
+
+- 当前判断逻辑基于微波仪状态 payload 中的 `running`
 - 超时会导致步骤失败
 - stop 会中断该等待
 
@@ -438,3 +620,21 @@ interval_time: 0
 - `flow_unit`
 
 这样更容易调试和复现实验。
+
+### 9.6 微波仪自动控制被拒绝
+
+现象：
+
+- `microwave.configure_*` 或 `microwave.start` 步骤失败。
+- 日志出现 `microwave experiment control is disabled` 或等价信息。
+
+原因：
+
+- 目标微波仪配置仍保持 `allow_experiment_control: false`。
+- 或者底层真实写入仍保持 `enable_control_writes: false`。
+
+处理：
+
+- 不要为了让 YAML 通过而直接打开安全开关。
+- 先按 [microwave_smoke_test.md](microwave_smoke_test.md) 完成实验室人工确认。
+- 确认完成后，再由实验室负责人决定是否临时启用目标设备的自动控制。

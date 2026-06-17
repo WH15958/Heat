@@ -3,8 +3,8 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-06-02  
-版本：v3.1-branch-policy
+最后更新：2026-06-17
+版本：v3.2-microwave-safety-boundary
 
 ---
 
@@ -56,6 +56,11 @@
 - `pump.start`
 - `pump.stop`
 - `pump.stop_channel`
+- `microwave.configure_manual`
+- `microwave.configure_auto_power`
+- `microwave.configure_constant_rate`
+- `microwave.start`
+- `microwave.stop`
 - `wait`
 - `emergency_stop`
 - `log`
@@ -66,6 +71,8 @@
 - `duration`
 - `temperature_reached`
 - `pump_complete`
+- `microwave_temperature_reached`
+- `microwave_complete`
 
 不要在文档或代码里编造当前不存在的动作名。
 
@@ -128,6 +135,22 @@
 - `output/` 为运行和测试产物
 - `src/web/static/` 为前端构建产物
 - 文档里可描述这些目录的作用，但不要把它们当源码修改目标
+
+### 2.6 微波仪真实控制必须默认关闭
+
+原因：
+
+- MKM-AH1E 微波仪涉及高压、加热、微波输出、门控联锁、空载风险和现场看护要求
+- 软件测试只能验证 fake protocol、API/WS、YAML gate 和失败传播，不能确认真实硬件安全
+
+要求：
+
+- `enable_control_writes` 必须默认 `false`，未完成人工 smoke test 前不得打开真实寄存器写入
+- `allow_experiment_control` 必须默认 `false`，未完成人工 smoke test 前不得允许 YAML 自动 configure/start
+- `microwave.configure_*` 和 `microwave.start` 必须先检查 `allow_experiment_control`
+- `microwave.stop` 和全局 `emergency_stop` 可以在自动控制禁用时执行，用于安全停机
+- AI 不能确认设备身份、接线、接地、炉门、非空载、探头浸没、通风散热、SOP 或真实 stop 语义；这些必须由用户/实验室确认
+- 实机联调按 `docs/microwave_smoke_test.md` 执行，联调结果必须由实验室回填记录
 
 ---
 
@@ -207,6 +230,7 @@ AI 不应做的是：
 - `api/ws.py`：检查 WebSocket 生命周期是否影响设备
 - `parser.py` / YAML：检查动作名、字段名、文件名约束
 - 样品记录：检查 `metadata -> sample_id -> samples.csv`
+- 微波仪：检查 `enable_control_writes`、`allow_experiment_control`、控制字写入、状态 payload 和 `docs/microwave_smoke_test.md`
 
 实机验证不是每次都必须做，但如果改动触及真实设备控制时序、协议写入顺序、串口管理，软件验证不足以替代实机验证。
 
@@ -297,9 +321,10 @@ AI 不应做的是：
 - 主流程文档化较完整，但仍依赖人对硬件场景的理解
 - 测试以软件层为主，硬件 smoke test 仍需人工执行
 - `src/main.py` 仍存在，但主线协作应以 Web 体系为准
+- 微波仪真实控制仍需要实验室 smoke test 确认；默认配置保持禁用真实写入和 YAML 自动启动
 
 当前未决事项：
 
 - 是否要补专门的 API 参考文档
-- 是否要为真实硬件联调补更明确的 smoke test 清单
+- 微波仪真实硬件联调结果尚未回填
 - 是否要继续拆分历史问题库与 AI 规则库

@@ -47,6 +47,36 @@ export const VOLUME_UNITS = [
 
 export type PumpMode = typeof PUMP_MODES[number]['value']
 
+export const MICROWAVE_MODES = [
+  { value: 'manual_power', label: '手动功率' },
+  { value: 'auto_power', label: '自动功率' },
+  { value: 'constant_rate', label: '恒速率' },
+] as const
+
+export type MicrowaveMode = typeof MICROWAVE_MODES[number]['value']
+
+export interface MicrowaveSegmentPayload {
+  segment: number
+  heating_temperature: number
+  target_temperature?: number | null
+  holding_temperature: number
+  heating_power_percent?: number | null
+  holding_power_percent?: number | null
+  holding_deviation?: number
+  hours: number
+  minutes: number
+  seconds: number
+  ramp_hours?: number
+  ramp_minutes?: number
+  ramp_seconds?: number
+}
+
+const MICROWAVE_CONFIG_PATH: Record<MicrowaveMode, string> = {
+  manual_power: 'manual',
+  auto_power: 'auto_power',
+  constant_rate: 'constant_rate',
+}
+
 export const devicesApi = {
   list: () => api.get('/devices'),
 
@@ -94,6 +124,18 @@ export const devicesApi = {
     }),
   stopPump: (id: string, channel?: number) =>
     api.post(`/pump/${id}/stop`, { channel: channel ?? null }),
+
+  connectMicrowave: (id: string) => api.post(`/microwave/${id}/connect`),
+  disconnectMicrowave: (id: string) => api.post(`/microwave/${id}/disconnect`),
+  readMicrowaveData: (id: string) => api.get(`/microwave/${id}/data`),
+  configureMicrowave: (
+    id: string,
+    mode: MicrowaveMode,
+    segments: MicrowaveSegmentPayload[],
+  ) => api.post(`/microwave/${id}/configure/${MICROWAVE_CONFIG_PATH[mode]}`, { segments }),
+  startMicrowave: (id: string, mode: MicrowaveMode) =>
+    api.post(`/microwave/${id}/start`, { mode }),
+  stopMicrowave: (id: string) => api.post(`/microwave/${id}/stop`),
 
   emergencyStop: () => api.post('/emergency_stop'),
 }
