@@ -63,7 +63,7 @@
         </el-card>
       </el-col>
 
-      <el-col :span="12" v-for="(microwave, id) in realtimeData?.microwaves" :key="'m-'+id">
+      <el-col :span="12" v-for="(microwave, id) in dashboardMicrowaves" :key="'m-'+id">
         <el-card shadow="hover" class="device-card">
           <template #header>
             <div class="card-header">
@@ -103,6 +103,7 @@
             <el-tag :type="Number(microwave.fault_code || 0) ? 'danger' : 'info'" size="small">
               故障码 {{ microwave.fault_code ?? 0 }}
             </el-tag>
+            <el-tag v-if="!microwave.connected" type="info" size="small" style="margin: 2px">未连接</el-tag>
             <el-tag v-if="microwave.error" type="danger" size="small" style="margin: 2px">读取失败</el-tag>
             <el-tag v-for="fault in microwave.faults || []" :key="fault" type="warning" size="small" style="margin: 2px">
               {{ fault }}
@@ -144,8 +145,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
+import { devicesApi } from '../api/devices'
 import { useWebSocket, type MicrowaveRealtimeData, type RealtimeData } from '../composables/useWebSocket'
 
 type TagType = 'success' | 'info' | 'danger'
@@ -175,6 +177,44 @@ const pumpDataMap: Record<string, PumpSeriesData> = {}
 const channelFlowUnitMap: Record<string, string> = {}
 
 const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
+
+interface RegisteredMicrowaveStatus {
+  connected: boolean
+  status?: string
+  allow_experiment_control?: boolean
+  enable_control_writes?: boolean
+}
+
+interface DashboardMicrowaveData extends MicrowaveRealtimeData {
+  connected: boolean
+  status?: string
+}
+
+const registeredMicrowaves = ref<Record<string, RegisteredMicrowaveStatus>>({})
+
+const dashboardMicrowaves = computed<Record<string, DashboardMicrowaveData>>(() => {
+  const merged: Record<string, DashboardMicrowaveData> = {}
+  for (const [id, status] of Object.entries(registeredMicrowaves.value)) {
+    merged[id] = {
+      device_id: id,
+      connected: Boolean(status.connected),
+      status: status.status,
+      allow_experiment_control: Boolean(status.allow_experiment_control),
+      enable_control_writes: Boolean(status.enable_control_writes),
+    }
+  }
+  for (const [id, live] of Object.entries(realtimeData.value?.microwaves || {})) {
+    const registered = registeredMicrowaves.value[id]
+    merged[id] = {
+      ...(merged[id] || {}),
+      ...live,
+      device_id: live.device_id || id,
+      connected: registered?.connected ?? true,
+      status: registered?.status ?? merged[id]?.status,
+    }
+  }
+  return merged
+})
 
 const FLOW_UNIT_LABELS: Record<string, string> = {
   ML_MIN: 'mL/min',
@@ -211,18 +251,29 @@ function formatRuntime(seconds: number | null | undefined): string {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
-function microwaveStatusType(microwave: MicrowaveRealtimeData): TagType {
+function microwaveStatusType(microwave: DashboardMicrowaveData): TagType {
+  if (!microwave.connected) return 'info'
   if (microwave.error) return 'danger'
   if (Number(microwave.fault_code || 0)) return 'danger'
   if (microwave.running) return 'success'
   return 'info'
 }
 
-function microwaveStatusText(microwave: MicrowaveRealtimeData): string {
-  if (microwave.error) return '异常'
+function microwaveStatusText(microwave: DashboardMicrowaveData): string {
+  if (!microwave.connected) return '离线'
+  if (microwave.error) return '读取失败'
   if (Number(microwave.fault_code || 0)) return '异常'
   if (microwave.running) return '运行中'
   return '停止'
+}
+
+async function refreshRegisteredDevices() {
+  try {
+    const res = await devicesApi.list()
+    registeredMicrowaves.value = res.data.microwaves || {}
+  } catch (error) {
+    console.error('[Dashboard] 设备状态读取失败:', error)
+  }
 }
 
 let resizeObserver: ResizeObserver | null = null
@@ -259,6 +310,7 @@ function initCharts() {
 }
 
 onMounted(async () => {
+  await refreshRegisteredDevices()
   await nextTick()
   initCharts()
 

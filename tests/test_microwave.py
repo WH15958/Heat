@@ -4,6 +4,8 @@ Microwave backend driver tests using a fake Modbus protocol.
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 try:
     import pytest
@@ -226,7 +228,34 @@ def test_read_data_not_connected_raises_ioerror():
 def test_config_manager_loads_disabled_microwave_config():
     from utils.config import ConfigManager
 
-    config = ConfigManager("config/system_config.yaml").load()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config_path = Path(tmp_dir) / "system_config.yaml"
+        config_path.write_text(
+            """name: test
+version: "1.0.0"
+microwaves:
+  - device_id: microwave1
+    name: test microwave
+    connection:
+      port: FAKE
+      baudrate: 9600
+      address: 1
+      parity: N
+      timeout: 2.0
+    slave_address: 1
+    max_temperature: 300.0
+    max_power_percent: 100
+    poll_interval: 1.0
+    retry_count: 3
+    retry_delay: 0.5
+    enabled: false
+    allow_experiment_control: false
+    enable_control_writes: false
+""",
+            encoding="utf-8",
+        )
+
+        config = ConfigManager(str(config_path)).load()
 
     assert len(config.microwaves) == 1
     microwave = config.microwaves[0]

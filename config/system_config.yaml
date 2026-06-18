@@ -94,7 +94,7 @@ microwaves:
     poll_interval: 1.0
     retry_count: 3
     retry_delay: 0.5
-    enabled: false
+    enabled: true
     allow_experiment_control: false
     enable_control_writes: false
 

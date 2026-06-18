@@ -30,6 +30,7 @@ class FakeMicrowaveExperimentManager:
         self.configure_result = True
         self.start_result = True
         self.stop_result = True
+        self.emergency_stop_result = True
         self.read_payloads = []
         self.configured_segments = None
         self.start_mode = None
@@ -62,6 +63,10 @@ class FakeMicrowaveExperimentManager:
     def stop_microwave(self, device_id):
         self.calls.append(("stop_microwave", device_id))
         return self.stop_result
+
+    def emergency_stop_all(self):
+        self.calls.append(("emergency_stop_all",))
+        return self.emergency_stop_result
 
     def read_microwave_data(self, device_id):
         self.calls.append(("read_microwave_data", device_id))
@@ -243,6 +248,18 @@ def test_microwave_device_false_result_fails_step():
     assert ("configure_microwave_auto_power", "microwave1") in dm.calls
 
 
+def test_emergency_stop_false_result_fails_step():
+    dm = FakeMicrowaveExperimentManager()
+    dm.emergency_stop_result = False
+    executor = StepExecutor(dm)
+    step = ExperimentStep(id="emergency", type=ActionType.EMERGENCY_STOP)
+
+    result = run(executor.execute(step))
+
+    assert result is False
+    assert dm.calls == [("emergency_stop_all",)]
+
+
 def test_microwave_temperature_reached_success():
     dm = FakeMicrowaveExperimentManager()
     dm.read_payloads = [{"material_temperature": 79.8, "running": True}]
@@ -310,7 +327,7 @@ def test_microwave_temperature_reached_stop_interrupts():
 
 def test_microwave_complete_success():
     dm = FakeMicrowaveExperimentManager()
-    dm.read_payloads = [{"running": False, "material_temperature": 80}]
+    dm.read_payloads = [{"completed": True, "material_temperature": 80}]
     executor = StepExecutor(dm)
     step = ExperimentStep(
         id="wait_complete",
@@ -326,6 +343,26 @@ def test_microwave_complete_success():
 
     assert result is True
     assert dm.read_count == 1
+
+
+def test_microwave_complete_ignores_display_running_without_completion_signal():
+    dm = FakeMicrowaveExperimentManager()
+    dm.read_payloads = [{"running": False, "material_temperature": 80}]
+    executor = StepExecutor(dm)
+    step = ExperimentStep(
+        id="wait_complete_without_signal",
+        type=ActionType.WAIT,
+        wait=WaitCondition(
+            type=WaitType.MICROWAVE_COMPLETE,
+            device_id="microwave1",
+            timeout=0.05,
+        ),
+    )
+
+    result = run(executor.execute(step))
+
+    assert result is False
+    assert dm.read_count >= 1
 
 
 def test_microwave_complete_timeout_fails():
@@ -376,10 +413,12 @@ def run_all():
         test_microwave_control_disabled_refuses_configure_and_start,
         test_microwave_stop_is_allowed_when_control_disabled,
         test_microwave_device_false_result_fails_step,
+        test_emergency_stop_false_result_fails_step,
         test_microwave_temperature_reached_success,
         test_microwave_temperature_reached_timeout_fails,
         test_microwave_temperature_reached_stop_interrupts,
         test_microwave_complete_success,
+        test_microwave_complete_ignores_display_running_without_completion_signal,
         test_microwave_complete_timeout_fails,
         test_microwave_complete_stop_interrupts,
     ]

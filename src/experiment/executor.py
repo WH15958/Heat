@@ -190,7 +190,10 @@ class StepExecutor:
                 pass
 
             elif step.type == ActionType.EMERGENCY_STOP:
-                await loop.run_in_executor(None, self._dm.emergency_stop_all)
+                result = await loop.run_in_executor(None, self._dm.emergency_stop_all)
+                if not result:
+                    logger.error(f"Step {step.id}: emergency_stop_all returned False")
+                    return False
 
             elif step.type == ActionType.LOG:
                 logger.info(f"[Experiment] {step.params.get('message', '')}")
@@ -274,6 +277,15 @@ class StepExecutor:
             if name in data:
                 return data[name]
         return default
+
+    @staticmethod
+    def _microwave_completion_confirmed(data) -> bool:
+        if data.get("completed") is True:
+            return True
+        state = data.get("completion_state")
+        if isinstance(state, str) and state.lower() in {"complete", "completed"}:
+            return True
+        return False
 
     async def _wait_condition(self, condition):
         """等待条件满足
@@ -378,7 +390,7 @@ class StepExecutor:
                     data = await loop.run_in_executor(
                         None, self._dm.read_microwave_data, condition.device_id
                     )
-                    if not data.get("running", False):
+                    if self._microwave_completion_confirmed(data):
                         logger.info(f"Microwave {condition.device_id} completed")
                         return True
                 except Exception as e:

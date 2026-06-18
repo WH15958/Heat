@@ -651,11 +651,16 @@ async function emergencyStop() {
       cancelButtonText: '取消',
       type: 'error',
     })
-    await devicesApi.emergencyStop()
+    const res = await devicesApi.emergencyStop()
+    await refreshDevices()
+    if (!res.data.success) {
+      ElMessage.error('紧急停止未完全成功：至少一个设备返回失败')
+      return
+    }
     ElMessage.error('紧急停止已执行！')
-    refreshDevices()
-  } catch {
-    // 用户取消
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(`紧急停止失败: ${e.response?.data?.detail || e.message || e}`)
   }
 }
 

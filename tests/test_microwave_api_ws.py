@@ -21,6 +21,7 @@ from src.web.api.devices import (
     configure_microwave_manual,
     connect_microwave,
     disconnect_microwave,
+    emergency_stop,
     list_devices,
     start_microwave,
     stop_microwave,
@@ -43,6 +44,7 @@ class FakeApiDeviceManager:
     def __init__(self):
         self.calls = []
         self.should_succeed = True
+        self.emergency_stop_result = True
 
     def get_all_status(self):
         return {
@@ -70,6 +72,10 @@ class FakeApiDeviceManager:
     def stop_microwave(self, device_id):
         self.calls.append(("stop_microwave", device_id))
         return self.should_succeed
+
+    def emergency_stop_all(self):
+        self.calls.append(("emergency_stop_all",))
+        return self.emergency_stop_result
 
 
 class FakeConnectedMicrowave:
@@ -199,6 +205,17 @@ def test_emergency_stop_all_calls_microwave_stop_and_reports_failure():
     assert microwave.emergency_stop.call_count == 1
 
 
+def test_emergency_stop_endpoint_reports_device_failure():
+    dm = FakeApiDeviceManager()
+    dm.emergency_stop_result = False
+    request = make_request(dm)
+
+    response = run(emergency_stop(request))
+
+    assert response == {"success": False}
+    assert dm.calls == [("emergency_stop_all",)]
+
+
 def run_all():
     tests = [
         test_list_devices_includes_microwaves,
@@ -208,6 +225,7 @@ def run_all():
         test_websocket_microwave_read_failure_is_error_payload,
         test_websocket_disconnect_does_not_stop_microwave,
         test_emergency_stop_all_calls_microwave_stop_and_reports_failure,
+        test_emergency_stop_endpoint_reports_device_failure,
     ]
 
     failed = 0
