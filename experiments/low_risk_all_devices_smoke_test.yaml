@@ -1,0 +1,327 @@
+name: 低风险全设备功能冒烟测试
+description: >
+  依次用低温、低流量、低功率和短时长验证当前配置中的加热器、蠕动泵和微波仪。
+  这是验机流程，不是化学实验配方；运行前必须由实验人员确认水路、负载、通风和现场看护。
+
+metadata:
+  material_system: device_smoke_test
+  batch_id: smoke-test
+  condition_id: low-risk-all-devices
+  operator: lab
+  recipe_version: "2026-06-21"
+  safety_notes: >
+    运行前确认：泵所有通道接入去离子水/废液或允许短时空转的安全回路；
+    加热器可安全短时启动到 30 C；微波仪禁止空载，需放置符合 SOP 的安全低风险负载。
+
+steps:
+  - id: operator_precheck_notice
+    type: log
+    params:
+      message: "低风险验机开始：确认无危险试剂、泵接水/废液、微波非空载、现场有人看护。"
+    on_error: stop
+
+  - id: operator_cancel_window
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 10
+    on_error: stop
+
+  - id: heater1_set_low_temperature
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 30.0
+    on_error: stop
+
+  - id: heater1_temperature_read_sanity
+    type: wait
+    params: {}
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 15.0
+      timeout: 10
+    on_error: skip
+
+  - id: heater1_start_short
+    type: heater.start
+    params:
+      device_id: heater1
+    wait:
+      type: duration
+      seconds: 5
+    on_error: stop
+
+  - id: heater1_stop
+    type: heater.stop
+    params:
+      device_id: heater1
+    on_error: stop
+
+  - id: heater1_leave_safe_setpoint
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 25.0
+    on_error: stop
+
+  - id: heater2_set_low_temperature
+    type: heater.set_temperature
+    params:
+      device_id: heater2
+      temperature: 30.0
+    on_error: stop
+
+  - id: heater2_temperature_read_sanity
+    type: wait
+    params: {}
+    wait:
+      type: temperature_reached
+      device_id: heater2
+      tolerance: 15.0
+      timeout: 10
+    on_error: skip
+
+  - id: heater2_start_short
+    type: heater.start
+    params:
+      device_id: heater2
+    wait:
+      type: duration
+      seconds: 5
+    on_error: stop
+
+  - id: heater2_stop
+    type: heater.stop
+    params:
+      device_id: heater2
+    on_error: stop
+
+  - id: heater2_leave_safe_setpoint
+    type: heater.set_temperature
+    params:
+      device_id: heater2
+      temperature: 25.0
+    on_error: stop
+
+  - id: pump_ch1_flow_mode_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 1
+      flow_rate: 0.5
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: pump_ch1_short_run
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 5
+    on_error: stop
+
+  - id: pump_ch1_stop_channel
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 1
+    on_error: stop
+
+  - id: pump_ch2_time_quantity_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 2
+      flow_rate: 0.5
+      direction: CW
+      mode: TIME_QUANTITY
+      run_time: 5
+      time_unit: 0
+      dispense_volume: 0.05
+      volume_unit: 1
+      repeat_count: 1
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: pump_ch2_wait_complete
+    type: wait
+    params: {}
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 2
+      timeout: 30
+    on_error: skip
+
+  - id: pump_ch2_stop_channel
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 2
+    on_error: stop
+
+  - id: pump_ch3_time_speed_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 3
+      flow_rate: 0.5
+      direction: CW
+      mode: TIME_SPEED
+      run_time: 5
+      time_unit: 0
+      repeat_count: 1
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: pump_ch3_wait_complete
+    type: wait
+    params: {}
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 3
+      timeout: 30
+    on_error: skip
+
+  - id: pump_ch3_stop_channel
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 3
+    on_error: stop
+
+  - id: pump_ch4_quantity_speed_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 4
+      flow_rate: 0.5
+      direction: CW
+      mode: QUANTITY_SPEED
+      dispense_volume: 0.05
+      volume_unit: 1
+      repeat_count: 1
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: pump_ch4_wait_complete
+    type: wait
+    params: {}
+    wait:
+      type: pump_complete
+      device_id: pump1
+      channel: 4
+      timeout: 30
+    on_error: skip
+
+  - id: pump_ch4_stop_channel
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 4
+    on_error: stop
+
+  - id: pump_stop_all
+    type: pump.stop
+    params:
+      device_id: pump1
+    on_error: stop
+
+  - id: microwave_config_manual_low_power
+    type: microwave.configure_manual
+    params:
+      device_id: microwave1
+      segments:
+        - segment: 1
+          heating_temperature: 30
+          heating_power_percent: 5
+          holding_temperature: 30
+          holding_power_percent: 5
+          holding_deviation: 2
+          hours: 0
+          minutes: 0
+          seconds: 5
+    on_error: stop
+
+  - id: microwave_config_auto_power_low_temperature
+    type: microwave.configure_auto_power
+    params:
+      device_id: microwave1
+      segments:
+        - segment: 1
+          target_temperature: 30
+          holding_temperature: 30
+          hours: 0
+          minutes: 0
+          seconds: 5
+    on_error: stop
+
+  - id: microwave_config_constant_rate_low_temperature
+    type: microwave.configure_constant_rate
+    params:
+      device_id: microwave1
+      segments:
+        - segment: 1
+          ramp_hours: 0
+          ramp_minutes: 0
+          ramp_seconds: 5
+          target_temperature: 30
+          hours: 0
+          minutes: 0
+          seconds: 5
+          holding_temperature: 30
+    on_error: stop
+
+  - id: microwave_temperature_read_sanity
+    type: wait
+    params: {}
+    wait:
+      type: microwave_temperature_reached
+      device_id: microwave1
+      target_temperature: 25
+      tolerance: 20
+      timeout: 5
+    on_error: skip
+
+  - id: microwave_start_manual_short
+    type: microwave.start
+    params:
+      device_id: microwave1
+      mode: manual_power
+    on_error: stop
+
+  - id: microwave_wait_complete_short
+    type: wait
+    params: {}
+    wait:
+      type: microwave_complete
+      device_id: microwave1
+      timeout: 20
+    on_error: skip
+
+  - id: microwave_stop
+    type: microwave.stop
+    params:
+      device_id: microwave1
+    on_error: stop
+
+  - id: final_emergency_stop_all
+    type: emergency_stop
+    params: {}
+    on_error: stop
+
+  - id: smoke_test_done
+    type: log
+    params:
+      message: "低风险全设备冒烟测试流程结束；请检查日志中是否有 skipped/timeout 和实机状态。"
+    on_error: stop
