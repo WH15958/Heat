@@ -126,8 +126,9 @@ class DeviceManager:
         poll_interval: float = 1.0,
         retry_count: int = 3,
         retry_delay: float = 0.5,
-        allow_experiment_control: bool = False,
-        enable_control_writes: bool = False,
+        allow_experiment_control: bool = True,
+        allow_real_hardware_writes: bool = True,
+        enable_control_writes: bool = True,
     ) -> str:
         """添加微波仪配置"""
         config = MicrowaveConfig(
@@ -149,6 +150,7 @@ class DeviceManager:
             max_temperature=max_temperature,
             max_power_percent=max_power_percent,
             allow_experiment_control=allow_experiment_control,
+            allow_real_hardware_writes=allow_real_hardware_writes,
             enable_control_writes=enable_control_writes,
         )
         self._microwaves[device_id] = MicrowaveDevice(config)
@@ -258,6 +260,7 @@ class DeviceManager:
         data = heater.read_data()
         return {
             "device_id": data.device_id,
+            "connection_port": heater.config.connection_params.get("port"),
             "pv": data.pv,
             "sv": data.sv,
             "mv": data.mv,
@@ -316,6 +319,7 @@ class DeviceManager:
 
         return {
             "device_id": device_id,
+            "connection_port": pump.config.connection_params.get("port"),
             "channels": dict(self._pump_channel_cache[device_id]),
         }
 
@@ -380,11 +384,11 @@ class DeviceManager:
         return microwave.stop()
 
     def is_microwave_experiment_control_allowed(self, device_id: str) -> bool:
-        """返回微波仪是否允许实验 YAML 自动控制"""
+        """兼容旧调用：微波仪 YAML 自动控制当前始终允许。"""
         microwave = self._microwaves.get(device_id)
         if microwave is None:
             raise ValueError(f"Microwave not found: {device_id}")
-        return bool(getattr(microwave.config, "allow_experiment_control", False))
+        return True
 
     def emergency_stop_all(self) -> bool:
         """紧急停止所有设备"""
@@ -432,20 +436,26 @@ class DeviceManager:
             heaters[did] = {
                 "connected": h.is_connected(),
                 "status": h.status.name,
+                "connection_port": h.config.connection_params.get("port"),
             }
         pumps = {}
         for did, p in self._pumps.items():
             pumps[did] = {
                 "connected": p.is_connected(),
                 "status": p.status.name,
+                "connection_port": p.config.connection_params.get("port"),
             }
         microwaves = {}
         for did, m in self._microwaves.items():
             microwaves[did] = {
                 "connected": m.is_connected(),
                 "status": m.status.name,
+                "connection_port": m.config.connection_params.get("port"),
                 "allow_experiment_control": bool(
                     getattr(m.config, "allow_experiment_control", False)
+                ),
+                "allow_real_hardware_writes": bool(
+                    getattr(m.config, "allow_real_hardware_writes", False)
                 ),
                 "enable_control_writes": bool(
                     getattr(m.config, "enable_control_writes", False)
@@ -458,6 +468,7 @@ class DeviceManager:
         power_percent = data.get("power_percent", 0)
         return {
             "device_id": device_id,
+            "connection_port": microwave.config.connection_params.get("port"),
             "running": bool(power_percent),
             "mode": "unknown",
             "current_segment": data.get("current_segment", 0),
@@ -471,6 +482,9 @@ class DeviceManager:
             "current_mode_code": data.get("current_mode_code", 0),
             "allow_experiment_control": bool(
                 getattr(microwave.config, "allow_experiment_control", False)
+            ),
+            "allow_real_hardware_writes": bool(
+                getattr(microwave.config, "allow_real_hardware_writes", False)
             ),
             "enable_control_writes": bool(
                 getattr(microwave.config, "enable_control_writes", False)

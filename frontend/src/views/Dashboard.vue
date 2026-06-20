@@ -25,6 +25,9 @@
               <span class="temp-value">{{ heater.mv ?? 0 }}%</span>
             </div>
           </div>
+          <div class="alarms">
+            <el-tag type="info" size="small">串口 {{ heater.connection_port ?? '--' }}</el-tag>
+          </div>
           <div v-if="heater.alarms?.length" class="alarms">
             <el-tag v-for="alarm in heater.alarms" :key="alarm" type="warning" size="small" style="margin: 2px">
               {{ alarm }}
@@ -44,6 +47,10 @@
             </div>
           </template>
           <div class="pump-channels">
+            <div class="channel-row">
+              <span class="channel-label">串口</span>
+              <el-tag type="info" size="small">{{ pump.connection_port ?? '--' }}</el-tag>
+            </div>
             <div v-for="(ch, chId) in pump.channels" :key="chId" class="channel-row">
               <span class="channel-label">通道 {{ chId }}</span>
               <el-tag :type="ch.running ? 'success' : 'info'" size="small">
@@ -103,6 +110,15 @@
             <el-tag :type="Number(microwave.fault_code || 0) ? 'danger' : 'info'" size="small">
               故障码 {{ microwave.fault_code ?? 0 }}
             </el-tag>
+            <el-tag type="info" size="small" style="margin: 2px">
+              串口 {{ microwave.connection_port ?? '--' }}
+            </el-tag>
+            <el-tag type="success" size="small" style="margin: 2px">
+              配置写入可用
+            </el-tag>
+            <el-tag type="warning" size="small" style="margin: 2px">
+              启动/停止可用
+            </el-tag>
             <el-tag v-if="!microwave.connected" type="info" size="small" style="margin: 2px">未连接</el-tag>
             <el-tag v-if="microwave.error" type="danger" size="small" style="margin: 2px">读取失败</el-tag>
             <el-tag v-for="fault in microwave.faults || []" :key="fault" type="warning" size="small" style="margin: 2px">
@@ -118,16 +134,32 @@
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
-              <span>实时温度曲线</span>
+              <span>加热器实时温度曲线</span>
               <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
                 {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
               </el-tag>
             </div>
           </template>
-          <div ref="tempChartRef" style="width: 100%; height: 350px"></div>
+          <div ref="heaterTempChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
       </el-col>
       <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span>微波合成仪物料温度曲线</span>
+              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              </el-tag>
+            </div>
+          </template>
+          <div ref="microwaveTempChartRef" style="width: 100%; height: 350px"></div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" style="margin-top: 20px">
+      <el-col :span="24">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -153,9 +185,11 @@ import { useWebSocket, type MicrowaveRealtimeData, type RealtimeData } from '../
 type TagType = 'success' | 'info' | 'danger'
 
 const { data: realtimeData, connected: wsConnected } = useWebSocket()
-const tempChartRef = ref<HTMLElement>()
+const heaterTempChartRef = ref<HTMLElement>()
+const microwaveTempChartRef = ref<HTMLElement>()
 const flowChartRef = ref<HTMLElement>()
-let tempChart: ECharts | null = null
+let heaterTempChart: ECharts | null = null
+let microwaveTempChart: ECharts | null = null
 let flowChart: ECharts | null = null
 const maxPoints = 300
 
@@ -181,7 +215,9 @@ const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 interface RegisteredMicrowaveStatus {
   connected: boolean
   status?: string
+  connection_port?: string
   allow_experiment_control?: boolean
+  allow_real_hardware_writes?: boolean
   enable_control_writes?: boolean
 }
 
@@ -199,7 +235,9 @@ const dashboardMicrowaves = computed<Record<string, DashboardMicrowaveData>>(() 
       device_id: id,
       connected: Boolean(status.connected),
       status: status.status,
+      connection_port: status.connection_port,
       allow_experiment_control: Boolean(status.allow_experiment_control),
+      allow_real_hardware_writes: Boolean(status.allow_real_hardware_writes),
       enable_control_writes: Boolean(status.enable_control_writes),
     }
   }
@@ -280,15 +318,27 @@ let resizeObserver: ResizeObserver | null = null
 
 function initCharts() {
   try {
-    if (tempChartRef.value) {
-      if (tempChart) tempChart.dispose()
-      tempChart = init(tempChartRef.value)
-      tempChart.setOption({
+    if (heaterTempChartRef.value) {
+      if (heaterTempChart) heaterTempChart.dispose()
+      heaterTempChart = init(heaterTempChartRef.value)
+      heaterTempChart.setOption({
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0 },
         grid: { left: 60, right: 20, top: 30, bottom: 30 },
         xAxis: { type: 'time' },
-        yAxis: { type: 'value', name: '温度(°C)' },
+        yAxis: { type: 'value', name: '加热器温度(°C)' },
+        series: [],
+      })
+    }
+    if (microwaveTempChartRef.value) {
+      if (microwaveTempChart) microwaveTempChart.dispose()
+      microwaveTempChart = init(microwaveTempChartRef.value)
+      microwaveTempChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: [], top: 0 },
+        grid: { left: 60, right: 20, top: 30, bottom: 30 },
+        xAxis: { type: 'time' },
+        yAxis: { type: 'value', name: '微波物料温度(°C)' },
         series: [],
       })
     }
@@ -315,10 +365,12 @@ onMounted(async () => {
   initCharts()
 
   resizeObserver = new ResizeObserver(() => {
-    tempChart?.resize()
+    heaterTempChart?.resize()
+    microwaveTempChart?.resize()
     flowChart?.resize()
   })
-  if (tempChartRef.value) resizeObserver.observe(tempChartRef.value)
+  if (heaterTempChartRef.value) resizeObserver.observe(heaterTempChartRef.value)
+  if (microwaveTempChartRef.value) resizeObserver.observe(microwaveTempChartRef.value)
   if (flowChartRef.value) resizeObserver.observe(flowChartRef.value)
 
   window.addEventListener('resize', handleResize)
@@ -326,15 +378,18 @@ onMounted(async () => {
 
 onUnmounted(() => {
   resizeObserver?.disconnect()
-  tempChart?.dispose()
+  heaterTempChart?.dispose()
+  microwaveTempChart?.dispose()
   flowChart?.dispose()
-  tempChart = null
+  heaterTempChart = null
+  microwaveTempChart = null
   flowChart = null
   window.removeEventListener('resize', handleResize)
 })
 
 function handleResize() {
-  tempChart?.resize()
+  heaterTempChart?.resize()
+  microwaveTempChart?.resize()
   flowChart?.resize()
 }
 
@@ -347,7 +402,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
   const microwaveKeys = Object.keys(newData.microwaves || {})
   if (heaterKeys.length === 0 && pumpKeys.length === 0 && microwaveKeys.length === 0) return
 
-  if (tempChart) {
+  if (heaterTempChart) {
     for (const [id, heater] of Object.entries(newData.heaters || {})) {
       if (heater.error) continue
       if (typeof heater.pv !== 'number' || typeof heater.sv !== 'number') continue
@@ -357,6 +412,26 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       heaterDataMap[id].pv = heaterDataMap[id].pv.slice(-maxPoints)
       heaterDataMap[id].sv = heaterDataMap[id].sv.slice(-maxPoints)
     }
+
+    const heaterSeries: LineSeriesOption[] = []
+    const heaterLegend: string[] = []
+    for (const [id, s] of Object.entries(heaterDataMap)) {
+      if (s.pv.length === 0) continue
+      heaterLegend.push(`${id} PV`, `${id} SV`)
+      heaterSeries.push(
+        { name: `${id} PV`, type: 'line', data: s.pv, smooth: true, showSymbol: false },
+        { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
+      )
+    }
+    if (heaterSeries.length > 0) {
+      heaterTempChart.setOption(
+        { legend: { data: heaterLegend }, series: heaterSeries },
+        { replaceMerge: ['series'] }
+      )
+    }
+  }
+
+  if (microwaveTempChart) {
     for (const [id, microwave] of Object.entries(newData.microwaves || {})) {
       if (microwave.error) continue
       if (typeof microwave.material_temperature !== 'number') continue
@@ -365,25 +440,17 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       microwaveDataMap[id].temperature = microwaveDataMap[id].temperature.slice(-maxPoints)
     }
 
-    const tempSeries: LineSeriesOption[] = []
-    const tempLegend: string[] = []
-    for (const [id, s] of Object.entries(heaterDataMap)) {
-      if (s.pv.length === 0) continue
-      tempLegend.push(`${id} PV`, `${id} SV`)
-      tempSeries.push(
-        { name: `${id} PV`, type: 'line', data: s.pv, smooth: true, showSymbol: false },
-        { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
-      )
-    }
+    const microwaveSeries: LineSeriesOption[] = []
+    const microwaveLegend: string[] = []
     for (const [id, s] of Object.entries(microwaveDataMap)) {
       if (s.temperature.length === 0) continue
-      const name = `${id} 微波温度`
-      tempLegend.push(name)
-      tempSeries.push({ name, type: 'line', data: s.temperature, smooth: true, showSymbol: false })
+      const name = `${id} 物料温度`
+      microwaveLegend.push(name)
+      microwaveSeries.push({ name, type: 'line', data: s.temperature, smooth: true, showSymbol: false })
     }
-    if (tempSeries.length > 0) {
-      tempChart.setOption(
-        { legend: { data: tempLegend }, series: tempSeries },
+    if (microwaveSeries.length > 0) {
+      microwaveTempChart.setOption(
+        { legend: { data: microwaveLegend }, series: microwaveSeries },
         { replaceMerge: ['series'] }
       )
     }

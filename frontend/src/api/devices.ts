@@ -132,7 +132,11 @@ export const devicesApi = {
     id: string,
     mode: MicrowaveMode,
     segments: MicrowaveSegmentPayload[],
-  ) => api.post(`/microwave/${id}/configure/${MICROWAVE_CONFIG_PATH[mode]}`, { segments }),
+    confirmRealHardwareWrite = false,
+  ) => api.post(`/microwave/${id}/configure/${MICROWAVE_CONFIG_PATH[mode]}`, {
+    segments,
+    confirm_real_hardware_write: confirmRealHardwareWrite,
+  }),
   startMicrowave: (id: string, mode: MicrowaveMode) =>
     api.post(`/microwave/${id}/start`, { mode }),
   stopMicrowave: (id: string) => api.post(`/microwave/${id}/stop`),

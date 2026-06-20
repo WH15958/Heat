@@ -156,13 +156,15 @@ FastAPI 是异步的，但设备是同步的。
 - 驱动：`MicrowaveDevice` 是同步阻塞驱动，不创建后台线程、轮询、心跳或命令队列。
 - 协议：原始协议表使用 `40001` 风格保持寄存器地址；代码必须通过 `holding_address()` 转成 PDU 地址，例如 `40001 -> 0`、`40151 -> 150`。
 - 控制字：`40151` 对应 PDU 地址 `150`，bit15 为恒速率、bit14 为自动功率、bit13 为手动功率、bit12 为微波启动；当前 stop 实现写 `0`，真实语义仍需实机确认。
-- 状态：`DeviceManager.read_microwave_data()` 暴露 `running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`enable_control_writes`。
-- API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。
+- 状态：`DeviceManager.read_microwave_data()` 暴露 `connection_port`、`running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。
+- 串口展示：`DeviceManager.get_all_status()`、加热器/泵读取结果和 WebSocket 实时 payload 会为 heater/pump/microwave 暴露 `connection_port`，用于前端确认当前连接的 COM 口；该字段只读展示，不改变设备控制语义。
+- API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置类 API 请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
 - WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
-- 安全默认：`enable_control_writes=false` 阻断真实寄存器写入，`allow_experiment_control=false` 阻断 YAML 自动 configure/start。二者都必须默认关闭。
-- 实验引擎：`microwave.configure_*` 和 `microwave.start` 必须先检查 `allow_experiment_control`；`microwave.stop` 允许在自动控制禁用时执行，用于安全停机。
+- 控制开放：按 2026-06-20 用户确认，`allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`，且不再作为手动 REST/前端或 YAML 自动控制的阻断门；字段保留在配置和 payload 中用于兼容旧状态展示。
+- 防错边界：普通配置批量写入仍拒绝覆盖控制字 `40151`；设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
+- 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。
 
-fake 测试只能证明地址换算、参数校验、失败传播、API/WS payload 和 executor gate。真实串口、接线、写入顺序、浮点字序、运行状态、故障码 bit 和 stop 语义必须由实验室按 [microwave_smoke_test.md](microwave_smoke_test.md) 人工确认。
+fake 测试只能证明地址换算、参数校验、失败传播、API/WS payload 和 executor 调用链。真实串口、接线、写入顺序、浮点字序、运行状态、故障码 bit、门控联锁和 stop 语义必须由实验室按 [microwave_smoke_test.md](microwave_smoke_test.md) 人工确认。
 
 ---
 
@@ -227,7 +229,7 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 - 单实验保护
 - stop / wait 语义
 - WebSocket 断开不影响设备
-- 微波仪默认禁用真实写入和自动启动
+- 微波仪前端手动控制和 YAML 自动启动已开放，但真实硬件行为仍需实验室确认
 
 ---
 

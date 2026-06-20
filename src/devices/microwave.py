@@ -97,8 +97,9 @@ class MicrowaveConfig(DeviceConfig):
     poll_interval: float = 1.0
     max_temperature: float = 300.0
     max_power_percent: int = 100
-    allow_experiment_control: bool = False
-    enable_control_writes: bool = False
+    allow_experiment_control: bool = True
+    allow_real_hardware_writes: bool = True
+    enable_control_writes: bool = True
 
 
 @dataclass
@@ -369,9 +370,6 @@ class MicrowaveDevice(BaseDevice):
         return int(getattr(self.config, "slave_address", 1))
 
     def _write_register(self, address: int, value: int) -> bool:
-        if not self._microwave_config.enable_control_writes:
-            self._logger.warning("Microwave register write blocked by enable_control_writes=false")
-            return False
         with self._lock:
             if not self.is_connected():
                 return False
@@ -384,8 +382,9 @@ class MicrowaveDevice(BaseDevice):
             )
 
     def _write_registers(self, start_address: int, values: List[int]) -> bool:
-        if not self._microwave_config.enable_control_writes:
-            self._logger.warning("Microwave register write blocked by enable_control_writes=false")
+        end_address = int(start_address) + len(values)
+        if int(start_address) <= CONTROL_WORD < end_address:
+            self._logger.error("Microwave configuration write attempted to include control word")
             return False
         with self._lock:
             if not self.is_connected():

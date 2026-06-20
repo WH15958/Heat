@@ -208,7 +208,7 @@
 
 ### 4.7 微波仪动作
 
-微波仪动作用于实验流程中配置、启动或停止已注册的 MKM-AH1E 微波仪。该能力属于硬件邻近自动控制，默认受设备配置 `allow_experiment_control: false` 阻断。
+微波仪动作用于实验流程中配置、启动或停止已注册的 MKM-AH1E 微波仪。按 2026-06-20 用户确认，该能力已像加热器/蠕动泵动作一样开放；实验流程会直接调用目标设备，设备返回失败时步骤失败。
 
 当前动作表：
 
@@ -222,10 +222,10 @@
 
 规则：
 
-- `microwave.configure_*` 和 `microwave.start` 在 `allow_experiment_control` 为 `false` 时会被拒绝，不会调用设备方法。
-- `enable_control_writes=false` 时，底层驱动会阻断真实寄存器写入。
-- `microwave.stop` 可在自动控制禁用时执行，用于安全停机。
-- 启用真实自动启动前，必须完成 [microwave_smoke_test.md](microwave_smoke_test.md) 中的实验室人工确认。
+- `microwave.configure_*`、`microwave.start` 和 `microwave.stop` 会直接调用 `DeviceManager`；返回 `False`、timeout 或异常会使步骤失败。
+- `allow_experiment_control`、`allow_real_hardware_writes` 和 `enable_control_writes` 字段仍可出现在配置或状态中，但当前不作为 YAML 自动控制的阻断门。
+- 普通配置批量写入仍不得覆盖控制字 `40151`。
+- 真实自动启动前，仍必须完成 [microwave_smoke_test.md](microwave_smoke_test.md) 中的实验室人工确认。
 - 以下示例只说明 YAML 结构，不是化学工艺建议，也不能作为真实实验参数直接照抄。
 
 `microwave.configure_manual` 参数：
@@ -622,20 +622,20 @@ interval_time: 0
 
 这样更容易调试和复现实验。
 
-### 9.6 微波仪自动控制被拒绝
+### 9.6 微波仪自动控制失败
 
 现象：
 
 - `microwave.configure_*` 或 `microwave.start` 步骤失败。
-- 日志出现 `microwave experiment control is disabled` 或等价信息。
 
 原因：
 
-- 目标微波仪配置仍保持 `allow_experiment_control: false`。
-- 或者底层真实写入仍保持 `enable_control_writes: false`。
+- 目标微波仪未连接，或驱动返回 `False`。
+- 真实设备、门控联锁、HMI 状态或串口协议拒绝执行。
+- 等待条件 timeout，或读取状态失败。
 
 处理：
 
-- 不要为了让 YAML 通过而直接打开安全开关。
-- 先按 [microwave_smoke_test.md](microwave_smoke_test.md) 完成实验室人工确认。
-- 确认完成后，再由实验室负责人决定是否临时启用目标设备的自动控制。
+- 先确认 `/control` 页面能连接并读取目标微波仪，串口号与现场设备一致。
+- 检查设备面板、炉门联锁、fault code、功率/电流和实验日志。
+- 按 [microwave_smoke_test.md](microwave_smoke_test.md) 记录真实设备行为。

@@ -7,6 +7,7 @@
           <el-tag :type="pump.connected ? 'success' : 'info'" size="small" style="margin-right: 8px">
             {{ pump.connected ? '已连接' : '未连接' }}
           </el-tag>
+          <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
           <el-button v-if="!pump.connected" type="primary" size="small" @click="$emit('connect', pumpId)" :loading="pump.loading">
             连接
           </el-button>
@@ -32,12 +33,13 @@
           运行中 {{ channelStatus(pumpId, ch)?.flow_rate }} mL/min
         </el-tag>
         <el-tag v-else-if="pump.connected" type="info" size="small">停止</el-tag>
+        <el-tag v-else type="info" size="small">未连接</el-tag>
       </div>
       <div class="channel-row">
-        <el-select v-model="pump.channels[ch].mode" size="small" style="width: 120px" :disabled="!pump.connected">
+        <el-select v-model="pump.channels[ch].mode" size="small" style="width: 120px">
           <el-option v-for="m in PUMP_MODES" :key="m.value" :label="m.label" :value="m.value" />
         </el-select>
-        <el-select v-model="pump.channels[ch].tubeModel" size="small" style="width: 130px" :disabled="!pump.connected" @change="onTubeModelChange(pump.channels[ch])">
+        <el-select v-model="pump.channels[ch].tubeModel" size="small" style="width: 130px" @change="onTubeModelChange(pump.channels[ch])">
           <el-option v-for="t in TUBE_MODELS" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" />
         </el-select>
         <template v-if="pump.channels[ch].mode === 'TIME_QUANTITY'">
@@ -57,15 +59,14 @@
             :min="0.001" :max="pump.channels[ch].flowUnit === 3 ? 150 : pump.channels[ch].maxFlowRate" :step="0.001" :precision="3"
             size="small"
             style="width: 100px"
-            :disabled="!pump.connected"
           />
-          <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px" :disabled="!pump.connected">
+          <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px">
             <el-option v-for="u in FLOW_UNITS" :key="u.value" :label="u.label" :value="u.value" />
           </el-select>
         </template>
       </div>
       <div class="channel-row" style="margin-top: 6px">
-        <el-radio-group v-model="pump.channels[ch].direction" size="small" :disabled="!pump.connected">
+        <el-radio-group v-model="pump.channels[ch].direction" size="small">
           <el-radio-button value="CW">顺时针</el-radio-button>
           <el-radio-button value="CCW">逆时针</el-radio-button>
         </el-radio-group>
@@ -75,14 +76,12 @@
           :min="0.1" :max="9999" :step="1" :precision="1"
           size="small"
           style="width: 110px"
-          :disabled="!pump.connected"
         />
         <el-select
           v-if="needsRunTime(pump.channels[ch].mode)"
           v-model="pump.channels[ch].timeUnit"
           size="small"
           style="width: 95px"
-          :disabled="!pump.connected"
         >
           <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
         </el-select>
@@ -92,14 +91,12 @@
           :min="0.01" :max="9999" :step="1" :precision="2"
           size="small"
           style="width: 110px"
-          :disabled="!pump.connected"
         />
         <el-select
           v-if="needsDispenseVolume(pump.channels[ch].mode)"
           v-model="pump.channels[ch].volumeUnit"
           size="small"
           style="width: 80px"
-          :disabled="!pump.connected"
         >
           <el-option v-for="u in VOLUME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
         </el-select>
@@ -111,7 +108,6 @@
           :min="0" :max="9999" :step="1"
           size="small"
           style="width: 95px"
-          :disabled="!pump.connected"
         />
         <span class="unit-label" style="font-size: 11px">0=无限</span>
         <span class="param-label">间隔</span>
@@ -120,29 +116,27 @@
           :min="0" :max="9999" :step="0.1" :precision="1"
           size="small"
           style="width: 95px"
-          :disabled="!pump.connected"
         />
         <el-select
           v-model="pump.channels[ch].intervalTimeUnit"
           size="small"
           style="width: 95px"
-          :disabled="!pump.connected"
         >
           <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
         </el-select>
       </div>
       <div class="channel-row" style="margin-top: 6px">
-        <el-button type="success" size="small" @click="$emit('startChannel', pumpId, ch)" :disabled="!pump.connected" :loading="pump.channels[ch].starting">
+        <el-button type="success" size="small" @click="$emit('startChannel', pumpId, ch)" :loading="pump.channels[ch].starting">
           启动
         </el-button>
-        <el-button type="warning" size="small" @click="$emit('stopChannel', pumpId, ch)" :disabled="!pump.connected" :loading="pump.channels[ch].stopping">
+        <el-button type="warning" size="small" @click="$emit('stopChannel', pumpId, ch)" :loading="pump.channels[ch].stopping">
           停止
         </el-button>
       </div>
     </div>
 
     <div style="margin-top: 12px; text-align: center">
-      <el-button type="danger" size="small" @click="$emit('stopAll', pumpId)" :disabled="!pump.connected" :loading="pump.stoppingAll">
+      <el-button type="danger" size="small" @click="$emit('stopAll', pumpId)" :loading="pump.stoppingAll">
         停止所有通道
       </el-button>
     </div>
@@ -175,6 +169,7 @@ const props = defineProps<{
   pump: {
     connected: boolean
     loading: boolean
+    connectionPort?: string
     stoppingAll: boolean
     channels: Record<number, ChannelConfig>
   }

@@ -58,6 +58,7 @@ class MicrowaveSegmentRequest(BaseModel):
 class MicrowaveConfigureRequest(BaseModel):
     """微波仪配置请求"""
     segments: List[MicrowaveSegmentRequest]
+    confirm_real_hardware_write: bool = False
 
 
 class MicrowaveStartRequest(BaseModel):

@@ -84,6 +84,7 @@ def create_device_manager() -> DeviceManager:
                 retry_count=m_cfg.retry_count,
                 retry_delay=m_cfg.retry_delay,
                 allow_experiment_control=m_cfg.allow_experiment_control,
+                allow_real_hardware_writes=m_cfg.allow_real_hardware_writes,
                 enable_control_writes=m_cfg.enable_control_writes,
             )
             logger.info(f"Registered microwave: {m_cfg.device_id}")

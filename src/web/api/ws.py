@@ -117,6 +117,8 @@ async def build_realtime_payload(dm) -> dict:
                     timeout=DEVICE_READ_TIMEOUT,
                 )
                 payload["heaters"][did] = {
+                    "device_id": did,
+                    "connection_port": heater.config.connection_params.get("port"),
                     "pv": data.pv,
                     "sv": data.sv,
                     "mv": data.mv,
@@ -125,10 +127,18 @@ async def build_realtime_payload(dm) -> dict:
                 }
             except asyncio.TimeoutError:
                 logger.warning(f"Heater {did} read timeout")
-                payload["heaters"][did] = {"error": "read_timeout"}
+                payload["heaters"][did] = {
+                    "device_id": did,
+                    "connection_port": heater.config.connection_params.get("port"),
+                    "error": "read_timeout",
+                }
             except Exception as e:
                 logger.warning(f"Heater {did} read failed: {e}")
-                payload["heaters"][did] = {"error": "read_failed"}
+                payload["heaters"][did] = {
+                    "device_id": did,
+                    "connection_port": heater.config.connection_params.get("port"),
+                    "error": "read_failed",
+                }
 
     pumps = dm.get_all_pumps()
     for did, pump in pumps.items():
@@ -141,10 +151,18 @@ async def build_realtime_payload(dm) -> dict:
                 payload["pumps"][did] = status
             except asyncio.TimeoutError:
                 logger.warning(f"Pump {did} read timeout")
-                payload["pumps"][did] = {"error": "read_timeout"}
+                payload["pumps"][did] = {
+                    "device_id": did,
+                    "connection_port": pump.config.connection_params.get("port"),
+                    "error": "read_timeout",
+                }
             except Exception as e:
                 logger.warning(f"Pump {did} read failed: {e}")
-                payload["pumps"][did] = {"error": "read_failed"}
+                payload["pumps"][did] = {
+                    "device_id": did,
+                    "connection_port": pump.config.connection_params.get("port"),
+                    "error": "read_failed",
+                }
 
     microwaves = dm.get_all_microwaves()
     for did, microwave in microwaves.items():

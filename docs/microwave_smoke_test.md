@@ -20,21 +20,24 @@
 - SOP、试剂兼容性和安全授权已经批准。
 - 控制字 stop 写入、真实启动、真实停止和故障响应符合实验室预期。
 
-## 安全默认
+## 当前控制开放与人工确认边界
 
-联调开始时必须保持：
+按 2026-06-20 用户确认，Heat 当前允许像加热器/蠕动泵一样从前端按钮和 YAML 自动实验控制微波仪。当前配置字段默认应为：
 
 ```yaml
-allow_experiment_control: false
-enable_control_writes: false
+allow_experiment_control: true
+allow_real_hardware_writes: true
+enable_control_writes: true
 ```
 
 含义：
 
-- `enable_control_writes=false`：驱动阻断真实寄存器写入。
-- `allow_experiment_control=false`：YAML 自动 configure/start 被 executor 拒绝。
+- 这些字段保留用于兼容配置和状态展示；当前不再作为手动 REST/前端或 YAML 自动控制的阻断门。
+- 前端按钮和 YAML 自动实验可以调用 configure/start/stop。
+- 页面加载、WebSocket 连接/断开和状态刷新仍不得触发任何写入。
+- 设备返回 `False`、异常或 timeout 必须记录为失败。
 
-只有完成本文前置检查并由实验室负责人确认后，才可以临时打开目标设备的写入或自动控制。验证结束后应恢复默认关闭，除非实验室明确决定保留。
+软件开放不代表实验室安全确认。真实启动、门控联锁、负载安全、故障响应、状态枚举和 stop 语义仍必须由现场人员按本文记录。
 
 ## 0. 准备检查
 
@@ -48,12 +51,12 @@ enable_control_writes: false
 - [ ] 反应瓶非空载；弱吸波或极少量物料不作为安全负载。
 - [ ] 光纤探头已没入物料。
 - [ ] 现场有人全程看护。
-- [ ] 当前配置仍保持 `allow_experiment_control=false` 和 `enable_control_writes=false`。
+- [ ] 当前配置已复核为 `allow_experiment_control=true`、`allow_real_hardware_writes=true` 和 `enable_control_writes=true`，并确认现场允许本次控制。
 
 软件检查：
 
 - [ ] 后端可启动。
-- [ ] `config/system_config.yaml` 中目标设备串口号、站号和安全开关已复核。
+- [ ] `config/system_config.yaml` 中目标设备串口号、站号和控制开放字段已复核。
 - [ ] 前端页面已更新到包含微波仪控制和仪表盘的版本。
 
 ## 1. 只读连接
@@ -62,35 +65,35 @@ enable_control_writes: false
 
 步骤：
 
-1. 保持 `enable_control_writes=false`。
-2. 启动后端。
-3. 在 `/control` 页面连接 `microwave1`。
-4. 刷新状态或调用 `GET /api/microwave/microwave1/data`。
-5. 观察 `/` 仪表盘的微波仪卡片。
+1. 启动后端。
+2. 在 `/control` 页面连接 `microwave1`。
+3. 刷新状态或调用 `GET /api/microwave/microwave1/data`。
+4. 观察 `/` 仪表盘的微波仪卡片。
 
 验收：
 
 - [ ] 未发生微波启动。
 - [ ] 状态可读，或失败原因明确。
-- [ ] payload 包含 `device_id`、`running`、`material_temperature`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`enable_control_writes`。
+- [ ] payload 包含 `device_id`、`connection_port`、`running`、`material_temperature`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。
 - [ ] `fault_code` 只按原始值记录，不解释未确认 bit。
 
 ## 2. 地址基准确认
 
 目的：确认 `40001 -> 0` 的 PDU 地址换算正确。
 
-仅在实验室批准真实写入后执行：
+仅在实验室确认现场安全后执行：
 
-1. 临时将目标设备 `enable_control_writes=true`，仍保持 `allow_experiment_control=false`。
-2. 在不启动微波的前提下写入一个安全参数，例如手动段 1 的参数。
-3. 读回同一寄存器或通过设备 HMI 复核。
-4. 记录写入值、读回值和设备显示。
+1. 在不启动微波、不写控制字 `40151` 的前提下写入一个安全参数，例如手动段 1 的参数。
+2. 读回同一寄存器或通过设备 HMI 复核。
+3. 记录写入值、读回值和设备显示。
 
 验收：
 
 - [ ] 写入未启动微波。
 - [ ] 读回或 HMI 显示与写入一致。
 - [ ] 地址换算未出现一位偏移。
+- [ ] 前端显示目标设备串口，例如 COM12，并在写入前要求明确确认。
+- [ ] 普通配置写入本身没有触发 start/stop 或控制字 `40151`。
 
 ## 3. 停止控制字验证
 
@@ -122,12 +125,10 @@ enable_control_writes: false
 
 步骤：
 
-1. 保持 `allow_experiment_control=false`。
-2. 临时保持或打开 `enable_control_writes=true`，按实验室决定执行。
-3. 在 `/control` 页面配置最低风险参数。
-4. 通过页面二次确认启动。
-5. 立即执行停止。
-6. 记录 API 返回、HMI 状态、仪表盘状态、日志和实际设备行为。
+1. 在 `/control` 页面配置最低风险参数。
+2. 通过页面二次确认启动。
+3. 立即执行停止。
+4. 记录 API 返回、HMI 状态、仪表盘状态、日志和实际设备行为。
 
 验收：
 
@@ -142,16 +143,15 @@ enable_control_writes: false
 
 步骤：
 
-1. 临时将目标设备 `allow_experiment_control=true`。
-2. 使用只包含结构验证和最低风险参数的 YAML；不要使用未经批准的化学配方。
-3. 验证 `microwave.configure_*`、`microwave.start`、`microwave_temperature_reached` 或 `microwave_complete`、`microwave.stop`。
-4. 手动触发 stop，确认等待可中断。
-5. 验证结束后恢复 `allow_experiment_control=false`，除非实验室明确决定保留。
+1. 使用只包含结构验证和最低风险参数的 YAML；不要使用未经批准的化学配方。
+2. 验证 `microwave.configure_*`、`microwave.start`、`microwave_temperature_reached` 或 `microwave_complete`、`microwave.stop`。
+3. 手动触发 stop，确认等待可中断。
+4. 记录实验日志、HMI 状态、仪表盘状态和实际设备行为。
 
 验收：
 
-- [ ] `allow_experiment_control=false` 时 configure/start 被拒绝且不调用设备方法。
-- [ ] `allow_experiment_control=true` 时仅执行实验室批准的目标设备。
+- [ ] YAML 自动调用只作用于实验室批准的目标设备。
+- [ ] configure/start/stop 的成功或失败与设备实际行为一致。
 - [ ] wait timeout 会失败，不会静默继续。
 - [ ] stop 能中断微波等待。
 - [ ] 实验日志、设备实际行为和最终状态一致。
@@ -168,6 +168,7 @@ enable_control_writes: false
 | stop 控制字结果 |  |
 | 最小启动/停止结果 |  |
 | YAML 自动控制结果 |  |
+| 当前控制开放配置确认 |  |
 | 是否允许保留 `enable_control_writes=true` |  |
 | 是否允许保留 `allow_experiment_control=true` |  |
 | 未解决风险或厂家待确认项 |  |

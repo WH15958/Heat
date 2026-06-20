@@ -108,12 +108,13 @@ class FakeModbusProtocol:
         return self.float_registers.get(start_address)
 
 
-def make_device(enable_control_writes=True):
+def make_device(enable_control_writes=True, allow_real_hardware_writes=True):
     protocol = FakeModbusProtocol()
     config = MicrowaveConfig(
         device_id="mw1",
         connection_params={"port": "FAKE"},
         enable_control_writes=enable_control_writes,
+        allow_real_hardware_writes=allow_real_hardware_writes,
     )
     device = MicrowaveDevice(config, protocol=protocol)
     assert device.connect() is True
@@ -141,10 +142,32 @@ def test_start_and_stop_control_words():
     assert protocol.single_writes[-1] == (1, CONTROL_WORD, CONTROL_STOP)
 
 
-def test_control_writes_are_disabled_by_default():
-    device, protocol = make_device(enable_control_writes=False)
+def test_legacy_write_flags_do_not_block_manual_control():
+    device, protocol = make_device(
+        enable_control_writes=False,
+        allow_real_hardware_writes=False,
+    )
 
-    assert device.start(MicrowaveMode.MANUAL_POWER) is False
+    assert device.start(MicrowaveMode.MANUAL_POWER) is True
+    assert device.configure_manual([MicrowaveSegment(segment=1)]) is True
+    assert protocol.single_writes[-1] == (
+        1,
+        CONTROL_WORD,
+        CONTROL_MANUAL_POWER | CONTROL_MICROWAVE_START,
+    )
+    assert protocol.multi_writes
+
+
+def test_configuration_writes_do_not_touch_control_word():
+    device, protocol = make_device(
+        enable_control_writes=False,
+        allow_real_hardware_writes=True,
+    )
+
+    assert device.configure_manual([MicrowaveSegment(segment=1, heating_temperature=40)]) is True
+    assert protocol.multi_writes
+    for _, start_address, values in protocol.multi_writes:
+        assert not (start_address <= CONTROL_WORD < start_address + len(values))
     assert protocol.single_writes == []
 
 
@@ -249,8 +272,9 @@ microwaves:
     retry_count: 3
     retry_delay: 0.5
     enabled: false
-    allow_experiment_control: false
-    enable_control_writes: false
+    allow_experiment_control: true
+    allow_real_hardware_writes: true
+    enable_control_writes: true
 """,
             encoding="utf-8",
         )
@@ -260,8 +284,9 @@ microwaves:
     assert len(config.microwaves) == 1
     microwave = config.microwaves[0]
     assert microwave.enabled is False
-    assert microwave.allow_experiment_control is False
-    assert microwave.enable_control_writes is False
+    assert microwave.allow_experiment_control is True
+    assert microwave.allow_real_hardware_writes is True
+    assert microwave.enable_control_writes is True
     assert microwave.max_temperature == 300.0
 
 
@@ -272,14 +297,18 @@ def test_device_manager_registers_microwave_status_bucket():
     manager.add_microwave("mw1", port="FAKE")
 
     assert "mw1" in manager.get_all_microwaves()
-    assert manager.get_all_status()["microwaves"]["mw1"]["connected"] is False
+    status = manager.get_all_status()["microwaves"]["mw1"]
+    assert status["connected"] is False
+    assert status["connection_port"] == "FAKE"
+    assert status["allow_real_hardware_writes"] is True
 
 
 def run_all():
     tests = [
         test_holding_address_conversion,
         test_start_and_stop_control_words,
-        test_control_writes_are_disabled_by_default,
+        test_legacy_write_flags_do_not_block_manual_control,
+        test_configuration_writes_do_not_touch_control_word,
         test_manual_configuration_validation,
         test_configure_manual_returns_false_on_failed_write,
         test_read_data_uses_float_temperature_and_runtime_seconds,

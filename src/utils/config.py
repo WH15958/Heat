@@ -242,8 +242,9 @@ class MicrowaveDeviceConfig(BaseConfig):
     retry_count: int = 3
     retry_delay: float = 0.5
     enabled: bool = False
-    allow_experiment_control: bool = False
-    enable_control_writes: bool = False
+    allow_experiment_control: bool = True
+    allow_real_hardware_writes: bool = True
+    enable_control_writes: bool = True
 
     def validate(self) -> List[str]:
         """验证配置"""

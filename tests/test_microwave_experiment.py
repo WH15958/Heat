@@ -197,27 +197,28 @@ def test_microwave_start_success_calls_manager():
     assert ("start_microwave", "microwave1") in dm.calls
 
 
-def test_microwave_control_disabled_refuses_configure_and_start():
+def test_legacy_experiment_control_flag_does_not_block_configure_and_start():
     dm = FakeMicrowaveExperimentManager(allow=False)
     executor = StepExecutor(dm)
     configure_step = ExperimentStep(
-        id="configure_refused",
+        id="configure_allowed",
         type=ActionType.MICROWAVE_CONFIGURE_MANUAL,
         params={"device_id": "microwave1", "segments": [{"segment": 1}]},
     )
     start_step = ExperimentStep(
-        id="start_refused",
+        id="start_allowed",
         type=ActionType.MICROWAVE_START,
         params={"device_id": "microwave1", "mode": "manual_power"},
     )
 
-    assert run(executor.execute(configure_step)) is False
-    assert run(executor.execute(start_step)) is False
-    assert ("configure_microwave_manual", "microwave1") not in dm.calls
-    assert ("start_microwave", "microwave1") not in dm.calls
+    assert run(executor.execute(configure_step)) is True
+    assert run(executor.execute(start_step)) is True
+    assert ("is_microwave_experiment_control_allowed", "microwave1") not in dm.calls
+    assert ("configure_microwave_manual", "microwave1") in dm.calls
+    assert ("start_microwave", "microwave1") in dm.calls
 
 
-def test_microwave_stop_is_allowed_when_control_disabled():
+def test_microwave_stop_calls_manager_with_legacy_flag_false():
     dm = FakeMicrowaveExperimentManager(allow=False)
     executor = StepExecutor(dm)
     step = ExperimentStep(
@@ -410,8 +411,8 @@ def run_all():
         test_parser_recognizes_microwave_actions_and_waits,
         test_microwave_configure_manual_success_maps_yaml_aliases,
         test_microwave_start_success_calls_manager,
-        test_microwave_control_disabled_refuses_configure_and_start,
-        test_microwave_stop_is_allowed_when_control_disabled,
+        test_legacy_experiment_control_flag_does_not_block_configure_and_start,
+        test_microwave_stop_calls_manager_with_legacy_flag_false,
         test_microwave_device_false_result_fails_step,
         test_emergency_stop_false_result_fails_step,
         test_microwave_temperature_reached_success,

@@ -1,6 +1,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
 export interface HeaterRealtimeData {
+  device_id?: string
+  connection_port?: string
   pv: number
   sv: number
   mv: number
@@ -19,12 +21,14 @@ export interface PumpChannelData {
 
 export interface PumpRealtimeData {
   device_id: string
+  connection_port?: string
   channels: Record<string, PumpChannelData>
   error?: string
 }
 
 export interface MicrowaveRealtimeData {
   device_id?: string
+  connection_port?: string
   running?: boolean
   mode?: string
   current_segment?: number
@@ -37,6 +41,7 @@ export interface MicrowaveRealtimeData {
   faults?: string[]
   current_mode_code?: number
   allow_experiment_control?: boolean
+  allow_real_hardware_writes?: boolean
   enable_control_writes?: boolean
   error?: string
 }

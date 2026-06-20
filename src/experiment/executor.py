@@ -57,8 +57,6 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.MICROWAVE_CONFIGURE_MANUAL:
-                if not self._microwave_experiment_control_allowed(step):
-                    return False
                 segments = self._microwave_segments(step.params.get("segments", []))
                 result = await loop.run_in_executor(
                     None,
@@ -71,8 +69,6 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.MICROWAVE_CONFIGURE_AUTO_POWER:
-                if not self._microwave_experiment_control_allowed(step):
-                    return False
                 segments = self._microwave_segments(step.params.get("segments", []))
                 result = await loop.run_in_executor(
                     None,
@@ -85,8 +81,6 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.MICROWAVE_CONFIGURE_CONSTANT_RATE:
-                if not self._microwave_experiment_control_allowed(step):
-                    return False
                 segments = self._microwave_segments(step.params.get("segments", []))
                 result = await loop.run_in_executor(
                     None,
@@ -99,8 +93,6 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.MICROWAVE_START:
-                if not self._microwave_experiment_control_allowed(step):
-                    return False
                 result = await loop.run_in_executor(
                     None,
                     self._dm.start_microwave,
@@ -212,20 +204,6 @@ class StepExecutor:
         except Exception as e:
             logger.error(f"Step {step.id} failed: {e}")
             return False
-
-    def _microwave_experiment_control_allowed(self, step: ExperimentStep) -> bool:
-        device_id = step.params["device_id"]
-        checker = getattr(self._dm, "is_microwave_experiment_control_allowed", None)
-        if callable(checker):
-            allowed = bool(checker(device_id))
-        else:
-            microwave = self._dm.get_microwave(device_id)
-            allowed = bool(getattr(getattr(microwave, "config", None), "allow_experiment_control", False))
-        if not allowed:
-            logger.error(
-                f"Step {step.id}: microwave experiment control is disabled for {device_id}"
-            )
-        return allowed
 
     def _microwave_segments(self, raw_segments):
         segments = []

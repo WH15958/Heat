@@ -48,9 +48,29 @@ class FakeApiDeviceManager:
 
     def get_all_status(self):
         return {
-            "heaters": {},
-            "pumps": {},
-            "microwaves": {"mw1": {"connected": False, "status": "DISCONNECTED"}},
+            "heaters": {
+                "heater1": {
+                    "connected": False,
+                    "status": "DISCONNECTED",
+                    "connection_port": "COM7",
+                }
+            },
+            "pumps": {
+                "pump1": {
+                    "connected": False,
+                    "status": "DISCONNECTED",
+                    "connection_port": "COM10",
+                }
+            },
+            "microwaves": {
+                "mw1": {
+                    "connected": False,
+                    "status": "DISCONNECTED",
+                    "connection_port": "COM12",
+                    "allow_real_hardware_writes": True,
+                    "enable_control_writes": True,
+                }
+            },
         }
 
     def connect_microwave(self, device_id):
@@ -101,8 +121,11 @@ def test_list_devices_includes_microwaves():
     dm = FakeApiDeviceManager()
     response = run(list_devices(make_request(dm)))
 
+    assert response["heaters"]["heater1"]["connection_port"] == "COM7"
+    assert response["pumps"]["pump1"]["connection_port"] == "COM10"
     assert "microwaves" in response
     assert "mw1" in response["microwaves"]
+    assert response["microwaves"]["mw1"]["connection_port"] == "COM12"
 
 
 def test_microwave_connect_disconnect_call_manager():
@@ -125,7 +148,8 @@ def test_configure_start_stop_false_results_are_http_failures():
     dm.should_succeed = False
     request = make_request(dm)
     configure_body = MicrowaveConfigureRequest(
-        segments=[MicrowaveSegmentRequest(segment=1, heating_temperature=80)]
+        segments=[MicrowaveSegmentRequest(segment=1, heating_temperature=80)],
+        confirm_real_hardware_write=True,
     )
     start_body = MicrowaveStartRequest(mode="manual_power")
 
@@ -141,6 +165,19 @@ def test_configure_start_stop_false_results_are_http_failures():
             assert e.status_code == 400
 
 
+def test_microwave_configure_without_confirmation_calls_manager():
+    dm = FakeApiDeviceManager()
+    request = make_request(dm)
+    configure_body = MicrowaveConfigureRequest(
+        segments=[MicrowaveSegmentRequest(segment=1, heating_temperature=80)]
+    )
+
+    response = run(configure_microwave_manual("mw1", configure_body, request))
+
+    assert response == {"success": True, "device_id": "mw1"}
+    assert dm.calls[0][0] == "configure_microwave_manual"
+
+
 def test_websocket_payload_includes_microwaves():
     microwave = FakeConnectedMicrowave()
     dm = Mock()
@@ -149,6 +186,7 @@ def test_websocket_payload_includes_microwaves():
     dm.get_all_microwaves.return_value = {"mw1": microwave}
     dm.read_microwave_data.return_value = {
         "device_id": "mw1",
+        "connection_port": "COM12",
         "running": False,
         "mode": "unknown",
         "current_segment": 1,
@@ -159,12 +197,46 @@ def test_websocket_payload_includes_microwaves():
         "runtime_seconds": 0,
         "fault_code": 0,
         "faults": [],
+        "allow_real_hardware_writes": True,
+        "enable_control_writes": True,
     }
 
     payload = run(build_realtime_payload(dm))
 
     assert "microwaves" in payload
     assert payload["microwaves"]["mw1"]["device_id"] == "mw1"
+    assert payload["microwaves"]["mw1"]["connection_port"] == "COM12"
+
+
+def test_websocket_payload_includes_heater_and_pump_ports():
+    heater = Mock()
+    heater.is_connected.return_value = True
+    heater.config = SimpleNamespace(connection_params={"port": "COM7"})
+    heater.read_data.return_value = SimpleNamespace(
+        pv=25.0,
+        sv=30.0,
+        mv=0,
+        alarms=[],
+        run_status=SimpleNamespace(name="STOP"),
+    )
+    pump = Mock()
+    pump.is_connected.return_value = True
+    pump.config = SimpleNamespace(connection_params={"port": "COM10"})
+
+    dm = Mock()
+    dm.get_all_heaters.return_value = {"heater1": heater}
+    dm.get_all_pumps.return_value = {"pump1": pump}
+    dm.get_all_microwaves.return_value = {}
+    dm.read_pump_status.return_value = {
+        "device_id": "pump1",
+        "connection_port": "COM10",
+        "channels": {},
+    }
+
+    payload = run(build_realtime_payload(dm))
+
+    assert payload["heaters"]["heater1"]["connection_port"] == "COM7"
+    assert payload["pumps"]["pump1"]["connection_port"] == "COM10"
 
 
 def test_websocket_microwave_read_failure_is_error_payload():
@@ -221,7 +293,9 @@ def run_all():
         test_list_devices_includes_microwaves,
         test_microwave_connect_disconnect_call_manager,
         test_configure_start_stop_false_results_are_http_failures,
+        test_microwave_configure_without_confirmation_calls_manager,
         test_websocket_payload_includes_microwaves,
+        test_websocket_payload_includes_heater_and_pump_ports,
         test_websocket_microwave_read_failure_is_error_payload,
         test_websocket_disconnect_does_not_stop_microwave,
         test_emergency_stop_all_calls_microwave_stop_and_reports_failure,

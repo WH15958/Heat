@@ -3,8 +3,8 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-06-17
-版本：v3.2-microwave-safety-boundary
+最后更新：2026-06-20
+版本：v3.3-microwave-direct-control
 
 ---
 
@@ -136,19 +136,21 @@
 - `src/web/static/` 为前端构建产物
 - 文档里可描述这些目录的作用，但不要把它们当源码修改目标
 
-### 2.6 微波仪真实控制必须默认关闭
+### 2.6 微波仪真实控制已按用户授权开放
 
 原因：
 
 - MKM-AH1E 微波仪涉及高压、加热、微波输出、门控联锁、空载风险和现场看护要求
-- 软件测试只能验证 fake protocol、API/WS、YAML gate 和失败传播，不能确认真实硬件安全
+- 软件测试只能验证 fake protocol、API/WS、YAML 执行链和失败传播，不能确认真实硬件安全
+- 2026-06-20 用户明确要求取消微波后端安全边界，使其像加热器 1/2 一样可通过前端按钮和自动化实验直接启动
 
 要求：
 
-- `enable_control_writes` 必须默认 `false`，未完成人工 smoke test 前不得打开真实寄存器写入
-- `allow_experiment_control` 必须默认 `false`，未完成人工 smoke test 前不得允许 YAML 自动 configure/start
-- `microwave.configure_*` 和 `microwave.start` 必须先检查 `allow_experiment_control`
-- `microwave.stop` 和全局 `emergency_stop` 可以在自动控制禁用时执行，用于安全停机
+- `allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`；这些字段可继续出现在配置和状态 payload 中，但不应作为手动 REST/前端或 YAML 自动控制的阻断门
+- 前端按钮和 YAML 自动实验可以调用微波 configure/start/stop；设备返回 `False`、异常或 timeout 必须表现为失败，不能包装成成功
+- 页面加载、WebSocket 连接/断开和状态刷新仍不得触发任何写入、启动或停止
+- 前端启动前继续做连接、状态读取、`fault_code`、功率/电流和人工确认提示；通信协议没有可靠门状态寄存器，不得伪造 `door_closed`
+- 普通配置批量写入仍不得意外覆盖控制字 `40151`
 - AI 不能确认设备身份、接线、接地、炉门、非空载、探头浸没、通风散热、SOP 或真实 stop 语义；这些必须由用户/实验室确认
 - 实机联调按 `docs/microwave_smoke_test.md` 执行，联调结果必须由实验室回填记录
 
@@ -230,7 +232,7 @@ AI 不应做的是：
 - `api/ws.py`：检查 WebSocket 生命周期是否影响设备
 - `parser.py` / YAML：检查动作名、字段名、文件名约束
 - 样品记录：检查 `metadata -> sample_id -> samples.csv`
-- 微波仪：检查 `enable_control_writes`、`allow_experiment_control`、控制字写入、状态 payload 和 `docs/microwave_smoke_test.md`
+- 微波仪：检查 `allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control`、控制字写入、状态 payload 和 `docs/microwave_smoke_test.md`
 
 实机验证不是每次都必须做，但如果改动触及真实设备控制时序、协议写入顺序、串口管理，软件验证不足以替代实机验证。
 
@@ -321,7 +323,7 @@ AI 不应做的是：
 - 主流程文档化较完整，但仍依赖人对硬件场景的理解
 - 测试以软件层为主，硬件 smoke test 仍需人工执行
 - `src/main.py` 仍存在，但主线协作应以 Web 体系为准
-- 微波仪真实控制仍需要实验室 smoke test 确认；默认配置保持禁用真实写入和 YAML 自动启动
+- 微波仪软件路径已按 2026-06-20 用户授权开放前端手动和 YAML 自动控制；真实硬件行为、门控联锁、负载安全、故障码和 stop 语义仍需要实验室 smoke test 确认
 
 当前未决事项：
 
