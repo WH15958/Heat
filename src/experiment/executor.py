@@ -265,6 +265,19 @@ class StepExecutor:
             return True
         return False
 
+    @staticmethod
+    def _microwave_is_running(data) -> bool:
+        if data.get("running") is True:
+            return True
+        try:
+            if float(data.get("power_percent", 0) or 0) > 0:
+                return True
+            if float(data.get("current", 0) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            return False
+        return False
+
     async def _wait_condition(self, condition):
         """等待条件满足
 
@@ -356,6 +369,7 @@ class StepExecutor:
                 f"Waiting for microwave {condition.device_id} to complete "
                 f"(timeout={condition.timeout}s)"
             )
+            seen_running = False
             while True:
                 if self._should_stop():
                     logger.info("Microwave complete wait interrupted by stop request")
@@ -370,6 +384,14 @@ class StepExecutor:
                     )
                     if self._microwave_completion_confirmed(data):
                         logger.info(f"Microwave {condition.device_id} completed")
+                        return True
+                    if self._microwave_is_running(data):
+                        seen_running = True
+                    elif seen_running:
+                        logger.info(
+                            f"Microwave {condition.device_id} completed "
+                            f"(running transitioned to false)"
+                        )
                         return True
                 except Exception as e:
                     logger.warning(

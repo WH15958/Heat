@@ -175,10 +175,18 @@ async def build_realtime_payload(dm) -> dict:
                 payload["microwaves"][did] = status
             except asyncio.TimeoutError:
                 logger.warning(f"Microwave {did} read timeout")
-                payload["microwaves"][did] = {"error": "read_failed"}
+                payload["microwaves"][did] = {
+                    "device_id": did,
+                    "connection_port": microwave.config.connection_params.get("port"),
+                    "error": "read_timeout",
+                }
             except Exception as e:
                 logger.warning(f"Microwave {did} read failed: {e}")
-                payload["microwaves"][did] = {"error": "read_failed"}
+                payload["microwaves"][did] = {
+                    "device_id": did,
+                    "connection_port": microwave.config.connection_params.get("port"),
+                    "error": "read_failed",
+                }
 
     return payload
 

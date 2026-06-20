@@ -714,6 +714,11 @@ async function readMicrowaveData(id: string) {
     syncMicrowaveSafetyFlags(id, res.data)
     ElMessage.success(`微波仪 ${id} 状态已刷新`)
   } catch (e: any) {
+    microwaveSnapshots[id] = {
+      device_id: id,
+      connection_port: devices.microwaves[id].connectionPort,
+      error: 'read_failed',
+    }
     ElMessage.error(`读取失败: ${e.response?.data?.detail || e.message}`)
   } finally {
     devices.microwaves[id].refreshing = false
@@ -755,6 +760,10 @@ async function startMicrowave(id: string) {
   if (!ensureConnected(microwave.connected, '微波仪 ' + id, microwaveConnectionPort(id))) return
   if (!validateMicrowaveSegment(microwave)) return
   const status = microwaveStatus(id)
+  if (!status) {
+    ElMessage.error('微波仪尚未获取到状态，请先刷新状态并确认设备正常')
+    return
+  }
   if (status?.error) {
     ElMessage.error('微波仪状态读取失败，请先刷新状态并确认设备正常')
     return

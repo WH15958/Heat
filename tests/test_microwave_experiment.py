@@ -328,10 +328,33 @@ def test_microwave_temperature_reached_stop_interrupts():
 
 def test_microwave_complete_success():
     dm = FakeMicrowaveExperimentManager()
-    dm.read_payloads = [{"completed": True, "material_temperature": 80}]
+    dm.read_payloads = [
+        {"running": True, "power_percent": 20, "current": 1.2, "material_temperature": 80},
+        {"running": False, "power_percent": 0, "current": 0, "material_temperature": 80},
+    ]
     executor = StepExecutor(dm)
     step = ExperimentStep(
         id="wait_complete",
+        type=ActionType.WAIT,
+        wait=WaitCondition(
+            type=WaitType.MICROWAVE_COMPLETE,
+            device_id="microwave1",
+            timeout=1,
+        ),
+    )
+
+    result = run(executor.execute(step))
+
+    assert result is True
+    assert dm.read_count >= 2
+
+
+def test_microwave_complete_explicit_signal_still_succeeds():
+    dm = FakeMicrowaveExperimentManager()
+    dm.read_payloads = [{"completed": True, "material_temperature": 80}]
+    executor = StepExecutor(dm)
+    step = ExperimentStep(
+        id="wait_complete_explicit_signal",
         type=ActionType.WAIT,
         wait=WaitCondition(
             type=WaitType.MICROWAVE_COMPLETE,
@@ -419,6 +442,7 @@ def run_all():
         test_microwave_temperature_reached_timeout_fails,
         test_microwave_temperature_reached_stop_interrupts,
         test_microwave_complete_success,
+        test_microwave_complete_explicit_signal_still_succeeds,
         test_microwave_complete_ignores_display_running_without_completion_signal,
         test_microwave_complete_timeout_fails,
         test_microwave_complete_stop_interrupts,

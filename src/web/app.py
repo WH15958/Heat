@@ -28,69 +28,65 @@ def create_device_manager() -> DeviceManager:
     from src.utils.config import ConfigManager
 
     dm = DeviceManager()
-    try:
-        config_mgr = ConfigManager()
-        config = config_mgr.load()
+    config_mgr = ConfigManager()
+    config = config_mgr.load()
 
-        for h_cfg in config.heaters:
-            if not h_cfg.enabled:
-                continue
-            dm.add_heater(
-                device_id=h_cfg.device_id,
-                port=h_cfg.connection.port,
-                baudrate=h_cfg.connection.baudrate,
-                address=h_cfg.connection.address,
-                decimal_places=h_cfg.decimal_places,
-            )
-            logger.info(f"Registered heater: {h_cfg.device_id}")
+    for h_cfg in config.heaters:
+        if not h_cfg.enabled:
+            continue
+        dm.add_heater(
+            device_id=h_cfg.device_id,
+            port=h_cfg.connection.port,
+            baudrate=h_cfg.connection.baudrate,
+            address=h_cfg.connection.address,
+            decimal_places=h_cfg.decimal_places,
+        )
+        logger.info(f"Registered heater: {h_cfg.device_id}")
 
-        for p_cfg in config.pumps:
-            if not p_cfg.enabled:
-                continue
-            channels = None
-            if p_cfg.channels:
-                channels = [
-                    {
-                        "channel": ch.channel,
-                        "enabled": ch.enabled,
-                        "pump_head": ch.pump_head,
-                        "tube_model": ch.tube_model,
-                        "suck_back_angle": ch.suck_back_angle,
-                    }
-                    for ch in p_cfg.channels
-                ]
-            dm.add_pump(
-                device_id=p_cfg.device_id,
-                port=p_cfg.connection.port,
-                baudrate=p_cfg.connection.baudrate,
-                slave_address=p_cfg.slave_address,
-                channels=channels,
-            )
-            logger.info(f"Registered pump: {p_cfg.device_id}")
+    for p_cfg in config.pumps:
+        if not p_cfg.enabled:
+            continue
+        channels = None
+        if p_cfg.channels:
+            channels = [
+                {
+                    "channel": ch.channel,
+                    "enabled": ch.enabled,
+                    "pump_head": ch.pump_head,
+                    "tube_model": ch.tube_model,
+                    "suck_back_angle": ch.suck_back_angle,
+                }
+                for ch in p_cfg.channels
+            ]
+        dm.add_pump(
+            device_id=p_cfg.device_id,
+            port=p_cfg.connection.port,
+            baudrate=p_cfg.connection.baudrate,
+            slave_address=p_cfg.slave_address,
+            channels=channels,
+        )
+        logger.info(f"Registered pump: {p_cfg.device_id}")
 
-        for m_cfg in config.microwaves:
-            if not m_cfg.enabled:
-                continue
-            dm.add_microwave(
-                device_id=m_cfg.device_id,
-                port=m_cfg.connection.port,
-                baudrate=m_cfg.connection.baudrate,
-                slave_address=m_cfg.slave_address,
-                parity=m_cfg.connection.parity,
-                timeout=m_cfg.connection.timeout,
-                max_temperature=m_cfg.max_temperature,
-                max_power_percent=m_cfg.max_power_percent,
-                poll_interval=m_cfg.poll_interval,
-                retry_count=m_cfg.retry_count,
-                retry_delay=m_cfg.retry_delay,
-                allow_experiment_control=m_cfg.allow_experiment_control,
-                allow_real_hardware_writes=m_cfg.allow_real_hardware_writes,
-                enable_control_writes=m_cfg.enable_control_writes,
-            )
-            logger.info(f"Registered microwave: {m_cfg.device_id}")
-
-    except Exception as e:
-        logger.warning(f"Failed to load config, starting with empty devices: {e}")
+    for m_cfg in config.microwaves:
+        if not m_cfg.enabled:
+            continue
+        dm.add_microwave(
+            device_id=m_cfg.device_id,
+            port=m_cfg.connection.port,
+            baudrate=m_cfg.connection.baudrate,
+            slave_address=m_cfg.slave_address,
+            parity=m_cfg.connection.parity,
+            timeout=m_cfg.connection.timeout,
+            max_temperature=m_cfg.max_temperature,
+            max_power_percent=m_cfg.max_power_percent,
+            poll_interval=m_cfg.poll_interval,
+            retry_count=m_cfg.retry_count,
+            retry_delay=m_cfg.retry_delay,
+            allow_experiment_control=m_cfg.allow_experiment_control,
+            allow_real_hardware_writes=m_cfg.allow_real_hardware_writes,
+            enable_control_writes=m_cfg.enable_control_writes,
+        )
+        logger.info(f"Registered microwave: {m_cfg.device_id}")
     return dm
 
 

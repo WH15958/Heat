@@ -27,6 +27,7 @@ from src.web.api.devices import (
     stop_microwave,
 )
 from src.web.api.ws import build_realtime_payload, manager, websocket_endpoint
+from src.web.app import create_device_manager
 from src.web.device_manager import DeviceManager
 
 
@@ -241,6 +242,7 @@ def test_websocket_payload_includes_heater_and_pump_ports():
 
 def test_websocket_microwave_read_failure_is_error_payload():
     microwave = FakeConnectedMicrowave()
+    microwave.config = SimpleNamespace(connection_params={"port": "COM12"})
     dm = Mock()
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
@@ -249,7 +251,28 @@ def test_websocket_microwave_read_failure_is_error_payload():
 
     payload = run(build_realtime_payload(dm))
 
-    assert payload["microwaves"]["mw1"] == {"error": "read_failed"}
+    assert payload["microwaves"]["mw1"] == {
+        "device_id": "mw1",
+        "connection_port": "COM12",
+        "error": "read_timeout",
+    }
+
+
+def test_create_device_manager_raises_on_config_load_failure():
+    import src.utils.config as config_mod
+
+    def fail_load(self):
+        raise ValueError("broken config")
+
+    original_load = config_mod.ConfigManager.load
+    config_mod.ConfigManager.load = fail_load
+    try:
+        create_device_manager()
+        raise AssertionError("Expected create_device_manager to raise")
+    except ValueError as e:
+        assert "broken config" in str(e)
+    finally:
+        config_mod.ConfigManager.load = original_load
 
 
 def test_websocket_disconnect_does_not_stop_microwave():
@@ -297,6 +320,7 @@ def run_all():
         test_websocket_payload_includes_microwaves,
         test_websocket_payload_includes_heater_and_pump_ports,
         test_websocket_microwave_read_failure_is_error_payload,
+        test_create_device_manager_raises_on_config_load_failure,
         test_websocket_disconnect_does_not_stop_microwave,
         test_emergency_stop_all_calls_microwave_stop_and_reports_failure,
         test_emergency_stop_endpoint_reports_device_failure,
