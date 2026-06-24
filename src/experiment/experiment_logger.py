@@ -65,7 +65,7 @@ class ExperimentRun:
     failed_steps: int = 0
     steps: List[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
-    sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}})
+    sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}, "microwaves": {}})
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -97,6 +97,10 @@ class ExperimentLogger:
         point = {"t": round(elapsed, 1)}
         heaters_recorded = 0
         pumps_recorded = 0
+        microwaves_recorded = 0
+        self._active_run.sensor_data.setdefault("heaters", {})
+        self._active_run.sensor_data.setdefault("pumps", {})
+        self._active_run.sensor_data.setdefault("microwaves", {})
         for hid, hdata in (realtime_payload.get("heaters") or {}).items():
             if hdata.get("error"):
                 continue
@@ -128,8 +132,24 @@ class ExperimentLogger:
                     {"t": point["t"], "v": chdata.get("volume", 0)}
                 )
                 pumps_recorded += 1
-        if heaters_recorded > 0 or pumps_recorded > 0:
-            logger.info(f"[{self._active_run.run_id}] Sensor recorded: heaters={heaters_recorded}, pumps={pumps_recorded}")
+        for mid, mdata in (realtime_payload.get("microwaves") or {}).items():
+            if mdata.get("error"):
+                continue
+            material_temperature = mdata.get("material_temperature")
+            if material_temperature is None:
+                continue
+            if mid not in self._active_run.sensor_data["microwaves"]:
+                self._active_run.sensor_data["microwaves"][mid] = {"material_temperature": []}
+            self._active_run.sensor_data["microwaves"][mid]["material_temperature"].append(
+                {"t": point["t"], "v": material_temperature}
+            )
+            microwaves_recorded += 1
+        if heaters_recorded > 0 or pumps_recorded > 0 or microwaves_recorded > 0:
+            logger.info(
+                f"[{self._active_run.run_id}] Sensor recorded: "
+                f"heaters={heaters_recorded}, pumps={pumps_recorded}, "
+                f"microwaves={microwaves_recorded}"
+            )
 
     def start_run(self, experiment_name: str, experiment_file: str, total_steps: int, metadata: dict = None) -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]

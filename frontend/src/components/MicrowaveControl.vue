@@ -5,21 +5,19 @@
         <span>微波仪 {{ microwaveId }} 控制</span>
         <div class="header-tags">
           <el-tag type="info" size="small">串口 {{ connectionPort }}</el-tag>
+          <el-tag v-if="showBindingLabel" type="info" size="small">{{ bindingLabel }}</el-tag>
+          <el-tag :type="bindingTagType" size="small">{{ bindingTagText }}</el-tag>
           <el-tag :type="microwave.connected ? 'success' : 'info'" size="small">
             {{ microwave.connected ? '已连接' : '未连接' }}
           </el-tag>
-          <el-tag type="success" size="small">
-            配置写入可用
-          </el-tag>
-          <el-tag type="warning" size="small">
-            启动/停止可用
-          </el-tag>
+          <el-tag type="success" size="small">配置写入可用</el-tag>
+          <el-tag type="warning" size="small">启动/停止可用</el-tag>
         </div>
       </div>
     </template>
 
     <el-alert
-      title="操作前请人工检查炉门、反应瓶、探头、串口和现场看护。说明书/任务记录显示炉门未关严时设备/HMI 会禁止启动微波输出；协议当前没有可靠门状态寄存器，软件不伪造 door_closed。"
+      title="操作前请人工检查炉门、反应瓶、探头、设备绑定身份、当前解析串口和现场看护。协议当前没有可靠门状态寄存器，软件不会伪造 door_closed。"
       type="warning"
       :closable="false"
       show-icon
@@ -43,10 +41,11 @@
         </el-button>
       </el-form-item>
 
-      <el-form-item label="安全状态">
+      <el-form-item label="绑定状态">
         <div class="status-tags">
-          <el-tag type="warning" size="small">
-            实验自动控制可用
+          <el-tag :type="bindingTagType" size="small">{{ bindingTagText }}</el-tag>
+          <el-tag v-if="realtime?.binding_match_count !== undefined" type="info" size="small">
+            匹配数 {{ realtime.binding_match_count }}
           </el-tag>
           <el-tag v-if="realtime?.error" type="danger" size="small">读取失败</el-tag>
           <el-tag v-else :type="statusTagType" size="small">{{ statusText }}</el-tag>
@@ -188,6 +187,10 @@ interface MicrowaveDeviceState {
   mode: MicrowaveMode
   selectedSegment: number
   connectionPort?: string
+  bindingMode?: string
+  bindingLabel?: string
+  bindingResolved?: boolean
+  bindingError?: string | null
   allowExperimentControl: boolean
   allowRealHardwareWrites: boolean
   enableControlWrites: boolean
@@ -211,7 +214,25 @@ defineEmits<{
 
 const currentSegment = computed(() => props.microwave.segments[props.microwave.selectedSegment] ?? props.microwave.segments[1])
 const connectionPort = computed(() => props.realtime?.connection_port ?? props.microwave.connectionPort ?? '--')
+const bindingMode = computed(() => props.realtime?.connection_binding_mode ?? props.microwave.bindingMode ?? 'fixed_port')
+const bindingLabel = computed(() => props.realtime?.binding_label ?? props.microwave.bindingLabel ?? '未配置绑定')
+const bindingResolved = computed(() => props.realtime?.binding_resolved ?? props.microwave.bindingResolved ?? true)
+const bindingError = computed(() => props.realtime?.binding_error ?? props.microwave.bindingError ?? null)
 const faultCode = computed(() => Number(props.realtime?.fault_code ?? 0))
+
+const bindingTagType = computed<TagType>(() => {
+  if (bindingResolved.value === false) return 'danger'
+  if (bindingError.value === 'fallback_to_port') return 'warning'
+  return 'success'
+})
+
+const bindingTagText = computed(() => {
+  if (bindingResolved.value === false) return '未匹配'
+  if (bindingError.value === 'fallback_to_port') return '端口回退'
+  return '已匹配'
+})
+
+const showBindingLabel = computed(() => bindingMode.value === 'fingerprint' && Boolean(bindingLabel.value))
 
 const statusTagType = computed<TagType>(() => {
   if (props.realtime?.error) return 'danger'

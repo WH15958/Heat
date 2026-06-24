@@ -1252,6 +1252,54 @@ def test_websocket_disconnect_does_not_stop_pumps():
     print("[OK] WebSocket 断开不再对泵发送 stop_all")
 
 
+def test_experiment_logger_records_microwave_sensor_data():
+    print("\n=== 测试37: ExperimentLogger 记录微波物料温度 ===")
+
+    from src.experiment.experiment_logger import ExperimentLogger
+    import src.science.sample_record as sr_mod
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        original_csv = sr_mod.SAMPLES_CSV
+        sr_mod.SAMPLES_CSV = tmp_dir / "samples.csv"
+        try:
+            exp_logger = ExperimentLogger(save_log=False)
+            exp_logger.start_run(
+                experiment_name="microwave_sensor_test",
+                experiment_file="microwave_sensor_test.yaml",
+                total_steps=1,
+                metadata={"batch_id": "MW_B01"},
+            )
+
+            exp_logger.record_sensor_data({
+                "heaters": {},
+                "pumps": {},
+                "microwaves": {
+                    "microwave1": {
+                        "material_temperature": 42.5,
+                        "power_percent": 5,
+                    },
+                    "microwave_error": {
+                        "error": "read_failed",
+                        "material_temperature": 99.0,
+                    },
+                },
+            })
+
+            sensor_data = exp_logger.active_run.sensor_data
+            assert "microwaves" in sensor_data
+            points = sensor_data["microwaves"]["microwave1"]["material_temperature"]
+            assert len(points) == 1
+            assert points[0]["v"] == 42.5
+            assert points[0]["t"] >= 0.0
+            assert "microwave_error" not in sensor_data["microwaves"]
+            print("[OK] 微波物料温度写入 sensor_data，读取失败 payload 会跳过")
+        finally:
+            sr_mod.SAMPLES_CSV = original_csv
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def run_all():
     tests = [
         test_parser_old_yaml_no_metadata,
@@ -1290,6 +1338,7 @@ def run_all():
         test_wait_timeout_returns_false,
         test_stop_experiment_waits_for_task_completion,
         test_websocket_disconnect_does_not_stop_pumps,
+        test_experiment_logger_records_microwave_sensor_data,
     ]
 
     passed = 0

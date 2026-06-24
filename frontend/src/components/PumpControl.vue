@@ -8,6 +8,8 @@
             {{ pump.connected ? '已连接' : '未连接' }}
           </el-tag>
           <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
+          <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
+          <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag>
           <el-button v-if="!pump.connected" type="primary" size="small" @click="$emit('connect', pumpId)" :loading="pump.loading">
             连接
           </el-button>
@@ -26,7 +28,7 @@
       style="margin-bottom: 12px"
     />
 
-    <div v-for="ch in [1,2,3,4]" :key="ch" class="channel-control">
+    <div v-for="ch in [1, 2, 3, 4]" :key="ch" class="channel-control">
       <div class="channel-header">
         <span class="channel-name">通道 {{ ch }}</span>
         <el-tag v-if="pump.connected && channelStatus(pumpId, ch)?.running" type="success" size="small">
@@ -144,6 +146,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { PUMP_MODES, TUBE_MODELS, FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, type PumpMode } from '../api/devices'
 
 interface ChannelConfig {
@@ -170,6 +173,10 @@ const props = defineProps<{
     connected: boolean
     loading: boolean
     connectionPort?: string
+    bindingMode?: string
+    bindingLabel?: string
+    bindingResolved?: boolean
+    bindingError?: string | null
     stoppingAll: boolean
     channels: Record<number, ChannelConfig>
   }
@@ -183,6 +190,20 @@ defineEmits<{
   stopChannel: [pumpId: string, channel: number]
   stopAll: [pumpId: string]
 }>()
+
+const bindingTagType = computed(() => {
+  if (props.pump.bindingResolved === false) return 'danger'
+  if (props.pump.bindingError === 'fallback_to_port') return 'warning'
+  return 'success'
+})
+
+const bindingTagText = computed(() => {
+  if (props.pump.bindingResolved === false) return '未匹配'
+  if (props.pump.bindingError === 'fallback_to_port') return '端口回退'
+  return '已匹配'
+})
+
+const showBindingLabel = computed(() => props.pump.bindingMode === 'fingerprint' && Boolean(props.pump.bindingLabel))
 
 function needsRunTime(mode: PumpMode): boolean {
   return mode === 'TIME_QUANTITY' || mode === 'TIME_SPEED'

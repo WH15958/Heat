@@ -293,20 +293,30 @@ steps:
       timeout: 5
     on_error: skip
 
-  - id: microwave_start_manual_short
+  - id: microwave_start_auto_power_short
     type: microwave.start
     params:
       device_id: microwave1
-      mode: manual_power
-    on_error: stop
+      mode: auto_power
+    on_error: skip
 
-  - id: microwave_wait_complete_short
+  - id: microwave_wait_auto_power_target_short
     type: wait
     params: {}
     wait:
-      type: microwave_complete
+      type: microwave_temperature_reached
       device_id: microwave1
+      target_temperature: 30
+      tolerance: 10
       timeout: 20
+    on_error: skip
+
+  - id: microwave_hold_auto_power_short
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 5
     on_error: skip
 
   - id: microwave_stop

@@ -44,6 +44,19 @@ class BaseConfig:
 
 
 @dataclass
+class SerialBindingConfig(BaseConfig):
+    """串口稳定绑定配置"""
+    mode: str = "fixed_port"
+    serial_number: str = ""
+    vid: Optional[int] = None
+    pid: Optional[int] = None
+    location: str = ""
+    description_regex: str = ""
+    manufacturer_regex: str = ""
+    fallback_to_port: bool = False
+
+
+@dataclass
 class DeviceConnectionConfig(BaseConfig):
     """设备连接配置"""
     port: str = "COM1"
@@ -51,12 +64,13 @@ class DeviceConnectionConfig(BaseConfig):
     address: int = 0
     parity: str = "N"
     timeout: float = 1.0
+    binding: SerialBindingConfig = field(default_factory=SerialBindingConfig)
     
     def validate(self) -> List[str]:
         """验证配置"""
         errors = []
         
-        if not self.port:
+        if self.binding.mode == "fixed_port" and not self.port:
             errors.append("端口不能为空")
         
         if self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
@@ -72,6 +86,44 @@ class DeviceConnectionConfig(BaseConfig):
             errors.append(f"超时时间无效: {self.timeout}，必须大于0")
         
         return errors
+
+
+def _serial_binding_validate(self: SerialBindingConfig) -> List[str]:
+    errors = []
+    if self.mode not in ["fixed_port", "fingerprint"]:
+        errors.append(f"绑定模式无效: {self.mode}，支持 fixed_port, fingerprint")
+    if self.mode == "fingerprint":
+        has_serial = bool(self.serial_number)
+        has_location = bool(self.location)
+        has_vid_pid = self.vid is not None and self.pid is not None
+        has_description = bool(self.description_regex)
+        if not (has_serial or has_location or has_vid_pid or has_description):
+            errors.append(
+                "fingerprint 模式至少需要 serial_number、location、vid+pid 或 description_regex 之一"
+            )
+    return errors
+
+
+def _device_connection_validate(self: DeviceConnectionConfig) -> List[str]:
+    errors = []
+    if self.binding.mode == "fixed_port" and not self.port:
+        errors.append("fixed_port 模式下端口不能为空")
+    if self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
+        errors.append(
+            f"波特率无效: {self.baudrate}，支持 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200"
+        )
+    if not (0 <= self.address <= 255):
+        errors.append(f"地址无效: {self.address}，范围 0-255")
+    if self.parity not in ["N", "E", "O", "M", "S"]:
+        errors.append(f"校验位无效: {self.parity}，支持 N, E, O, M, S")
+    if self.timeout <= 0:
+        errors.append(f"超时时间无效: {self.timeout}，必须大于 0")
+    errors.extend(self.binding.validate())
+    return errors
+
+
+SerialBindingConfig.validate = _serial_binding_validate
+DeviceConnectionConfig.validate = _device_connection_validate
 
 
 @dataclass
@@ -479,7 +531,7 @@ class ConfigManager:
         heaters = []
         for heater_data in data.get("heaters", []):
             conn_data = heater_data.get("connection", {})
-            connection = DeviceConnectionConfig.from_dict(conn_data)
+            connection = self._parse_connection_config(conn_data)
             heater = HeaterDeviceConfig(
                 **{k: v for k, v in heater_data.items() if k != "connection"},
                 connection=connection
@@ -489,7 +541,7 @@ class ConfigManager:
         pumps = []
         for pump_data in data.get("pumps", []):
             conn_data = pump_data.get("connection", {})
-            connection = DeviceConnectionConfig.from_dict(conn_data)
+            connection = self._parse_connection_config(conn_data)
             
             channels = []
             for ch_data in pump_data.get("channels", []):
@@ -505,7 +557,7 @@ class ConfigManager:
         microwaves = []
         for microwave_data in data.get("microwaves", []):
             conn_data = microwave_data.get("connection", {})
-            connection = DeviceConnectionConfig.from_dict(conn_data)
+            connection = self._parse_connection_config(conn_data)
             microwave = MicrowaveDeviceConfig(
                 **{k: v for k, v in microwave_data.items() if k != "connection"},
                 connection=connection
@@ -523,6 +575,21 @@ class ConfigManager:
             logging=LoggingConfig(**data.get("logging", {})),
         )
     
+    def _parse_connection_config(self, conn_data: Dict[str, Any]) -> DeviceConnectionConfig:
+        binding_data = conn_data.get("binding", {}) or {}
+        binding = SerialBindingConfig.from_dict(binding_data)
+        allowed_keys = {
+            "port",
+            "baudrate",
+            "address",
+            "parity",
+            "timeout",
+        }
+        return DeviceConnectionConfig(
+            **{k: v for k, v in conn_data.items() if k in allowed_keys},
+            binding=binding,
+        )
+
     def load(self) -> SystemConfig:
         """
         加载配置文件

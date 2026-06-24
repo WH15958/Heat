@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from devices.heater import AIHeaterDevice, HeaterConfig
 from devices.microwave import MicrowaveConfig, MicrowaveDevice
@@ -21,6 +21,9 @@ class DeviceManager:
         self._heaters: Dict[str, AIHeaterDevice] = {}
         self._pumps: Dict[str, LabSmartPumpDevice] = {}
         self._microwaves: Dict[str, MicrowaveDevice] = {}
+        self._heater_bindings: Dict[str, Dict[str, Any]] = {}
+        self._pump_bindings: Dict[str, Dict[str, Any]] = {}
+        self._microwave_bindings: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._pump_locks: Dict[str, threading.Lock] = {}
         self._pump_channel_index: Dict[str, int] = {}
@@ -33,6 +36,7 @@ class DeviceManager:
         baudrate: int = 9600,
         address: int = 1,
         decimal_places: int = 1,
+        binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         """添加加热器配置
 
@@ -52,6 +56,7 @@ class DeviceManager:
             decimal_places=decimal_places,
         )
         self._heaters[device_id] = AIHeaterDevice(config)
+        self._heater_bindings[device_id] = self._normalize_binding_info(binding_info, port)
         logger.info(f"Registered heater: {device_id} on {port}")
         return device_id
 
@@ -62,6 +67,7 @@ class DeviceManager:
         baudrate: int = 19200,
         slave_address: int = 1,
         channels: Optional[list] = None,
+        binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         """添加蠕动泵配置
 
@@ -110,6 +116,7 @@ class DeviceManager:
         )
         self._pumps[device_id] = LabSmartPumpDevice(config)
         self._pump_locks[device_id] = threading.Lock()
+        self._pump_bindings[device_id] = self._normalize_binding_info(binding_info, port)
         logger.info(f"Registered pump: {device_id} on {port}")
         return device_id
 
@@ -129,6 +136,7 @@ class DeviceManager:
         allow_experiment_control: bool = True,
         allow_real_hardware_writes: bool = True,
         enable_control_writes: bool = True,
+        binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         """添加微波仪配置"""
         config = MicrowaveConfig(
@@ -154,8 +162,56 @@ class DeviceManager:
             enable_control_writes=enable_control_writes,
         )
         self._microwaves[device_id] = MicrowaveDevice(config)
+        self._microwave_bindings[device_id] = self._normalize_binding_info(binding_info, port)
         logger.info(f"Registered microwave: {device_id} on {port}")
         return device_id
+
+    def _normalize_binding_info(
+        self,
+        binding_info: Optional[Dict[str, Any]],
+        port: str,
+    ) -> Dict[str, Any]:
+        info = dict(binding_info or {})
+        info.setdefault("resolved_port", port)
+        info.setdefault("connection_binding_mode", "fixed_port")
+        info.setdefault("binding_label", f"固定串口 {port or '--'}")
+        info.setdefault("binding_resolved", bool(port))
+        info.setdefault("binding_match_count", 1 if port else 0)
+        info.setdefault("binding_error", None if port else "missing_fixed_port")
+        info.setdefault("binding_candidates", [port] if port else [])
+        return info
+
+    @staticmethod
+    def _binding_port(info: Optional[Dict[str, Any]]) -> str:
+        return info.get("resolved_port", "") if info is not None else ""
+
+    def _binding_status(self, info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        normalized = self._normalize_binding_info(info, self._binding_port(info))
+        return {
+            "connection_binding_mode": normalized.get("connection_binding_mode"),
+            "binding_label": normalized.get("binding_label"),
+            "binding_resolved": bool(normalized.get("binding_resolved", False)),
+            "binding_match_count": int(normalized.get("binding_match_count", 0)),
+            "binding_error": normalized.get("binding_error"),
+            "binding_candidates": list(normalized.get("binding_candidates", [])),
+        }
+
+    def _require_binding_resolved(self, device_id: str, device_type: str, info: Optional[Dict[str, Any]]):
+        binding = self._normalize_binding_info(info, self._binding_port(info))
+        if binding.get("binding_resolved"):
+            return
+        error = binding.get("binding_error") or "binding_unresolved"
+        raise RuntimeError(f"{device_type} {device_id} binding unresolved: {error}")
+
+    def _binding_enriched_payload(
+        self,
+        payload: Dict[str, Any],
+        info: Optional[Dict[str, Any]],
+        connection_port: str,
+    ) -> Dict[str, Any]:
+        payload["connection_port"] = connection_port
+        payload.update(self._binding_status(info))
+        return payload
 
     def connect_heater(self, device_id: str) -> bool:
         """连接加热器
@@ -172,6 +228,7 @@ class DeviceManager:
         heater = self._heaters.get(device_id)
         if heater is None:
             raise ValueError(f"Heater not found: {device_id}")
+        self._require_binding_resolved(device_id, "Heater", self._heater_bindings.get(device_id))
         return heater.connect()
 
     def disconnect_heater(self, device_id: str) -> bool:
@@ -206,6 +263,7 @@ class DeviceManager:
         pump = self._pumps.get(device_id)
         if pump is None:
             raise ValueError(f"Pump not found: {device_id}")
+        self._require_binding_resolved(device_id, "Pump", self._pump_bindings.get(device_id))
         return pump.connect()
 
     def disconnect_pump(self, device_id: str) -> bool:
@@ -230,6 +288,11 @@ class DeviceManager:
         microwave = self._microwaves.get(device_id)
         if microwave is None:
             raise ValueError(f"Microwave not found: {device_id}")
+        self._require_binding_resolved(
+            device_id,
+            "Microwave",
+            self._microwave_bindings.get(device_id),
+        )
         return microwave.connect()
 
     def disconnect_microwave(self, device_id: str) -> bool:
@@ -258,9 +321,8 @@ class DeviceManager:
         if not heater.is_connected():
             raise IOError("Device not connected")
         data = heater.read_data()
-        return {
+        return self._binding_enriched_payload({
             "device_id": data.device_id,
-            "connection_port": heater.config.connection_params.get("port"),
             "pv": data.pv,
             "sv": data.sv,
             "mv": data.mv,
@@ -268,7 +330,7 @@ class DeviceManager:
             "run_status": data.run_status.name,
             "is_manual": data.is_manual,
             "is_auto_tuning": data.is_auto_tuning,
-        }
+        }, self._heater_bindings.get(device_id), heater.config.connection_params.get("port"))
 
     def read_pump_status(self, device_id: str) -> dict:
         """读取蠕动泵状态（读取所有4个通道）
@@ -317,11 +379,10 @@ class DeviceManager:
             except Exception as e:
                 logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
 
-        return {
+        return self._binding_enriched_payload({
             "device_id": device_id,
-            "connection_port": pump.config.connection_params.get("port"),
             "channels": dict(self._pump_channel_cache[device_id]),
-        }
+        }, self._pump_bindings.get(device_id), pump.config.connection_params.get("port"))
 
     def read_microwave_data(self, device_id: str) -> dict:
         """读取微波仪数据"""
@@ -433,24 +494,21 @@ class DeviceManager:
         """
         heaters = {}
         for did, h in self._heaters.items():
-            heaters[did] = {
+            heaters[did] = self._binding_enriched_payload({
                 "connected": h.is_connected(),
                 "status": h.status.name,
-                "connection_port": h.config.connection_params.get("port"),
-            }
+            }, self._heater_bindings.get(did), h.config.connection_params.get("port"))
         pumps = {}
         for did, p in self._pumps.items():
-            pumps[did] = {
+            pumps[did] = self._binding_enriched_payload({
                 "connected": p.is_connected(),
                 "status": p.status.name,
-                "connection_port": p.config.connection_params.get("port"),
-            }
+            }, self._pump_bindings.get(did), p.config.connection_params.get("port"))
         microwaves = {}
         for did, m in self._microwaves.items():
-            microwaves[did] = {
+            microwaves[did] = self._binding_enriched_payload({
                 "connected": m.is_connected(),
                 "status": m.status.name,
-                "connection_port": m.config.connection_params.get("port"),
                 "allow_experiment_control": bool(
                     getattr(m.config, "allow_experiment_control", False)
                 ),
@@ -460,15 +518,14 @@ class DeviceManager:
                 "enable_control_writes": bool(
                     getattr(m.config, "enable_control_writes", False)
                 ),
-            }
+            }, self._microwave_bindings.get(did), m.config.connection_params.get("port"))
         return {"heaters": heaters, "pumps": pumps, "microwaves": microwaves}
 
     def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
         device_id = microwave.config.device_id
         power_percent = data.get("power_percent", 0)
-        return {
+        return self._binding_enriched_payload({
             "device_id": device_id,
-            "connection_port": microwave.config.connection_params.get("port"),
             "running": bool(power_percent),
             "mode": "unknown",
             "current_segment": data.get("current_segment", 0),
@@ -489,7 +546,7 @@ class DeviceManager:
             "enable_control_writes": bool(
                 getattr(microwave.config, "enable_control_writes", False)
             ),
-        }
+        }, self._microwave_bindings.get(device_id), microwave.config.connection_params.get("port"))
 
     def get_heater(self, device_id: str) -> Optional[AIHeaterDevice]:
         """获取加热器设备实例
@@ -542,6 +599,15 @@ class DeviceManager:
         """获取所有微波仪（快照）"""
         with self._lock:
             return dict(self._microwaves)
+
+    def get_heater_binding(self, device_id: str) -> Dict[str, Any]:
+        return self._binding_status(self._heater_bindings.get(device_id))
+
+    def get_pump_binding(self, device_id: str) -> Dict[str, Any]:
+        return self._binding_status(self._pump_bindings.get(device_id))
+
+    def get_microwave_binding(self, device_id: str) -> Dict[str, Any]:
+        return self._binding_status(self._microwave_bindings.get(device_id))
 
     def set_temperature(self, device_id: str, temperature: float) -> bool:
         """设置加热器目标温度

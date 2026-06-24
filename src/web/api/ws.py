@@ -12,6 +12,11 @@ PUMP_READ_TIMEOUT = 10.0
 MICROWAVE_READ_TIMEOUT = 5.0
 
 
+def _with_binding(payload: dict, binding_status: dict) -> dict:
+    payload.update(binding_status)
+    return payload
+
+
 class ConnectionManager:
     """WebSocket连接管理器"""
 
@@ -116,7 +121,7 @@ async def build_realtime_payload(dm) -> dict:
                     loop.run_in_executor(None, heater.read_data),
                     timeout=DEVICE_READ_TIMEOUT,
                 )
-                payload["heaters"][did] = {
+                payload["heaters"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": heater.config.connection_params.get("port"),
                     "pv": data.pv,
@@ -124,21 +129,21 @@ async def build_realtime_payload(dm) -> dict:
                     "mv": data.mv,
                     "alarms": data.alarms,
                     "run_status": data.run_status.name,
-                }
+                }, dm.get_heater_binding(did))
             except asyncio.TimeoutError:
                 logger.warning(f"Heater {did} read timeout")
-                payload["heaters"][did] = {
+                payload["heaters"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": heater.config.connection_params.get("port"),
                     "error": "read_timeout",
-                }
+                }, dm.get_heater_binding(did))
             except Exception as e:
                 logger.warning(f"Heater {did} read failed: {e}")
-                payload["heaters"][did] = {
+                payload["heaters"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": heater.config.connection_params.get("port"),
                     "error": "read_failed",
-                }
+                }, dm.get_heater_binding(did))
 
     pumps = dm.get_all_pumps()
     for did, pump in pumps.items():
@@ -151,18 +156,18 @@ async def build_realtime_payload(dm) -> dict:
                 payload["pumps"][did] = status
             except asyncio.TimeoutError:
                 logger.warning(f"Pump {did} read timeout")
-                payload["pumps"][did] = {
+                payload["pumps"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": pump.config.connection_params.get("port"),
                     "error": "read_timeout",
-                }
+                }, dm.get_pump_binding(did))
             except Exception as e:
                 logger.warning(f"Pump {did} read failed: {e}")
-                payload["pumps"][did] = {
+                payload["pumps"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": pump.config.connection_params.get("port"),
                     "error": "read_failed",
-                }
+                }, dm.get_pump_binding(did))
 
     microwaves = dm.get_all_microwaves()
     for did, microwave in microwaves.items():
@@ -175,18 +180,18 @@ async def build_realtime_payload(dm) -> dict:
                 payload["microwaves"][did] = status
             except asyncio.TimeoutError:
                 logger.warning(f"Microwave {did} read timeout")
-                payload["microwaves"][did] = {
+                payload["microwaves"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": microwave.config.connection_params.get("port"),
                     "error": "read_timeout",
-                }
+                }, dm.get_microwave_binding(did))
             except Exception as e:
                 logger.warning(f"Microwave {did} read failed: {e}")
-                payload["microwaves"][did] = {
+                payload["microwaves"][did] = _with_binding({
                     "device_id": did,
                     "connection_port": microwave.config.connection_params.get("port"),
                     "error": "read_failed",
-                }
+                }, dm.get_microwave_binding(did))
 
     return payload
 

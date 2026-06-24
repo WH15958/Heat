@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.utils.logger import get_logger, setup_logging
+from src.utils.serial_binding import resolve_connection
 from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
 from src.web.api.experiments import router as experiments_router
@@ -17,6 +18,34 @@ from src.web.device_manager import DeviceManager
 logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _resolve_registered_port(device_id: str, connection) -> dict:
+    resolution = resolve_connection(connection)
+    binding_info = {
+        "device_id": device_id,
+        "resolved_port": resolution.resolved_port,
+        "connection_binding_mode": resolution.connection_binding_mode,
+        "binding_label": resolution.binding_label,
+        "binding_resolved": resolution.binding_resolved,
+        "binding_match_count": resolution.binding_match_count,
+        "binding_error": resolution.binding_error,
+        "binding_candidates": resolution.binding_candidates,
+    }
+    if resolution.binding_error == "fallback_to_port":
+        logger.warning(
+            "Device %s fingerprint binding fallback to configured port %s",
+            device_id,
+            resolution.resolved_port,
+        )
+    elif not resolution.binding_resolved:
+        logger.warning(
+            "Device %s binding unresolved: %s (%s)",
+            device_id,
+            resolution.binding_label,
+            resolution.binding_error,
+        )
+    return binding_info
 
 
 def create_device_manager() -> DeviceManager:
@@ -34,18 +63,21 @@ def create_device_manager() -> DeviceManager:
     for h_cfg in config.heaters:
         if not h_cfg.enabled:
             continue
+        binding_info = _resolve_registered_port(h_cfg.device_id, h_cfg.connection)
         dm.add_heater(
             device_id=h_cfg.device_id,
-            port=h_cfg.connection.port,
+            port=binding_info["resolved_port"],
             baudrate=h_cfg.connection.baudrate,
             address=h_cfg.connection.address,
             decimal_places=h_cfg.decimal_places,
+            binding_info=binding_info,
         )
         logger.info(f"Registered heater: {h_cfg.device_id}")
 
     for p_cfg in config.pumps:
         if not p_cfg.enabled:
             continue
+        binding_info = _resolve_registered_port(p_cfg.device_id, p_cfg.connection)
         channels = None
         if p_cfg.channels:
             channels = [
@@ -60,19 +92,21 @@ def create_device_manager() -> DeviceManager:
             ]
         dm.add_pump(
             device_id=p_cfg.device_id,
-            port=p_cfg.connection.port,
+            port=binding_info["resolved_port"],
             baudrate=p_cfg.connection.baudrate,
             slave_address=p_cfg.slave_address,
             channels=channels,
+            binding_info=binding_info,
         )
         logger.info(f"Registered pump: {p_cfg.device_id}")
 
     for m_cfg in config.microwaves:
         if not m_cfg.enabled:
             continue
+        binding_info = _resolve_registered_port(m_cfg.device_id, m_cfg.connection)
         dm.add_microwave(
             device_id=m_cfg.device_id,
-            port=m_cfg.connection.port,
+            port=binding_info["resolved_port"],
             baudrate=m_cfg.connection.baudrate,
             slave_address=m_cfg.slave_address,
             parity=m_cfg.connection.parity,
@@ -85,6 +119,7 @@ def create_device_manager() -> DeviceManager:
             allow_experiment_control=m_cfg.allow_experiment_control,
             allow_real_hardware_writes=m_cfg.allow_real_hardware_writes,
             enable_control_writes=m_cfg.enable_control_writes,
+            binding_info=binding_info,
         )
         logger.info(f"Registered microwave: {m_cfg.device_id}")
     return dm

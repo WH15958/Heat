@@ -113,6 +113,8 @@ FastAPI 是异步的，但设备是同步的。
 - `src/protocols/modbus_rtu.py`：泵协议实现
 - `src/protocols/microwave_params.py`：微波仪 Modbus 地址、模式和控制字常量
 
+说明：蠕动泵在 Heat 中按 Modbus RTU 驱动，但现场物理接线不在软件层写死为 RS485。若实验室当前使用 RS232 线缆，以现场接线事实为准；不要把“协议是 Modbus RTU”和“物理层一定是 RS485”混为一谈。
+
 ### 3.4 样品与记录
 
 - `src/science/sample_id.py`：`sample_id`、`batch_id`、`condition_id`
@@ -158,8 +160,35 @@ FastAPI 是异步的，但设备是同步的。
 - 控制字：`40151` 对应 PDU 地址 `150`，bit15 为恒速率、bit14 为自动功率、bit13 为手动功率、bit12 为微波启动；当前 stop 实现写 `0`，真实语义仍需实机确认。
 - 状态：`DeviceManager.read_microwave_data()` 暴露 `connection_port`、`running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。
 - 串口展示：`DeviceManager.get_all_status()`、加热器/泵读取结果和 WebSocket 实时 payload 会为 heater/pump/microwave 暴露 `connection_port`，用于前端确认当前连接的 COM 口；该字段只读展示，不改变设备控制语义。
+
+## 串口稳定绑定
+
+Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理：
+
+- 配置层：`DeviceConnectionConfig.binding`
+  - `mode=fixed_port` 兼容旧行为
+  - `mode=fingerprint` 按 `serial_number`、`vid/pid`、`location`、`description_regex` 等规则找设备
+- 解析层：`src/utils/serial_binding.py`
+  - 只负责枚举 `serial.tools.list_ports.comports()`
+  - 只返回唯一命中的端口，0 命中或多命中都算失败
+  - 仅在 `fallback_to_port=true` 且配置了 `port` 时允许回退
+- 驱动层：`src/devices/`
+  - 仍然只接收最终解析出的端口名
+  - 不增加扫描、轮询、识别逻辑
+
+只读状态字段：
+
+- `connection_binding_mode`
+- `binding_label`
+- `binding_resolved`
+- `binding_match_count`
+- `binding_error`
+- `binding_candidates`
+
+后端在绑定未解析时会阻止 `connect_*`，避免把设备误连到不确定串口。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置类 API 请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
 - WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
+- 实验日志：`ExperimentLogger.record_sensor_data()` 会把实时 payload 中的微波仪 `material_temperature` 保存到 `sensor_data.microwaves[device_id].material_temperature`，供历史记录实验报告绘制微波反应温度曲线。
 - 控制开放：按 2026-06-20 用户确认，`allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`，且不再作为手动 REST/前端或 YAML 自动控制的阻断门；字段保留在配置和 payload 中用于兼容旧状态展示。
 - 防错边界：普通配置批量写入仍拒绝覆盖控制字 `40151`；设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
 - 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。

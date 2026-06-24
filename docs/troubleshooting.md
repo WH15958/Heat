@@ -66,6 +66,18 @@ python scripts/cleanup_locks.py --force
 - `config/system_config.yaml` 里的端口是否正确
 - 波特率、地址、奇偶校验是否匹配
 
+如果系统已经启用串口稳定绑定，再额外检查：
+
+- `binding_error=no_match`
+  - 没有找到符合绑定规则的串口设备
+  - 常见原因：换了 USB 口、设备未上电、`serial_number/location` 变了
+- `binding_error=multiple_matches`
+  - 找到了多个候选设备，系统不会自动猜
+  - 常见原因：多台同型号 USB 转串口设备同时在线
+- `binding_error=fallback_to_port`
+  - 指纹匹配失败，但系统按配置里的固定 `port` 回退运行
+  - 这说明当前绑定规则不够稳定，建议尽快补齐更强的设备指纹
+
 ### 软件侧定位
 
 - Web 层：`src/web/api/devices.py`

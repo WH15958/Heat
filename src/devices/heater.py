@@ -290,7 +290,11 @@ class AIHeaterDevice(BaseDevice):
         
         def _read():
             with self._lock:
-                pv, sv, mv, alarm_status = self._protocol.read_pv_sv(
+                protocol = self._protocol
+                if protocol is None or not protocol.is_open:
+                    raise IOError("Device not connected")
+
+                pv, sv, mv, alarm_status = protocol.read_pv_sv(
                     decimal_places=self._decimal_places
                 )
                 
@@ -299,7 +303,7 @@ class AIHeaterDevice(BaseDevice):
                 is_auto_tuning = False
                 
                 try:
-                    status_val, _ = self._protocol.read_parameter(
+                    status_val, _ = protocol.read_parameter(
                         ParameterCode.OUTPUT_STATUS
                     )
                     run_status_val = status_val & 0x03

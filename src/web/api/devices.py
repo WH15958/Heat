@@ -144,6 +144,8 @@ async def connect_heater(device_id: str, request: Request):
         return {"success": result, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -265,6 +267,8 @@ async def connect_microwave(device_id: str, request: Request):
         return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -426,6 +430,8 @@ async def connect_pump(device_id: str, request: Request):
         return {"success": result, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -64,7 +64,7 @@ v1 的工程链路按下面的顺序理解：
 | `target_flow_ml_min` | 目标流量 | `5.0 mL/min` | 待实验设计确认 |
 | `calibrated_flow_ml_min` | 真实标定流量 | 称重换算得到 | 待实测 |
 | `target_dispense_ml` | 目标输送体积 | `15.0 mL` | 待实验设计确认 |
-| `tube_model` | 泵管型号 | 泵屏幕/说明书参数 | 待手册确认 |
+| `tube_model` | 泵管型号 | 查 `docs/device_materials/多通道蠕动泵MODBUS通信协议.md` 表 1；例如泵头 5 下 `11=1.52×0.86`、`13=2.79×0.86` | 待实验室按实物/泵屏幕确认 |
 | `tube_inner_diameter_mm` | 管路内径 | 例如 `1.0 mm` | 待实测 |
 | `tube_length_cm` | 该段管长 | 例如 `200 cm` | 待实测 |
 | `dead_volume_ml` | 死体积 | 按公式或实测 | 待实测 |

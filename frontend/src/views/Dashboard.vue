@@ -216,6 +216,9 @@ interface RegisteredMicrowaveStatus {
   connected: boolean
   status?: string
   connection_port?: string
+  binding_label?: string
+  binding_resolved?: boolean
+  binding_error?: string | null
   allow_experiment_control?: boolean
   allow_real_hardware_writes?: boolean
   enable_control_writes?: boolean
@@ -236,6 +239,9 @@ const dashboardMicrowaves = computed<Record<string, DashboardMicrowaveData>>(() 
       connected: Boolean(status.connected),
       status: status.status,
       connection_port: status.connection_port,
+      binding_label: status.binding_label,
+      binding_resolved: status.binding_resolved,
+      binding_error: status.binding_error,
       allow_experiment_control: Boolean(status.allow_experiment_control),
       allow_real_hardware_writes: Boolean(status.allow_real_hardware_writes),
       enable_control_writes: Boolean(status.enable_control_writes),

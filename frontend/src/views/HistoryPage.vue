@@ -5,6 +5,9 @@
         <div class="card-header">
           <span>实验历史记录</span>
           <div>
+            <span v-if="selectedRuns.length > 0" class="selection-count">已选 {{ selectedRuns.length }} 条</span>
+            <el-button size="small" type="primary" @click="exportSelectedRuns" :disabled="selectedRuns.length === 0" :loading="exporting">导出选中</el-button>
+            <el-button size="small" type="danger" @click="deleteSelectedRuns" :disabled="selectedRuns.length === 0" :loading="deleting">删除选中</el-button>
             <el-button size="small" type="danger" @click="deleteAll" :disabled="runs.length === 0" :loading="deleting">清空全部</el-button>
             <el-button size="small" @click="loadRuns" :loading="loading">刷新</el-button>
           </div>
@@ -15,7 +18,8 @@
         暂无历史记录，运行实验后自动保存
       </div>
 
-      <el-table :data="runs" stripe style="width: 100%" @row-click="showDetail" v-else>
+      <el-table :data="runs" stripe style="width: 100%" @row-click="handleRowClick" @selection-change="handleSelectionChange" v-else>
+        <el-table-column type="selection" width="48" />
         <el-table-column prop="run_id" label="Run ID" width="220" />
         <el-table-column prop="experiment_name" label="实验名称" width="200" />
         <el-table-column prop="status" label="状态" width="100">
@@ -106,6 +110,10 @@
             <template #header><span>温度曲线</span></template>
             <div ref="reportTempChartRef" style="width: 100%; height: 320px"></div>
           </el-card>
+          <el-card shadow="never" v-if="hasMicrowaveData" style="margin-bottom: 16px">
+            <template #header><span>微波反应温度曲线</span></template>
+            <div ref="reportMicrowaveTempChartRef" style="width: 100%; height: 320px"></div>
+          </el-card>
           <el-card shadow="never" v-if="hasPumpData" style="margin-bottom: 16px">
             <template #header><span>流量曲线</span></template>
             <div ref="reportFlowChartRef" style="width: 100%; height: 320px"></div>
@@ -142,9 +150,14 @@ interface ChannelSensorData {
   flow_unit?: string
 }
 
+interface MicrowaveSensorData {
+  material_temperature: TimePoint[]
+}
+
 interface SensorData {
   heaters: Record<string, HeaterSensorData>
   pumps: Record<string, Record<string, ChannelSensorData>>
+  microwaves?: Record<string, MicrowaveSensorData>
 }
 
 interface RunData {
@@ -164,15 +177,19 @@ interface RunData {
 }
 
 const runs = ref<RunData[]>([])
+const selectedRuns = ref<RunData[]>([])
 const loading = ref(false)
 const deleting = ref(false)
+const exporting = ref(false)
 const detailVisible = ref(false)
 const detailData = ref<RunData | null>(null)
 const detailTitle = ref('')
 const reportTempChartRef = ref<HTMLElement>()
+const reportMicrowaveTempChartRef = ref<HTMLElement>()
 const reportFlowChartRef = ref<HTMLElement>()
 const reportVolumeChartRef = ref<HTMLElement>()
 let reportTempChart: ECharts | null = null
+let reportMicrowaveTempChart: ECharts | null = null
 let reportFlowChart: ECharts | null = null
 let reportVolumeChart: ECharts | null = null
 
@@ -228,7 +245,7 @@ function volumeYAxisName(sd: SensorData): string {
 const hasSensorData = computed(() => {
   const sd = detailData.value?.sensor_data
   if (!sd) return false
-  return hasHeaterData.value || hasPumpData.value
+  return hasHeaterData.value || hasMicrowaveData.value || hasPumpData.value
 })
 
 const hasHeaterData = computed(() => {
@@ -243,8 +260,26 @@ const hasPumpData = computed(() => {
   return Object.keys(sd.pumps).length > 0
 })
 
+const hasMicrowaveData = computed(() => {
+  const sd = detailData.value?.sensor_data
+  if (!sd?.microwaves) return false
+  return Object.values(sd.microwaves).some(mdata => mdata.material_temperature?.length > 0)
+})
+
+function disposeReportCharts() {
+  reportTempChart?.dispose()
+  reportMicrowaveTempChart?.dispose()
+  reportFlowChart?.dispose()
+  reportVolumeChart?.dispose()
+  reportTempChart = null
+  reportMicrowaveTempChart = null
+  reportFlowChart = null
+  reportVolumeChart = null
+}
+
 function renderReportCharts() {
   nextTick(() => {
+    disposeReportCharts()
     const sd = detailData.value?.sensor_data
     if (!sd) return
 
@@ -292,8 +327,43 @@ function renderReportCharts() {
       })
     }
 
+    if (sd.microwaves && Object.keys(sd.microwaves).length > 0 && reportMicrowaveTempChartRef.value) {
+      if (reportMicrowaveTempChart) reportMicrowaveTempChart.dispose()
+      reportMicrowaveTempChart = init(reportMicrowaveTempChartRef.value)
+      const series: LineSeriesOption[] = []
+      const legend: string[] = []
+      for (const [mid, mdata] of Object.entries(sd.microwaves)) {
+        if (mdata.material_temperature?.length) {
+          legend.push(`${mid} 物料温度`)
+          series.push({
+            name: `${mid} 物料温度`,
+            type: 'line',
+            data: mdata.material_temperature.map((p: TimePoint) => [p.t, p.v]),
+            smooth: true,
+            showSymbol: false,
+          })
+        }
+      }
+      if (series.length > 0) {
+        reportMicrowaveTempChart.setOption({
+          tooltip: { trigger: 'axis', formatter: (params: any) => {
+            const t = params[0]?.data?.[0]
+            let s = `时间: ${t}s<br/>`
+            for (const p of params) {
+              s += `${p.seriesName}: ${p.data[1]?.toFixed(1)}°C<br/>`
+            }
+            return s
+          }},
+          legend: { data: legend, top: 0 },
+          grid: { left: 60, right: 20, top: 30, bottom: 30 },
+          xAxis: { type: 'value', name: '时间(s)' },
+          yAxis: { type: 'value', name: '温度(°C)' },
+          series,
+        })
+      }
+    }
+
     if (sd.pumps && Object.keys(sd.pumps).length > 0 && reportFlowChartRef.value) {
-      if (reportFlowChart) reportFlowChart.dispose()
       reportFlowChart = init(reportFlowChartRef.value)
       const series: LineSeriesOption[] = []
       const legend: string[] = []
@@ -420,6 +490,42 @@ function formatTime(iso: string): string {
   }
 }
 
+function handleSelectionChange(selection: RunData[]) {
+  selectedRuns.value = selection
+}
+
+function handleRowClick(row: RunData, column: any) {
+  if (column?.type === 'selection') return
+  showDetail(row)
+}
+
+function downloadTextFile(content: string, filename: string, type = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportRunText(data: RunData): string {
+  const lines: string[] = []
+  lines.push(`实验记录: ${data.experiment_name}`)
+  lines.push(`Run ID: ${data.run_id}`)
+  lines.push(`状态: ${statusLabel(data.status)}`)
+  lines.push(`开始: ${formatTime(data.started_at)}`)
+  lines.push(`结束: ${formatTime(data.finished_at)}`)
+  lines.push(`总耗时: ${data.total_duration?.toFixed(1)}s`)
+  lines.push(`步骤: 完成 ${data.completed_steps} / 失败 ${data.failed_steps} / 共 ${data.total_steps}`)
+  lines.push('')
+  lines.push('--- 步骤详情 ---')
+  for (const step of data.steps || []) {
+    lines.push(`[${step.step_index + 1}] ${step.step_id} | ${step.action_type} | ${statusLabel(step.status)} | 耗时: ${step.duration?.toFixed(1) || '-'}s${step.error ? ' | 错误: ' + step.error : ''}`)
+  }
+  return lines.join('\n')
+}
+
 async function loadRuns() {
   loading.value = true
   try {
@@ -446,28 +552,30 @@ async function showDetail(row: RunData) {
 
 function exportRunLog() {
   if (!detailData.value) return
-  const data = detailData.value
-  const lines: string[] = []
-  lines.push(`实验记录: ${data.experiment_name}`)
-  lines.push(`Run ID: ${data.run_id}`)
-  lines.push(`状态: ${statusLabel(data.status)}`)
-  lines.push(`开始: ${formatTime(data.started_at)}`)
-  lines.push(`结束: ${formatTime(data.finished_at)}`)
-  lines.push(`总耗时: ${data.total_duration?.toFixed(1)}s`)
-  lines.push(`步骤: 完成 ${data.completed_steps} / 失败 ${data.failed_steps} / 共 ${data.total_steps}`)
-  lines.push('')
-  lines.push('--- 步骤详情 ---')
-  for (const step of data.steps || []) {
-    lines.push(`[${step.step_index + 1}] ${step.step_id} | ${step.action_type} | ${statusLabel(step.status)} | 耗时: ${step.duration?.toFixed(1) || '-'}s${step.error ? ' | 错误: ' + step.error : ''}`)
+  downloadTextFile(exportRunText(detailData.value), `experiment_${detailData.value.run_id}.txt`)
+}
+
+async function exportSelectedRuns() {
+  if (selectedRuns.value.length === 0 || exporting.value) return
+  exporting.value = true
+  try {
+    const details = await Promise.all(
+      selectedRuns.value.map(row => axios.get(`/api/experiments/history/runs/${row.run_id}`).then(res => res.data)),
+    )
+    const exportedAt = new Date().toISOString()
+    const content = JSON.stringify({
+      exported_at: exportedAt,
+      count: details.length,
+      runs: details,
+    }, null, 2)
+    const filenameTime = exportedAt.replace(/[:.]/g, '-')
+    downloadTextFile(content, `experiment_runs_${filenameTime}.json`, 'application/json;charset=utf-8')
+    ElMessage.success(`已导出 ${details.length} 条记录`)
+  } catch (e: any) {
+    ElMessage.error(`导出失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    exporting.value = false
   }
-  const content = lines.join('\n')
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `experiment_${data.run_id}.txt`
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 async function deleteRun(row: RunData) {
@@ -484,9 +592,39 @@ async function deleteRun(row: RunData) {
   try {
     await axios.delete(`/api/experiments/history/runs/${row.run_id}`)
     ElMessage.success('已删除')
+    selectedRuns.value = selectedRuns.value.filter(item => item.run_id !== row.run_id)
     loadRuns()
   } catch (e: any) {
     ElMessage.error(`删除失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function deleteSelectedRuns() {
+  if (selectedRuns.value.length === 0 || deleting.value) return
+  const selected = [...selectedRuns.value]
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selected.length} 条实验历史记录吗？此操作不可恢复！`,
+      '确认批量删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+
+  deleting.value = true
+  try {
+    await Promise.all(selected.map(row => axios.delete(`/api/experiments/history/runs/${row.run_id}`)))
+    const deletedIds = new Set(selected.map(row => row.run_id))
+    if (detailData.value && deletedIds.has(detailData.value.run_id)) {
+      detailVisible.value = false
+      detailData.value = null
+    }
+    selectedRuns.value = []
+    ElMessage.success(`已删除 ${selected.length} 条记录`)
+    loadRuns()
+  } catch (e: any) {
+    ElMessage.error(`批量删除失败: ${e.response?.data?.detail || e.message}`)
   } finally {
     deleting.value = false
   }
@@ -504,8 +642,10 @@ async function deleteFromDetail() {
 
   deleting.value = true
   try {
-    await axios.delete(`/api/experiments/history/runs/${detailData.value.run_id}`)
+    const runId = detailData.value.run_id
+    await axios.delete(`/api/experiments/history/runs/${runId}`)
     detailVisible.value = false
+    selectedRuns.value = selectedRuns.value.filter(item => item.run_id !== runId)
     ElMessage.success('已删除')
     loadRuns()
   } catch (e: any) {
@@ -529,6 +669,9 @@ async function deleteAll() {
   try {
     await axios.delete('/api/experiments/history/runs')
     ElMessage.success('已清空全部记录')
+    selectedRuns.value = []
+    detailVisible.value = false
+    detailData.value = null
     loadRuns()
   } catch (e: any) {
     ElMessage.error(`清空失败: ${e.response?.data?.detail || e.message}`)
@@ -543,17 +686,13 @@ onMounted(() => {
 
 onUnmounted(() => {
   detailVisible.value = false
-  reportTempChart?.dispose()
-  reportFlowChart?.dispose()
-  reportVolumeChart?.dispose()
-  reportTempChart = null
-  reportFlowChart = null
-  reportVolumeChart = null
+  disposeReportCharts()
 })
 </script>
 
 <style scoped>
 .history-page { padding: 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
+.selection-count { color: #606266; font-size: 13px; margin-right: 8px; }
 .empty-state { text-align: center; padding: 40px; color: #909399; }
 </style>

@@ -3,6 +3,12 @@ import { ref, onMounted, onUnmounted } from 'vue'
 export interface HeaterRealtimeData {
   device_id?: string
   connection_port?: string
+  connection_binding_mode?: string
+  binding_label?: string
+  binding_resolved?: boolean
+  binding_match_count?: number
+  binding_error?: string | null
+  binding_candidates?: string[]
   pv: number
   sv: number
   mv: number
@@ -22,6 +28,12 @@ export interface PumpChannelData {
 export interface PumpRealtimeData {
   device_id: string
   connection_port?: string
+  connection_binding_mode?: string
+  binding_label?: string
+  binding_resolved?: boolean
+  binding_match_count?: number
+  binding_error?: string | null
+  binding_candidates?: string[]
   channels: Record<string, PumpChannelData>
   error?: string
 }
@@ -29,6 +41,12 @@ export interface PumpRealtimeData {
 export interface MicrowaveRealtimeData {
   device_id?: string
   connection_port?: string
+  connection_binding_mode?: string
+  binding_label?: string
+  binding_resolved?: boolean
+  binding_match_count?: number
+  binding_error?: string | null
+  binding_candidates?: string[]
   running?: boolean
   mode?: string
   current_segment?: number

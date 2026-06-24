@@ -163,6 +163,8 @@
 | `tube_model` | 否 | 软管型号 |
 | `flow_unit` | 否 | 流速单位，常用 `1`(mL/min) |
 
+软管型号不是自由文本。LabSmart 泵头/软管编号表见 [device_materials/多通道蠕动泵MODBUS通信协议.md](device_materials/多通道蠕动泵MODBUS通信协议.md) 的“表 1：泵头 & 软管编号”。当前工程常见泵头型号为 `5`，对应软管型号示例包括 `11 = 1.52×0.86`、`13 = 2.79×0.86`。YAML 中的 `tube_model` 必须与现场实际安装泵管和泵屏幕/读回值一致；如果日志出现 written/readback 不一致，先按实验室确认值修正配置或 YAML，再做定量实验。
+
 按模式扩展参数：
 
 | 模式 | 额外参数 |
@@ -226,6 +228,7 @@
 - `allow_experiment_control`、`allow_real_hardware_writes` 和 `enable_control_writes` 字段仍可出现在配置或状态中，但当前不作为 YAML 自动控制的阻断门。
 - 普通配置批量写入仍不得覆盖控制字 `40151`。
 - 真实自动启动前，仍必须完成 [microwave_smoke_test.md](microwave_smoke_test.md) 中的实验室人工确认。
+- 当前 MKM-AH1E 外控协议没有已实机确认的“程序完成”寄存器。推荐主流程用 `microwave_temperature_reached` 判断物料温度、用 `duration` 计时保温，然后显式执行 `microwave.stop`；不要把 `microwave_complete` 作为真实实验主路径的唯一结束条件。
 - 以下示例只说明 YAML 结构，不是化学工艺建议，也不能作为真实实验参数直接照抄。
 
 `microwave.configure_manual` 参数：
@@ -333,18 +336,43 @@
 |------|------|------|
 | `device_id` | 是 | 微波仪 ID |
 
-最小结构示例：
+推荐的温控/保温结构示例：
 
 ```yaml
-- id: mw_start_structure_only
+- id: mw_auto_power_config_structure_only
+  type: microwave.configure_auto_power
+  params:
+    device_id: microwave1
+    segments:
+      - segment: 1
+        target_temperature: 40
+        holding_temperature: 40
+        hours: 0
+        minutes: 0
+        seconds: 5
+
+- id: mw_start_auto_power_structure_only
   type: microwave.start
   params:
     device_id: microwave1
-    mode: manual_power
+    mode: auto_power
+
+- id: mw_wait_target_temperature_structure_only
+  type: wait
+  params: {}
   wait:
-    type: microwave_complete
+    type: microwave_temperature_reached
     device_id: microwave1
-    timeout: 30
+    target_temperature: 40
+    tolerance: 2
+    timeout: 300
+
+- id: mw_hold_by_heat_timer_structure_only
+  type: wait
+  params: {}
+  wait:
+    type: duration
+    seconds: 300
 
 - id: mw_stop
   type: microwave.stop
@@ -461,6 +489,8 @@
 ### 5.6 `microwave_complete`
 
 等待微波仪运行完成。
+
+当前不推荐把它作为真实微波实验主流程的结束条件。MKM-AH1E 当前资料中没有明确的完成状态寄存器；如果没有厂家补充寄存器表或实机状态追踪证据，请优先使用“物料温度达到目标 + Heat 外层保温计时 + 显式 stop”的结构。
 
 字段：
 

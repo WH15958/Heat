@@ -89,6 +89,10 @@ interface PumpDeviceState {
   connected: boolean
   loading: boolean
   connectionPort?: string
+  bindingMode?: string
+  bindingLabel?: string
+  bindingResolved?: boolean
+  bindingError?: string | null
   stoppingAll: boolean
   channels: Record<number, ChannelConfig>
 }
@@ -97,6 +101,10 @@ interface HeaterDeviceState {
   connected: boolean
   loading: boolean
   connectionPort?: string
+  bindingMode?: string
+  bindingLabel?: string
+  bindingResolved?: boolean
+  bindingError?: string | null
   targetTemp: number
   starting: boolean
   stopping: boolean
@@ -121,6 +129,10 @@ interface MicrowaveDeviceState {
   mode: MicrowaveMode
   selectedSegment: number
   connectionPort?: string
+  bindingMode?: string
+  bindingLabel?: string
+  bindingResolved?: boolean
+  bindingError?: string | null
   allowExperimentControl: boolean
   allowRealHardwareWrites: boolean
   enableControlWrites: boolean
@@ -269,17 +281,25 @@ async function refreshDevices() {
     const data = res.data
     for (const [id, info] of Object.entries(data.heaters || {})) {
       if (!devices.heaters[id]) {
-        devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false }
+        devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }
       }
       devices.heaters[id].connected = (info as any).connected
       devices.heaters[id].connectionPort = (info as any).connection_port
+      devices.heaters[id].bindingMode = (info as any).connection_binding_mode
+      devices.heaters[id].bindingLabel = (info as any).binding_label
+      devices.heaters[id].bindingResolved = (info as any).binding_resolved !== false
+      devices.heaters[id].bindingError = (info as any).binding_error ?? null
     }
     for (const [id, info] of Object.entries(data.pumps || {})) {
       if (!devices.pumps[id]) {
-        devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels() }
+        devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels(), bindingResolved: true }
       }
       devices.pumps[id].connected = (info as any).connected
       devices.pumps[id].connectionPort = (info as any).connection_port
+      devices.pumps[id].bindingMode = (info as any).connection_binding_mode
+      devices.pumps[id].bindingLabel = (info as any).binding_label
+      devices.pumps[id].bindingResolved = (info as any).binding_resolved !== false
+      devices.pumps[id].bindingError = (info as any).binding_error ?? null
     }
     for (const [id, info] of Object.entries(data.microwaves || {})) {
       if (!devices.microwaves[id]) {
@@ -293,6 +313,10 @@ async function refreshDevices() {
           mode: 'manual_power',
           selectedSegment: 1,
           connectionPort: undefined,
+          bindingMode: undefined,
+          bindingLabel: undefined,
+          bindingResolved: true,
+          bindingError: null,
           allowExperimentControl: false,
           allowRealHardwareWrites: false,
           enableControlWrites: false,
@@ -301,6 +325,10 @@ async function refreshDevices() {
       }
       devices.microwaves[id].connected = (info as any).connected
       devices.microwaves[id].connectionPort = (info as any).connection_port
+      devices.microwaves[id].bindingMode = (info as any).connection_binding_mode
+      devices.microwaves[id].bindingLabel = (info as any).binding_label
+      devices.microwaves[id].bindingResolved = (info as any).binding_resolved !== false
+      devices.microwaves[id].bindingError = (info as any).binding_error ?? null
       devices.microwaves[id].allowExperimentControl = Boolean((info as any).allow_experiment_control)
       devices.microwaves[id].allowRealHardwareWrites = Boolean((info as any).allow_real_hardware_writes)
       devices.microwaves[id].enableControlWrites = Boolean((info as any).enable_control_writes)
@@ -324,7 +352,13 @@ function pumpConnectionPort(id: string): string {
 
 function ensureConnected(connected: boolean, label: string, port: string): boolean {
   if (connected) return true
-  ElMessage.error(label + ' 未连接。请先确认串口 ' + port + ' 对应目标设备并连接成功。')
+  ElMessage.error(label + ' 未连接。请先确认设备绑定身份与当前解析端口 ' + port + ' 一致，并连接成功。')
+  return false
+}
+
+function ensureBindingResolved(resolved: boolean | undefined, label: string, bindingLabel: string | undefined): boolean {
+  if (resolved !== false) return true
+  ElMessage.error(label + ' 串口绑定未解析。请先确认绑定身份 ' + (bindingLabel || '--') + ' 与当前设备一致。')
   return false
 }
 
@@ -380,6 +414,7 @@ async function confirmPumpStart(pumpId: string, channel: number, effectiveFlowRa
 }
 
 async function connectHeater(id: string) {
+  if (!ensureBindingResolved(devices.heaters[id].bindingResolved, '加热器' + id, devices.heaters[id].bindingLabel)) return
   devices.heaters[id].loading = true
   try {
     const res = await devicesApi.connectHeater(id)
@@ -467,6 +502,7 @@ async function stopHeater(id: string) {
 }
 
 async function connectPump(id: string) {
+  if (!ensureBindingResolved(devices.pumps[id].bindingResolved, '蠕动泵' + id, devices.pumps[id].bindingLabel)) return
   devices.pumps[id].loading = true
   try {
     const res = await devicesApi.connectPump(id)
@@ -604,6 +640,18 @@ function syncMicrowaveSafetyFlags(id: string, status: MicrowaveRealtimeData) {
   if (typeof status.connection_port === 'string') {
     devices.microwaves[id].connectionPort = status.connection_port
   }
+  if (typeof status.connection_binding_mode === 'string') {
+    devices.microwaves[id].bindingMode = status.connection_binding_mode
+  }
+  if (typeof status.binding_label === 'string') {
+    devices.microwaves[id].bindingLabel = status.binding_label
+  }
+  if (typeof status.binding_resolved === 'boolean') {
+    devices.microwaves[id].bindingResolved = status.binding_resolved
+  }
+  if (status.binding_error !== undefined) {
+    devices.microwaves[id].bindingError = status.binding_error ?? null
+  }
   if (typeof status.allow_experiment_control === 'boolean') {
     devices.microwaves[id].allowExperimentControl = status.allow_experiment_control
   }
@@ -668,6 +716,7 @@ function validateMicrowaveSegment(microwave: MicrowaveDeviceState): boolean {
 }
 
 async function connectMicrowave(id: string) {
+  if (!ensureBindingResolved(devices.microwaves[id].bindingResolved, '微波仪' + id, devices.microwaves[id].bindingLabel)) return
   devices.microwaves[id].loading = true
   try {
     const res = await devicesApi.connectMicrowave(id)
