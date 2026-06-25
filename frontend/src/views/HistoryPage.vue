@@ -114,6 +114,10 @@
             <template #header><span>微波反应温度曲线</span></template>
             <div ref="reportMicrowaveTempChartRef" style="width: 100%; height: 320px"></div>
           </el-card>
+          <el-card shadow="never" v-if="hasMicrowavePowerCurrentData" style="margin-bottom: 16px">
+            <template #header><span>微波功率 / 电流曲线</span></template>
+            <div ref="reportMicrowavePowerChartRef" style="width: 100%; height: 320px"></div>
+          </el-card>
           <el-card shadow="never" v-if="hasPumpData" style="margin-bottom: 16px">
             <template #header><span>流量曲线</span></template>
             <div ref="reportFlowChartRef" style="width: 100%; height: 320px"></div>
@@ -151,7 +155,10 @@ interface ChannelSensorData {
 }
 
 interface MicrowaveSensorData {
-  material_temperature: TimePoint[]
+  material_temperature?: TimePoint[]
+  power_percent?: TimePoint[]
+  current?: TimePoint[]
+  runtime_seconds?: TimePoint[]
 }
 
 interface SensorData {
@@ -186,10 +193,12 @@ const detailData = ref<RunData | null>(null)
 const detailTitle = ref('')
 const reportTempChartRef = ref<HTMLElement>()
 const reportMicrowaveTempChartRef = ref<HTMLElement>()
+const reportMicrowavePowerChartRef = ref<HTMLElement>()
 const reportFlowChartRef = ref<HTMLElement>()
 const reportVolumeChartRef = ref<HTMLElement>()
 let reportTempChart: ECharts | null = null
 let reportMicrowaveTempChart: ECharts | null = null
+let reportMicrowavePowerChart: ECharts | null = null
 let reportFlowChart: ECharts | null = null
 let reportVolumeChart: ECharts | null = null
 
@@ -245,7 +254,7 @@ function volumeYAxisName(sd: SensorData): string {
 const hasSensorData = computed(() => {
   const sd = detailData.value?.sensor_data
   if (!sd) return false
-  return hasHeaterData.value || hasMicrowaveData.value || hasPumpData.value
+  return hasHeaterData.value || hasMicrowaveData.value || hasMicrowavePowerCurrentData.value || hasPumpData.value
 })
 
 const hasHeaterData = computed(() => {
@@ -263,16 +272,26 @@ const hasPumpData = computed(() => {
 const hasMicrowaveData = computed(() => {
   const sd = detailData.value?.sensor_data
   if (!sd?.microwaves) return false
-  return Object.values(sd.microwaves).some(mdata => mdata.material_temperature?.length > 0)
+  return Object.values(sd.microwaves).some(mdata => (mdata.material_temperature?.length || 0) > 0)
+})
+
+const hasMicrowavePowerCurrentData = computed(() => {
+  const sd = detailData.value?.sensor_data
+  if (!sd?.microwaves) return false
+  return Object.values(sd.microwaves).some(mdata => (
+    (mdata.power_percent?.length || 0) > 0 || (mdata.current?.length || 0) > 0
+  ))
 })
 
 function disposeReportCharts() {
   reportTempChart?.dispose()
   reportMicrowaveTempChart?.dispose()
+  reportMicrowavePowerChart?.dispose()
   reportFlowChart?.dispose()
   reportVolumeChart?.dispose()
   reportTempChart = null
   reportMicrowaveTempChart = null
+  reportMicrowavePowerChart = null
   reportFlowChart = null
   reportVolumeChart = null
 }
@@ -358,6 +377,54 @@ function renderReportCharts() {
           grid: { left: 60, right: 20, top: 30, bottom: 30 },
           xAxis: { type: 'value', name: '时间(s)' },
           yAxis: { type: 'value', name: '温度(°C)' },
+          series,
+        })
+      }
+    }
+
+    if (sd.microwaves && Object.keys(sd.microwaves).length > 0 && reportMicrowavePowerChartRef.value) {
+      if (reportMicrowavePowerChart) reportMicrowavePowerChart.dispose()
+      reportMicrowavePowerChart = init(reportMicrowavePowerChartRef.value)
+      const series: LineSeriesOption[] = []
+      const legend: string[] = []
+      for (const [mid, mdata] of Object.entries(sd.microwaves)) {
+        if (mdata.power_percent?.length) {
+          legend.push(mid + ' 功率')
+          series.push({
+            name: mid + ' 功率',
+            type: 'line',
+            data: mdata.power_percent.map((p: TimePoint) => [p.t, p.v]),
+            smooth: true,
+            showSymbol: false,
+          })
+        }
+        if (mdata.current?.length) {
+          legend.push(mid + ' 电流')
+          series.push({
+            name: mid + ' 电流',
+            type: 'line',
+            data: mdata.current.map((p: TimePoint) => [p.t, p.v]),
+            smooth: true,
+            showSymbol: false,
+            lineStyle: { type: 'dashed' },
+          })
+        }
+      }
+      if (series.length > 0) {
+        reportMicrowavePowerChart.setOption({
+          tooltip: { trigger: 'axis', formatter: (params: any) => {
+            const t = params[0]?.data?.[0]
+            let s = '时间: ' + t + 's<br/>'
+            for (const p of params) {
+              const unit = String(p.seriesName).includes('功率') ? '%' : 'A'
+              s += p.seriesName + ': ' + p.data[1]?.toFixed(2) + unit + '<br/>'
+            }
+            return s
+          }},
+          legend: { data: legend, top: 0 },
+          grid: { left: 60, right: 20, top: 30, bottom: 30 },
+          xAxis: { type: 'value', name: '时间(s)' },
+          yAxis: { type: 'value', name: '功率(%) / 电流(A)' },
           series,
         })
       }
@@ -614,17 +681,29 @@ async function deleteSelectedRuns() {
 
   deleting.value = true
   try {
-    await Promise.all(selected.map(row => axios.delete(`/api/experiments/history/runs/${row.run_id}`)))
-    const deletedIds = new Set(selected.map(row => row.run_id))
+    const results = await Promise.allSettled(
+      selected.map(row => axios.delete('/api/experiments/history/runs/' + row.run_id).then(() => row.run_id)),
+    )
+    const deletedIds = new Set(
+      results
+        .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
+        .map(result => result.value),
+    )
     if (detailData.value && deletedIds.has(detailData.value.run_id)) {
       detailVisible.value = false
       detailData.value = null
     }
-    selectedRuns.value = []
-    ElMessage.success(`已删除 ${selected.length} 条记录`)
-    loadRuns()
+    selectedRuns.value = selectedRuns.value.filter(row => !deletedIds.has(row.run_id))
+    const failedCount = selected.length - deletedIds.size
+    if (failedCount === 0) {
+      ElMessage.success('已删除 ' + deletedIds.size + ' 条记录')
+    } else {
+      ElMessage.warning('已删除 ' + deletedIds.size + ' 条记录，' + failedCount + ' 条删除失败')
+    }
+    await loadRuns()
   } catch (e: any) {
     ElMessage.error(`批量删除失败: ${e.response?.data?.detail || e.message}`)
+    await loadRuns()
   } finally {
     deleting.value = false
   }

@@ -91,16 +91,16 @@ class ExperimentEngine:
         if self._state == ExperimentState.RUNNING:
             logger.warning("Experiment already running")
             return
-        self._state = ExperimentState.RUNNING
         self._stop_flag = False
         self._pause_event.set()
-        self._start_time = time.time()
         self._exp_logger.start_run(
             experiment_name=self._experiment_name,
             experiment_file=self._experiment_file,
             total_steps=len(self._steps),
             metadata=self._metadata,
         )
+        self._state = ExperimentState.RUNNING
+        self._start_time = time.time()
         self._task = asyncio.create_task(self._run())
 
     async def _run(self):

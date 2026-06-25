@@ -133,7 +133,12 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
     engine.on_complete(on_complete)
     _engines[filename] = engine
 
-    await engine.start()
+    try:
+        await engine.start()
+    except Exception as e:
+        _cleanup_engine(filename)
+        logger.error(f"Failed to start experiment {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start experiment: {e}")
     return {
         "success": True,
         "experiment": data["name"],

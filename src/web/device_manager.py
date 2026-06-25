@@ -9,6 +9,7 @@ from devices.peristaltic_pump import (
     PeristalticPumpConfig,
     PumpChannelConfig,
 )
+from protocols.microwave_params import MODE_CONTROL_MASKS
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +67,7 @@ class DeviceManager:
         port: str,
         baudrate: int = 19200,
         slave_address: int = 1,
+        parity: str = "E",
         channels: Optional[list] = None,
         binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
@@ -107,7 +109,7 @@ class DeviceManager:
             connection_params={
                 "port": port,
                 "baudrate": baudrate,
-                "parity": "E",
+                "parity": parity,
                 "stopbits": 1,
                 "bytesize": 8,
             },
@@ -457,6 +459,9 @@ class DeviceManager:
         success = True
         for heater in self._heaters.values():
             try:
+                if not heater.is_connected():
+                    logger.warning(f"Emergency stop heater skipped, not connected: {heater.config.device_id}")
+                    continue
                 result = heater.emergency_stop()
                 if result is False:
                     success = False
@@ -466,6 +471,9 @@ class DeviceManager:
                 logger.error(f"Emergency stop heater failed: {e}")
         for pump in self._pumps.values():
             try:
+                if not pump.is_connected():
+                    logger.warning(f"Emergency stop pump skipped, not connected: {pump.config.device_id}")
+                    continue
                 result = pump.emergency_stop()
                 if result is False:
                     success = False
@@ -475,6 +483,11 @@ class DeviceManager:
                 logger.error(f"Emergency stop pump failed: {e}")
         for microwave in self._microwaves.values():
             try:
+                if not microwave.is_connected():
+                    logger.warning(
+                        f"Emergency stop microwave skipped, not connected: {microwave.config.device_id}"
+                    )
+                    continue
                 result = microwave.emergency_stop()
                 if result is False:
                     success = False
@@ -524,19 +537,21 @@ class DeviceManager:
     def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
         device_id = microwave.config.device_id
         power_percent = data.get("power_percent", 0)
+        current = data.get("current", 0)
+        current_mode_code = data.get("current_mode_code", 0)
         return self._binding_enriched_payload({
             "device_id": device_id,
-            "running": bool(power_percent),
-            "mode": "unknown",
+            "running": self._microwave_is_running(power_percent, current),
+            "mode": self._microwave_mode_from_code(current_mode_code),
             "current_segment": data.get("current_segment", 0),
             "material_temperature": data.get("material_temperature"),
             "temperature_source": data.get("material_temperature_source", "unknown"),
             "power_percent": power_percent,
-            "current": data.get("current", 0),
+            "current": current,
             "runtime_seconds": data.get("runtime_seconds", 0),
             "fault_code": data.get("fault_code", 0),
             "faults": [],
-            "current_mode_code": data.get("current_mode_code", 0),
+            "current_mode_code": current_mode_code,
             "allow_experiment_control": bool(
                 getattr(microwave.config, "allow_experiment_control", False)
             ),
@@ -547,6 +562,24 @@ class DeviceManager:
                 getattr(microwave.config, "enable_control_writes", False)
             ),
         }, self._microwave_bindings.get(device_id), microwave.config.connection_params.get("port"))
+
+    @staticmethod
+    def _microwave_is_running(power_percent, current) -> bool:
+        try:
+            return float(power_percent or 0) > 0 or float(current or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _microwave_mode_from_code(current_mode_code) -> str:
+        try:
+            code = int(current_mode_code or 0)
+        except (TypeError, ValueError):
+            return "unknown"
+        for mode, mask in MODE_CONTROL_MASKS.items():
+            if code == int(mask):
+                return mode.value
+        return "unknown"
 
     def get_heater(self, device_id: str) -> Optional[AIHeaterDevice]:
         """获取加热器设备实例
@@ -773,6 +806,8 @@ class DeviceManager:
 
         if not self._validate_pump_repeat_params(device_id, channel, repeat_count, interval_time):
             return False
+        if isinstance(repeat_count, float):
+            repeat_count = int(repeat_count)
 
         effective_time_unit = TimeUnit(time_unit) if time_unit is not None else TimeUnit.SECOND
         effective_volume_unit = VolumeUnit(volume_unit) if volume_unit is not None else VolumeUnit.ML

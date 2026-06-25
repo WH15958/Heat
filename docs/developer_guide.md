@@ -158,7 +158,7 @@ FastAPI 是异步的，但设备是同步的。
 - 驱动：`MicrowaveDevice` 是同步阻塞驱动，不创建后台线程、轮询、心跳或命令队列。
 - 协议：原始协议表使用 `40001` 风格保持寄存器地址；代码必须通过 `holding_address()` 转成 PDU 地址，例如 `40001 -> 0`、`40151 -> 150`。
 - 控制字：`40151` 对应 PDU 地址 `150`，bit15 为恒速率、bit14 为自动功率、bit13 为手动功率、bit12 为微波启动；当前 stop 实现写 `0`，真实语义仍需实机确认。
-- 状态：`DeviceManager.read_microwave_data()` 暴露 `connection_port`、`running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。
+- 状态：`DeviceManager.read_microwave_data()` 暴露 `connection_port`、`running`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。`running` 以功率或电流大于 0 为准；`mode` 只对仓库已确认的控制掩码做保守解码，无法识别时继续返回 `unknown` 并保留原始 `current_mode_code`。
 - 串口展示：`DeviceManager.get_all_status()`、加热器/泵读取结果和 WebSocket 实时 payload 会为 heater/pump/microwave 暴露 `connection_port`，用于前端确认当前连接的 COM 口；该字段只读展示，不改变设备控制语义。
 
 ## 串口稳定绑定
@@ -188,7 +188,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 后端在绑定未解析时会阻止 `connect_*`，避免把设备误连到不确定串口。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置类 API 请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
 - WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
-- 实验日志：`ExperimentLogger.record_sensor_data()` 会把实时 payload 中的微波仪 `material_temperature` 保存到 `sensor_data.microwaves[device_id].material_temperature`，供历史记录实验报告绘制微波反应温度曲线。
+- 实验日志：`ExperimentLogger.record_sensor_data()` 会把实时 payload 中的微波仪 `material_temperature`、`power_percent`、`current`、`runtime_seconds` 分别保存到 `sensor_data.microwaves[device_id]` 下，供历史记录实验报告绘制微波温度、功率和电流曲线。
 - 控制开放：按 2026-06-20 用户确认，`allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`，且不再作为手动 REST/前端或 YAML 自动控制的阻断门；字段保留在配置和 payload 中用于兼容旧状态展示。
 - 防错边界：普通配置批量写入仍拒绝覆盖控制字 `40151`；设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
 - 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。

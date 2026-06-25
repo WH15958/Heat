@@ -95,6 +95,7 @@ def create_device_manager() -> DeviceManager:
             port=binding_info["resolved_port"],
             baudrate=p_cfg.connection.baudrate,
             slave_address=p_cfg.slave_address,
+            parity=p_cfg.connection.parity,
             channels=channels,
             binding_info=binding_info,
         )

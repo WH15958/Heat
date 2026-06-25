@@ -53,7 +53,7 @@
             <div class="progress-header">
               <el-tag :type="stateTagType" size="large">{{ stateLabel }}</el-tag>
               <span class="progress-text">
-                步骤 {{ progress.current_step + 1 }} / {{ progress.total_steps }}
+                步骤 {{ progressStepText }}
                 <span v-if="progress.step_id"> · {{ progress.step_id }}</span>
               </span>
               <span class="elapsed">{{ formatElapsed(progress.elapsed) }}</span>
@@ -105,6 +105,15 @@
           <span>实验日志</span>
           <div>
             <el-tag v-if="currentRunId" type="info" size="small">Run: {{ currentRunId }}</el-tag>
+            <el-tag v-if="currentSampleId" type="success" size="small">Sample: {{ currentSampleId }}</el-tag>
+            <el-tag
+              v-for="item in metadataSummary"
+              :key="item.key"
+              type="warning"
+              size="small"
+            >
+              {{ item.label }}: {{ item.value }}
+            </el-tag>
             <el-button size="small" @click="clearLogs">清空</el-button>
             <el-button size="small" type="primary" @click="exportLogs" :disabled="logEntries.length === 0">
               导出日志
@@ -145,6 +154,7 @@ interface ExperimentSummary {
 interface ExperimentDetail {
   name: string
   description: string
+  metadata?: Record<string, any>
   steps: { id: string; type: string; params: any; wait_type: string; enabled: boolean }[]
 }
 
@@ -174,6 +184,8 @@ const resuming = ref(false)
 const stopping = ref(false)
 const saveLog = ref(true)
 const currentRunId = ref('')
+const currentSampleId = ref('')
+const currentMetadata = ref<Record<string, any>>({})
 const logEntries = ref<LogEntry[]>([])
 const stepStatusMap = ref<Record<number, string>>({})
 const logContainer = ref<HTMLElement | null>(null)
@@ -183,6 +195,19 @@ let wsClosed = false
 
 const isRunning = computed(() => progress.value?.state === 'running')
 const isPaused = computed(() => progress.value?.state === 'paused')
+const terminalStates = new Set(['completed', 'failed', 'stopped'])
+
+const metadataSummary = computed(() => {
+  const labels: Record<string, string> = {
+    batch_id: 'Batch',
+    condition_id: 'Condition',
+    material_system: 'Material',
+    operator: 'Operator',
+  }
+  return Object.keys(labels)
+    .map(key => ({ key, label: labels[key], value: currentMetadata.value?.[key] }))
+    .filter(item => item.value !== undefined && item.value !== null && item.value !== '')
+})
 
 const stateLabel = computed(() => {
   const map: Record<string, string> = {
@@ -201,8 +226,16 @@ const stateTagType = computed(() => {
 })
 
 const progressPercentage = computed(() => {
-  if (!progress.value || progress.value.total_steps === 0) return 0
-  return Math.round((progress.value.current_step / progress.value.total_steps) * 100)
+  if (!progress.value || progress.value.total_steps <= 0) return 0
+  const current = Math.max(0, Math.min(progress.value.current_step, progress.value.total_steps))
+  return Math.round((current / progress.value.total_steps) * 100)
+})
+
+const progressStepText = computed(() => {
+  if (!progress.value || progress.value.total_steps <= 0) return '0 / 0'
+  if (progress.value.state === 'idle') return `0 / ${progress.value.total_steps}`
+  const shownStep = Math.min(progress.value.current_step + 1, progress.value.total_steps)
+  return `${shownStep} / ${progress.value.total_steps}`
 })
 
 const progressStatus = computed(() => {
@@ -246,6 +279,34 @@ function addLog(level: string, label: string, message: string, detail?: string) 
   })
 }
 
+function normalizeProgress(data: any, fallback: ExperimentProgress | null = progress.value): ExperimentProgress {
+  const state = String(data?.state ?? fallback?.state ?? 'idle')
+  const totalRaw = Number(data?.total_steps ?? fallback?.total_steps ?? selectedExp.value?.steps?.length ?? 0)
+  const totalSteps = Number.isFinite(totalRaw) ? Math.max(0, totalRaw) : 0
+  const currentRaw = Number(data?.current_step ?? fallback?.current_step ?? 0)
+  let currentStep = Number.isFinite(currentRaw) ? Math.max(0, currentRaw) : 0
+  if (state === 'completed') {
+    currentStep = totalSteps
+  }
+  currentStep = Math.min(currentStep, totalSteps)
+  const elapsedRaw = Number(data?.elapsed ?? fallback?.elapsed ?? 0)
+
+  return {
+    state,
+    current_step: currentStep,
+    total_steps: totalSteps,
+    step_id: data?.step_id ?? fallback?.step_id ?? '',
+    elapsed: Number.isFinite(elapsedRaw) ? elapsedRaw : 0,
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
 function clearLogs() {
   logEntries.value = []
   stepStatusMap.value = {}
@@ -269,12 +330,17 @@ function exportLogs() {
 function handleWsMessage(event: MessageEvent) {
   try {
     const msg = JSON.parse(event.data)
-    if (msg.type === 'experiment_log' && msg.filename === selectedFilename.value) {
+    if (msg.type === 'experiment_progress' && msg.filename === selectedFilename.value) {
+      progress.value = normalizeProgress(msg)
+      if (terminalStates.has(progress.value.state)) stopPolling()
+    } else if (msg.type === 'experiment_log' && msg.filename === selectedFilename.value) {
       const evt = msg.event
       const data = msg.data
 
       if (evt === 'run_started') {
         currentRunId.value = data.run_id
+        currentMetadata.value = data.metadata || currentMetadata.value
+        currentSampleId.value = data.metadata?.sample_id || currentSampleId.value
         stepStatusMap.value = {}
         addLog('success', '实验启动', `${data.experiment_name} (${data.run_id})`, `共 ${data.total_steps} 个步骤`)
       } else if (evt === 'step_started') {
@@ -299,6 +365,15 @@ function handleWsMessage(event: MessageEvent) {
         const dur = data.total_duration ? ` 总耗时 ${data.total_duration.toFixed(1)}s` : ''
         addLog(level, label, `${data.experiment_name}${dur}`,
           `完成: ${data.completed_steps} 失败: ${data.failed_steps}`)
+        const totalSteps = progress.value?.total_steps ?? selectedExp.value?.steps.length ?? 0
+        progress.value = normalizeProgress({
+          state: data.status,
+          current_step: data.status === 'completed' ? totalSteps : progress.value?.current_step,
+          total_steps: totalSteps,
+          elapsed: data.total_duration ?? progress.value?.elapsed,
+          step_id: '',
+        })
+        stopPolling()
       }
     }
   } catch {
@@ -341,6 +416,10 @@ async function loadExperiments() {
 
 async function selectExperiment(filename: string) {
   selectedFilename.value = filename
+  progress.value = null
+  currentRunId.value = ''
+  currentSampleId.value = ''
+  currentMetadata.value = {}
   try {
     const res = await axios.get(`/api/experiments/${filename}`)
     selectedExp.value = res.data
@@ -365,7 +444,10 @@ async function startExperiment() {
       save_log: saveLog.value,
     })
     currentRunId.value = res.data.run_id || ''
-    ElMessage.success('实验已启动')
+    currentSampleId.value = res.data.sample_id || ''
+    currentMetadata.value = res.data.metadata || {}
+    ElMessage.success(currentSampleId.value ? `实验已启动，Sample: ${currentSampleId.value}` : '实验已启动')
+    await pollProgress()
     startPolling()
   } catch (e: any) {
     const detail = e.response?.data?.detail
@@ -422,14 +504,19 @@ async function pollProgress() {
   if (!selectedFilename.value) return
   try {
     const res = await axios.get(`/api/experiments/${selectedFilename.value}/progress`)
-    progress.value = res.data
+    const nextProgress = normalizeProgress(res.data)
+    if (nextProgress.state === 'idle' && progress.value && terminalStates.has(progress.value.state)) {
+      return
+    }
+    progress.value = nextProgress
+    if (terminalStates.has(progress.value.state)) stopPolling()
   } catch (e) {
     // ignore
   }
 }
 
 function startPolling() {
-  if (pollTimer) clearInterval(pollTimer)
+  stopPolling()
   pollTimer = setInterval(pollProgress, 1000)
 }
 
@@ -441,7 +528,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   wsClosed = true
-  if (pollTimer) clearInterval(pollTimer)
+  stopPolling()
   if (ws) ws.close()
 })
 </script>

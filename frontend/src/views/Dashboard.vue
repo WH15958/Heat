@@ -103,7 +103,7 @@
             </div>
             <div class="metric-block">
               <span class="metric-label">当前模式</span>
-              <span class="metric-value">{{ microwaveModeLabel(microwave.mode) }}</span>
+              <span class="metric-value">{{ microwaveModeLabel(microwave.mode, microwave.current_mode_code) }}</span>
             </div>
           </div>
           <div class="alarms">
@@ -271,14 +271,18 @@ function flowUnitLabel(unit: string | undefined): string {
   return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
 }
 
-function microwaveModeLabel(mode: string | undefined): string {
+function microwaveModeLabel(mode: string | undefined, currentModeCode?: number): string {
   const labels: Record<string, string> = {
     manual_power: '手动功率',
     auto_power: '自动功率',
     constant_rate: '恒速率',
     unknown: '未知',
   }
-  return labels[mode || 'unknown'] || mode || '--'
+  const label = labels[mode || 'unknown'] || mode || '--'
+  if ((!mode || mode === 'unknown') && currentModeCode !== undefined && currentModeCode !== null) {
+    return label + ' (' + currentModeCode + ')'
+  }
+  return label
 }
 
 function formatNumber(value: number | null | undefined, digits: number, unit: string): string {

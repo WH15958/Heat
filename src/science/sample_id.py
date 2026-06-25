@@ -37,7 +37,7 @@ def generate_unique_sample_id(metadata: dict) -> str:
     explicit_sample_id = (metadata.get("sample_id") or "").strip()
 
     if explicit_sample_id:
-        existing = existing_sample_ids()
+        existing = existing_sample_ids(strict=True)
         if explicit_sample_id not in existing:
             return explicit_sample_id
 
@@ -48,7 +48,7 @@ def generate_unique_sample_id(metadata: dict) -> str:
         batch_id = metadata.get("batch_id", "")
         sample_index = _normalize_sample_index(metadata.get("sample_index", 1))
         base_batch = batch_id if batch_id else ""
-        existing = existing_sample_ids()
+        existing = existing_sample_ids(strict=True)
         while True:
             sample_index += 1
             candidate = generate_sample_id(batch_id=base_batch, sample_index=sample_index)
@@ -58,7 +58,7 @@ def generate_unique_sample_id(metadata: dict) -> str:
     batch_id = metadata.get("batch_id", "")
     sample_index = _normalize_sample_index(metadata.get("sample_index", 1))
 
-    existing = existing_sample_ids()
+    existing = existing_sample_ids(strict=True)
     candidate = generate_sample_id(batch_id=batch_id, sample_index=sample_index)
     while candidate in existing:
         sample_index += 1

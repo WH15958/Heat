@@ -9,7 +9,7 @@ from enum import Enum
 
 from src.utils.logger import get_logger
 from src.science.sample_id import generate_unique_sample_id
-from src.science.sample_record import write_sample_record
+from src.science.sample_record import remove_sample_records_for_run_ids, write_sample_record
 
 logger = get_logger(__name__)
 
@@ -135,15 +135,23 @@ class ExperimentLogger:
         for mid, mdata in (realtime_payload.get("microwaves") or {}).items():
             if mdata.get("error"):
                 continue
-            material_temperature = mdata.get("material_temperature")
-            if material_temperature is None:
-                continue
             if mid not in self._active_run.sensor_data["microwaves"]:
-                self._active_run.sensor_data["microwaves"][mid] = {"material_temperature": []}
-            self._active_run.sensor_data["microwaves"][mid]["material_temperature"].append(
-                {"t": point["t"], "v": material_temperature}
-            )
-            microwaves_recorded += 1
+                self._active_run.sensor_data["microwaves"][mid] = {
+                    "material_temperature": [],
+                    "power_percent": [],
+                    "current": [],
+                    "runtime_seconds": [],
+                }
+            microwave_series = self._active_run.sensor_data["microwaves"][mid]
+            recorded = False
+            for key in ("material_temperature", "power_percent", "current", "runtime_seconds"):
+                value = mdata.get(key)
+                if value is None:
+                    continue
+                microwave_series.setdefault(key, []).append({"t": point["t"], "v": value})
+                recorded = True
+            if recorded:
+                microwaves_recorded += 1
         if heaters_recorded > 0 or pumps_recorded > 0 or microwaves_recorded > 0:
             logger.info(
                 f"[{self._active_run.run_id}] Sensor recorded: "
@@ -326,6 +334,7 @@ def delete_experiment_run(run_id: str) -> bool:
             try:
                 filepath.unlink(missing_ok=True)
                 logger.info(f"Experiment log deleted: {filepath}")
+                remove_sample_records_for_run_ids([run_id])
                 return True
             except Exception as e:
                 logger.error(f"Failed to delete experiment log: {e}")
@@ -337,11 +346,23 @@ def delete_all_experiment_runs() -> int:
     if not LOGS_DIR.exists():
         return 0
     count = 0
+    deleted_run_ids = []
     for filepath in LOGS_DIR.glob("*.json"):
         try:
+            run_id = _run_id_from_log_path(filepath)
             filepath.unlink(missing_ok=True)
             count += 1
+            if run_id:
+                deleted_run_ids.append(run_id)
         except Exception as e:
             logger.error(f"Failed to delete experiment log {filepath}: {e}")
+    remove_sample_records_for_run_ids(deleted_run_ids)
     logger.info(f"Deleted {count} experiment logs")
     return count
+
+
+def _run_id_from_log_path(filepath: Path) -> str:
+    parts = filepath.stem.split("_", 3)
+    if len(parts) >= 3:
+        return "_".join(parts[:3])
+    return filepath.stem

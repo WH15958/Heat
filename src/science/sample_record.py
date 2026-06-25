@@ -2,7 +2,7 @@ import csv
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from src.utils.logger import get_logger
 
@@ -53,7 +53,7 @@ def _existing_run_ids() -> set:
     return ids
 
 
-def existing_sample_ids() -> set:
+def existing_sample_ids(*, strict: bool = False) -> set:
     if not SAMPLES_CSV.exists():
         return set()
     ids = set()
@@ -64,9 +64,42 @@ def existing_sample_ids() -> set:
                 sid = row.get("sample_id", "").strip()
                 if sid:
                     ids.add(sid)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to read existing sample ids from {SAMPLES_CSV}: {e}")
+        if strict:
+            raise
     return ids
+
+
+def remove_sample_records_for_run_ids(run_ids: Iterable[str]) -> int:
+    run_ids = {str(run_id).strip() for run_id in run_ids if str(run_id).strip()}
+    if not run_ids or not SAMPLES_CSV.exists():
+        return 0
+
+    try:
+        with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or SAMPLE_HEADERS
+            kept_rows = []
+            removed = 0
+            for row in reader:
+                if row.get("run_id", "").strip() in run_ids:
+                    removed += 1
+                else:
+                    kept_rows.append(row)
+
+        with open(SAMPLES_CSV, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in kept_rows:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+        if removed:
+            logger.info(f"Removed {removed} sample records for deleted runs")
+        return removed
+    except Exception as e:
+        logger.error(f"Failed to remove sample records from {SAMPLES_CSV}: {e}")
+        return 0
 
 
 def write_sample_record(
