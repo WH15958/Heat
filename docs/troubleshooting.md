@@ -78,6 +78,8 @@ python scripts/cleanup_locks.py --force
   - 指纹匹配失败，但系统按配置里的固定 `port` 回退运行
   - 这说明当前绑定规则不够稳定，建议尽快补齐更强的设备指纹
 
+如果后端启动时设备尚未被 Windows 枚举，页面可能先显示“未匹配”；设备就位后可刷新控制页，前端会触发 `/api/devices/refresh_bindings` 重新解析，不需要仅靠重启后端恢复。
+
 ### 软件侧定位
 
 - Web 层：`src/web/api/devices.py`

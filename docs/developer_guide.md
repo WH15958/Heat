@@ -186,6 +186,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - `binding_candidates`
 
 后端在绑定未解析时会阻止 `connect_*`，避免把设备误连到不确定串口。
+- 绑定刷新：`POST /api/devices/refresh_bindings` 会重新运行串口解析并更新已注册设备实例的最终端口；控制页发现“未匹配”时会自动调用一次，用于处理设备晚于后端启动才被 Windows 枚举出来的情况。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置类 API 请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
 - WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
 - 实验日志：`ExperimentLogger.record_sensor_data()` 会把实时 payload 中的微波仪 `material_temperature`、`power_percent`、`current`、`runtime_seconds` 分别保存到 `sensor_data.microwaves[device_id]` 下，供历史记录实验报告绘制微波温度、功率和电流曲线。

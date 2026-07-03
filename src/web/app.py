@@ -24,6 +24,7 @@ def _resolve_registered_port(device_id: str, connection) -> dict:
     resolution = resolve_connection(connection)
     binding_info = {
         "device_id": device_id,
+        "_connection_config": connection,
         "resolved_port": resolution.resolved_port,
         "connection_binding_mode": resolution.connection_binding_mode,
         "binding_label": resolution.binding_label,

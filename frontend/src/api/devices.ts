@@ -79,6 +79,7 @@ const MICROWAVE_CONFIG_PATH: Record<MicrowaveMode, string> = {
 
 export const devicesApi = {
   list: () => api.get('/devices'),
+  refreshBindings: () => api.post('/devices/refresh_bindings'),
 
   connectHeater: (id: string) => api.post(`/heater/${id}/connect`),
   disconnectHeater: (id: string) => api.post(`/heater/${id}/disconnect`),

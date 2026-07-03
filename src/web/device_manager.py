@@ -11,6 +11,7 @@ from devices.peristaltic_pump import (
 )
 from protocols.microwave_params import MODE_CONTROL_MASKS
 from utils.logger import get_logger
+from utils.serial_binding import resolve_connection
 
 logger = get_logger(__name__)
 
@@ -198,6 +199,71 @@ class DeviceManager:
             "binding_candidates": list(normalized.get("binding_candidates", [])),
         }
 
+    def _update_binding_resolution(
+        self,
+        device_id: str,
+        device_type: str,
+        info: Optional[Dict[str, Any]],
+        device,
+    ) -> Dict[str, Any]:
+        binding = info if info is not None else self._normalize_binding_info(None, "")
+        connection = binding.get("_connection_config")
+        if connection is None:
+            return self._normalize_binding_info(binding, self._binding_port(binding))
+
+        resolution = resolve_connection(connection)
+        binding.update({
+            "resolved_port": resolution.resolved_port,
+            "connection_binding_mode": resolution.connection_binding_mode,
+            "binding_label": resolution.binding_label,
+            "binding_resolved": resolution.binding_resolved,
+            "binding_match_count": resolution.binding_match_count,
+            "binding_error": resolution.binding_error,
+            "binding_candidates": resolution.binding_candidates,
+        })
+        if resolution.binding_resolved and resolution.resolved_port:
+            device.config.connection_params["port"] = resolution.resolved_port
+            logger.info(
+                "%s %s binding refreshed: %s",
+                device_type,
+                device_id,
+                resolution.resolved_port,
+            )
+        elif not resolution.binding_resolved:
+            logger.warning(
+                "%s %s binding still unresolved: %s",
+                device_type,
+                device_id,
+                resolution.binding_error,
+            )
+        return binding
+
+    def _refresh_binding_if_needed(
+        self,
+        device_id: str,
+        device_type: str,
+        info: Optional[Dict[str, Any]],
+        device,
+    ) -> Dict[str, Any]:
+        binding = self._normalize_binding_info(info, self._binding_port(info))
+        if binding.get("binding_resolved"):
+            return binding
+        return self._update_binding_resolution(device_id, device_type, info, device)
+
+    def refresh_bindings(self) -> dict:
+        for did, heater in self._heaters.items():
+            self._update_binding_resolution(did, "Heater", self._heater_bindings.get(did), heater)
+        for did, pump in self._pumps.items():
+            self._update_binding_resolution(did, "Pump", self._pump_bindings.get(did), pump)
+        for did, microwave in self._microwaves.items():
+            self._update_binding_resolution(
+                did,
+                "Microwave",
+                self._microwave_bindings.get(did),
+                microwave,
+            )
+        return self.get_all_status()
+
     def _require_binding_resolved(self, device_id: str, device_type: str, info: Optional[Dict[str, Any]]):
         binding = self._normalize_binding_info(info, self._binding_port(info))
         if binding.get("binding_resolved"):
@@ -230,6 +296,7 @@ class DeviceManager:
         heater = self._heaters.get(device_id)
         if heater is None:
             raise ValueError(f"Heater not found: {device_id}")
+        self._refresh_binding_if_needed(device_id, "Heater", self._heater_bindings.get(device_id), heater)
         self._require_binding_resolved(device_id, "Heater", self._heater_bindings.get(device_id))
         return heater.connect()
 
@@ -265,6 +332,7 @@ class DeviceManager:
         pump = self._pumps.get(device_id)
         if pump is None:
             raise ValueError(f"Pump not found: {device_id}")
+        self._refresh_binding_if_needed(device_id, "Pump", self._pump_bindings.get(device_id), pump)
         self._require_binding_resolved(device_id, "Pump", self._pump_bindings.get(device_id))
         return pump.connect()
 
@@ -290,6 +358,12 @@ class DeviceManager:
         microwave = self._microwaves.get(device_id)
         if microwave is None:
             raise ValueError(f"Microwave not found: {device_id}")
+        self._refresh_binding_if_needed(
+            device_id,
+            "Microwave",
+            self._microwave_bindings.get(device_id),
+            microwave,
+        )
         self._require_binding_resolved(
             device_id,
             "Microwave",

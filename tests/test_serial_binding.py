@@ -220,6 +220,45 @@ def test_device_manager_binding_status_handles_none():
     assert status["binding_candidates"] == []
 
 
+def test_device_manager_refreshes_unresolved_binding_port():
+    dm = DeviceManager()
+    conn = _make_connection(
+        port="COM7",
+        binding=SerialBindingConfig(mode="fingerprint", vid=0x1A86, pid=0x7523, location="1-3.3"),
+    )
+    dm.add_heater(
+        device_id="heater1",
+        port="",
+        baudrate=9600,
+        address=1,
+        decimal_places=1,
+        binding_info={
+            "_connection_config": conn,
+            "resolved_port": "",
+            "connection_binding_mode": "fingerprint",
+            "binding_label": "VID:PID=1A86:7523 @ 1-3.3",
+            "binding_resolved": False,
+            "binding_match_count": 0,
+            "binding_error": "no_match",
+            "binding_candidates": [],
+        },
+    )
+    with patch("src.web.device_manager.resolve_connection", return_value=SerialBindingResolution(
+        resolved_port="COM7",
+        connection_binding_mode="fingerprint",
+        binding_label="VID:PID=1A86:7523 @ 1-3.3",
+        binding_resolved=True,
+        binding_match_count=1,
+        binding_error=None,
+        binding_candidates=["COM7 VID:PID=1A86:7523 LOC=1-3.3"],
+    )):
+        status = dm.refresh_bindings()["heaters"]["heater1"]
+
+    assert status["binding_resolved"] is True
+    assert status["connection_port"] == "COM7"
+    assert dm.get_heater("heater1").config.connection_params["port"] == "COM7"
+
+
 def run_all():
     tests = [
         test_old_config_defaults_to_fixed_port,
@@ -237,6 +276,7 @@ def run_all():
         test_resolve_without_fallback_stays_unresolved,
         test_device_manager_exposes_binding_fields_and_blocks_unresolved_connect,
         test_device_manager_binding_status_handles_none,
+        test_device_manager_refreshes_unresolved_binding_port,
     ]
     passed = 0
     failed = 0

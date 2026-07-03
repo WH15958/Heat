@@ -127,6 +127,17 @@ async def list_devices(request: Request):
     return dm.get_all_status()
 
 
+@router.post("/devices/refresh_bindings")
+async def refresh_device_bindings(request: Request):
+    """重新扫描本机串口并刷新设备绑定解析结果。"""
+    dm = get_dm(request)
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, dm.refresh_bindings)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/heater/{device_id}/connect")
 async def connect_heater(device_id: str, request: Request):
     """连接加热器

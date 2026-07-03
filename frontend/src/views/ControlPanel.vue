@@ -275,63 +275,78 @@ function restoreParams() {
 
 watch(devices, saveParams, { deep: true })
 
-async function refreshDevices() {
+function hasUnresolvedBinding(data: any): boolean {
+  const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}]
+  return groups.some(group =>
+    Object.values(group).some((info: any) => info?.binding_resolved === false),
+  )
+}
+
+function applyDeviceData(data: any) {
+  for (const [id, info] of Object.entries(data.heaters || {})) {
+    if (!devices.heaters[id]) {
+      devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }
+    }
+    devices.heaters[id].connected = (info as any).connected
+    devices.heaters[id].connectionPort = (info as any).connection_port
+    devices.heaters[id].bindingMode = (info as any).connection_binding_mode
+    devices.heaters[id].bindingLabel = (info as any).binding_label
+    devices.heaters[id].bindingResolved = (info as any).binding_resolved !== false
+    devices.heaters[id].bindingError = (info as any).binding_error ?? null
+  }
+  for (const [id, info] of Object.entries(data.pumps || {})) {
+    if (!devices.pumps[id]) {
+      devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels(), bindingResolved: true }
+    }
+    devices.pumps[id].connected = (info as any).connected
+    devices.pumps[id].connectionPort = (info as any).connection_port
+    devices.pumps[id].bindingMode = (info as any).connection_binding_mode
+    devices.pumps[id].bindingLabel = (info as any).binding_label
+    devices.pumps[id].bindingResolved = (info as any).binding_resolved !== false
+    devices.pumps[id].bindingError = (info as any).binding_error ?? null
+  }
+  for (const [id, info] of Object.entries(data.microwaves || {})) {
+    if (!devices.microwaves[id]) {
+      devices.microwaves[id] = {
+        connected: false,
+        loading: false,
+        refreshing: false,
+        configuring: false,
+        starting: false,
+        stopping: false,
+        mode: 'manual_power',
+        selectedSegment: 1,
+        connectionPort: undefined,
+        bindingMode: undefined,
+        bindingLabel: undefined,
+        bindingResolved: true,
+        bindingError: null,
+        allowExperimentControl: false,
+        allowRealHardwareWrites: false,
+        enableControlWrites: false,
+        segments: createMicrowaveSegments(),
+      }
+    }
+    devices.microwaves[id].connected = (info as any).connected
+    devices.microwaves[id].connectionPort = (info as any).connection_port
+    devices.microwaves[id].bindingMode = (info as any).connection_binding_mode
+    devices.microwaves[id].bindingLabel = (info as any).binding_label
+    devices.microwaves[id].bindingResolved = (info as any).binding_resolved !== false
+    devices.microwaves[id].bindingError = (info as any).binding_error ?? null
+    devices.microwaves[id].allowExperimentControl = Boolean((info as any).allow_experiment_control)
+    devices.microwaves[id].allowRealHardwareWrites = Boolean((info as any).allow_real_hardware_writes)
+    devices.microwaves[id].enableControlWrites = Boolean((info as any).enable_control_writes)
+  }
+}
+
+async function refreshDevices(refreshUnresolvedBindings = true) {
   try {
     const res = await devicesApi.list()
     const data = res.data
-    for (const [id, info] of Object.entries(data.heaters || {})) {
-      if (!devices.heaters[id]) {
-        devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }
-      }
-      devices.heaters[id].connected = (info as any).connected
-      devices.heaters[id].connectionPort = (info as any).connection_port
-      devices.heaters[id].bindingMode = (info as any).connection_binding_mode
-      devices.heaters[id].bindingLabel = (info as any).binding_label
-      devices.heaters[id].bindingResolved = (info as any).binding_resolved !== false
-      devices.heaters[id].bindingError = (info as any).binding_error ?? null
-    }
-    for (const [id, info] of Object.entries(data.pumps || {})) {
-      if (!devices.pumps[id]) {
-        devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels(), bindingResolved: true }
-      }
-      devices.pumps[id].connected = (info as any).connected
-      devices.pumps[id].connectionPort = (info as any).connection_port
-      devices.pumps[id].bindingMode = (info as any).connection_binding_mode
-      devices.pumps[id].bindingLabel = (info as any).binding_label
-      devices.pumps[id].bindingResolved = (info as any).binding_resolved !== false
-      devices.pumps[id].bindingError = (info as any).binding_error ?? null
-    }
-    for (const [id, info] of Object.entries(data.microwaves || {})) {
-      if (!devices.microwaves[id]) {
-        devices.microwaves[id] = {
-          connected: false,
-          loading: false,
-          refreshing: false,
-          configuring: false,
-          starting: false,
-          stopping: false,
-          mode: 'manual_power',
-          selectedSegment: 1,
-          connectionPort: undefined,
-          bindingMode: undefined,
-          bindingLabel: undefined,
-          bindingResolved: true,
-          bindingError: null,
-          allowExperimentControl: false,
-          allowRealHardwareWrites: false,
-          enableControlWrites: false,
-          segments: createMicrowaveSegments(),
-        }
-      }
-      devices.microwaves[id].connected = (info as any).connected
-      devices.microwaves[id].connectionPort = (info as any).connection_port
-      devices.microwaves[id].bindingMode = (info as any).connection_binding_mode
-      devices.microwaves[id].bindingLabel = (info as any).binding_label
-      devices.microwaves[id].bindingResolved = (info as any).binding_resolved !== false
-      devices.microwaves[id].bindingError = (info as any).binding_error ?? null
-      devices.microwaves[id].allowExperimentControl = Boolean((info as any).allow_experiment_control)
-      devices.microwaves[id].allowRealHardwareWrites = Boolean((info as any).allow_real_hardware_writes)
-      devices.microwaves[id].enableControlWrites = Boolean((info as any).enable_control_writes)
+    applyDeviceData(data)
+    if (refreshUnresolvedBindings && hasUnresolvedBinding(data)) {
+      const refreshed = await devicesApi.refreshBindings()
+      applyDeviceData(refreshed.data)
     }
   } catch (e) {
     console.error('Failed to refresh devices:', e)
