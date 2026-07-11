@@ -63,7 +63,7 @@ class ExperimentStep:
         params: 动作参数
         wait: 等待条件
         enabled: 是否启用
-        on_error: 错误处理策略 (stop/skip/continue)
+        on_error: 错误处理策略 (stop/skip)
     """
     id: str
     type: ActionType

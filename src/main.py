@@ -12,13 +12,13 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging
 
-from devices import AIHeaterDevice, HeaterConfig, DeviceStatus
-from devices.base_device import DeviceConfig, DeviceInfo, DeviceType
-from devices.peristaltic_pump import LabSmartPumpDevice, PeristalticPumpConfig, PumpChannelConfig
-from protocols import AIBUSProtocol, ParameterCode
-from protocols.pump_params import PumpRunMode, PumpDirection
-from reports import ReportGenerator
-from utils import ConfigManager, setup_logging, get_logger, CSVDataLogger, SimpleDataPoint, data_points_to_simple
+from src.devices import AIHeaterDevice, HeaterConfig, DeviceStatus
+from src.devices.base_device import DeviceConfig, DeviceInfo, DeviceType
+from src.devices.peristaltic_pump import LabSmartPumpDevice, PeristalticPumpConfig, PumpChannelConfig
+from src.protocols import AIBUSProtocol, ParameterCode
+from src.protocols.pump_params import PumpRunMode, PumpDirection
+from src.reports import ReportGenerator
+from src.utils import ConfigManager, setup_logging, get_logger, CSVDataLogger, SimpleDataPoint, data_points_to_simple
 
 
 class AutomationController:
@@ -220,7 +220,9 @@ class AutomationController:
             return False
         
         try:
-            heater.connect()
+            if not heater.connect():
+                self._logger.error(f"Device connect returned false: {device_id}")
+                return False
             self._logger.info(f"Device connected: {device_id}")
             return True
         except Exception as e:
@@ -230,10 +232,15 @@ class AutomationController:
     def disconnect_device(self, device_id: str) -> bool:
         """断开设备连接"""
         heater = self._heaters.get(device_id)
-        if heater:
-            heater.disconnect()
+        if heater is None:
+            self._logger.error(f"Device not found: {device_id}")
+            return False
+        result = heater.disconnect()
+        if result:
             self._logger.info(f"Device disconnected: {device_id}")
-        return True
+        else:
+            self._logger.error(f"Device disconnect returned false: {device_id}")
+        return bool(result)
     
     def start_recording(self):
         """开始数据记录"""
@@ -268,8 +275,10 @@ class AutomationController:
                 return False
         
         try:
-            heater.set_temperature(temperature)
-            heater.start()
+            if not heater.set_temperature(temperature):
+                return False
+            if not heater.start():
+                return False
             self._logger.info(f"Heater {device_id} started at {temperature}°C")
             return True
         except Exception as e:
@@ -279,33 +288,51 @@ class AutomationController:
     def stop_heater(self, device_id: str) -> bool:
         """停止加热器"""
         heater = self._heaters.get(device_id)
-        if heater:
-            heater.stop()
+        if heater is None:
+            self._logger.error(f"Heater not found: {device_id}")
+            return False
+        result = heater.stop()
+        if result:
             self._logger.info(f"Heater {device_id} stopped")
-        return True
+        else:
+            self._logger.error(f"Heater stop returned false: {device_id}")
+        return bool(result)
     
-    def emergency_stop(self, device_id: str = None):
+    def emergency_stop(self, device_id: str = None) -> bool:
         """
         紧急停止
         
         Args:
             device_id: 设备ID，如果为None则停止所有设备
         """
+        success = True
+        matched = False
         if device_id:
             heater = self._heaters.get(device_id)
             if heater:
-                heater.emergency_stop()
+                matched = True
+                success = bool(heater.emergency_stop()) and success
             pump = self._pumps.get(device_id)
             if pump:
-                pump.stop_all()
+                matched = True
+                success = bool(pump.stop_all()) and success
+            if not matched:
+                success = False
+                self._logger.error(f"Emergency stop device not found: {device_id}")
         else:
             for heater in self._heaters.values():
-                heater.emergency_stop()
+                matched = True
+                success = bool(heater.emergency_stop()) and success
             for pump in self._pumps.values():
-                pump.stop_all()
+                matched = True
+                success = bool(pump.stop_all()) and success
         
         self.stop_recording()
-        self._logger.warning("Emergency stop executed")
+        if success and matched:
+            self._logger.warning("Emergency stop executed")
+        else:
+            self._logger.error("Emergency stop was not confirmed for all requested devices")
+        return success and matched
     
     def connect_pump(self, device_id: str) -> bool:
         """
@@ -323,7 +350,9 @@ class AutomationController:
             return False
         
         try:
-            pump.connect()
+            if not pump.connect():
+                self._logger.error(f"Pump connect returned false: {device_id}")
+                return False
             self._logger.info(f"Pump connected: {device_id}")
             return True
         except Exception as e:
@@ -333,10 +362,15 @@ class AutomationController:
     def disconnect_pump(self, device_id: str) -> bool:
         """断开蠕动泵连接"""
         pump = self._pumps.get(device_id)
-        if pump:
-            pump.disconnect()
+        if pump is None:
+            self._logger.error(f"Pump not found: {device_id}")
+            return False
+        result = pump.disconnect()
+        if result:
             self._logger.info(f"Pump disconnected: {device_id}")
-        return True
+        else:
+            self._logger.error(f"Pump disconnect returned false: {device_id}")
+        return bool(result)
     
     def start_pump(self, device_id: str, channel: int, flow_rate: float,
                    direction: PumpDirection = PumpDirection.CLOCKWISE) -> bool:
@@ -362,10 +396,14 @@ class AutomationController:
                 return False
         
         try:
-            pump.set_direction(channel, direction)
-            pump.set_run_mode(channel, PumpRunMode.FLOW_MODE)
-            pump.set_flow_rate(channel, flow_rate)
-            pump.start_channel(channel)
+            if not pump.set_direction(channel, direction):
+                return False
+            if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                return False
+            if not pump.set_flow_rate(channel, flow_rate):
+                return False
+            if not pump.start_channel(channel):
+                return False
             self._logger.info(f"Pump {device_id} ch{channel} started at {flow_rate} mL/min")
             return True
         except Exception as e:
@@ -390,9 +428,12 @@ class AutomationController:
         
         try:
             if channel is not None:
-                pump.stop_channel(channel)
+                result = pump.stop_channel(channel)
             else:
-                pump.stop_all()
+                result = pump.stop_all()
+            if not result:
+                self._logger.error(f"Pump {device_id} stop returned false")
+                return False
             self._logger.info(f"Pump {device_id} stopped")
             return True
         except Exception as e:
@@ -548,7 +589,9 @@ class AutomationController:
         self._logger.info(f"Holding temperature for {duration_minutes} minutes...")
         time.sleep(duration_minutes * 60)
         
-        self.stop_heater(device_id)
+        if not self.stop_heater(device_id):
+            self._logger.error("Experiment finished, but heater stop was not confirmed")
+            return False
         self._logger.info("Experiment completed")
         
         return True

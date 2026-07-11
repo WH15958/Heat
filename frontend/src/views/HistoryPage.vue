@@ -22,9 +22,10 @@
         <el-table-column type="selection" width="48" />
         <el-table-column prop="run_id" label="Run ID" width="220" />
         <el-table-column prop="experiment_name" label="实验名称" width="200" />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="180">
           <template #default="{ row }">
             <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag v-if="row.persistence_status === 'error'" type="danger" size="small" style="margin-left: 4px">记录失败</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="started_at" label="开始时间" width="180">
@@ -62,6 +63,14 @@
           <el-descriptions-item label="Run ID">{{ detailData.run_id }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTagType(detailData.status)" size="small">{{ statusLabel(detailData.status) }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="追踪记录">
+            <el-tag :type="detailData.persistence_status === 'error' ? 'danger' : detailData.persistence_status === 'ok' ? 'success' : 'info'" size="small">
+              {{ detailData.persistence_status === 'error' ? '失败' : detailData.persistence_status === 'ok' ? '正常' : '旧记录未标注' }}
+            </el-tag>
+            <span v-if="detailData.persistence_errors?.length" style="color: #f56c6c; margin-left: 8px">
+              {{ detailData.persistence_errors.join('; ') }}
+            </span>
           </el-descriptions-item>
           <el-descriptions-item label="总耗时">{{ detailData.total_duration?.toFixed(1) }}s</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(detailData.started_at) }}</el-descriptions-item>
@@ -178,6 +187,10 @@ interface RunData {
   total_steps: number
   completed_steps: number
   failed_steps: number
+  persistence_status?: string
+  log_saved?: boolean | null
+  sample_record_saved?: boolean | null
+  persistence_errors?: string[]
   steps: any[]
   log_file: string
   sensor_data?: SensorData

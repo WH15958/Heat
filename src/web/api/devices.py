@@ -4,9 +4,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
-from devices.microwave import MicrowaveSegment
-from protocols.microwave_params import MicrowaveMode
-from protocols.pump_params import PumpDirection, PumpRunMode
+from src.devices.microwave import MicrowaveSegment
+from src.protocols.microwave_params import MicrowaveMode
+from src.protocols.pump_params import PumpDirection, PumpRunMode
 
 router = APIRouter(tags=["devices"])
 

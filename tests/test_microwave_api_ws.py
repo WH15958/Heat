@@ -228,6 +228,8 @@ def test_websocket_payload_includes_heater_and_pump_ports():
     dm.get_all_heaters.return_value = {"heater1": heater}
     dm.get_all_pumps.return_value = {"pump1": pump}
     dm.get_all_microwaves.return_value = {}
+    dm.get_heater_binding.return_value = {}
+    dm.get_pump_binding.return_value = {}
     dm.read_pump_status.return_value = {
         "device_id": "pump1",
         "connection_port": "COM10",
@@ -247,6 +249,7 @@ def test_websocket_microwave_read_failure_is_error_payload():
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}
+    dm.get_microwave_binding.return_value = {}
     dm.read_microwave_data.side_effect = TimeoutError("simulated timeout")
 
     payload = run(build_realtime_payload(dm))

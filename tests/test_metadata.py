@@ -1100,7 +1100,7 @@ def test_existing_sample_ids_logs_warning_on_error():
 
 
 def test_finish_run_does_not_crash_on_csv_write_failure():
-    print("\n=== 测试25: samples.csv 写入失败不影响实验结束流程 ===")
+    print("\n=== 测试25: samples.csv 写入失败会标记追踪失败 ===")
 
     from src.experiment.experiment_logger import ExperimentLogger
 
@@ -1129,9 +1129,14 @@ def test_finish_run_does_not_crash_on_csv_write_failure():
 
     el_mod.write_sample_record = mock_write
     try:
-        exp_logger.finish_run("completed")
+        persistence_ok = exp_logger.finish_run("completed")
         assert was_called["count"] == 1
-        print("[OK] samples.csv 写入失败时 finish_run 仍正常结束，不抛异常")
+        assert persistence_ok is False
+        assert exp_logger.active_run.status == "completed"
+        assert exp_logger.active_run.persistence_status == "error"
+        assert exp_logger.active_run.sample_record_saved is False
+        assert exp_logger.active_run.persistence_errors
+        print("[OK] 执行状态保持 completed，同时明确标记追踪记录失败")
     finally:
         el_mod.write_sample_record = original_write
 

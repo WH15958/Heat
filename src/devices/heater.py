@@ -16,12 +16,12 @@ import logging
 import threading
 import time
 
-from devices.base_device import (
+from src.devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
     DeviceStatus, DeviceType
 )
-from protocols.aibus import AIBUSProtocol, AIBUSResponse
-from protocols.parameters import (
+from src.protocols.aibus import AIBUSProtocol, AIBUSResponse
+from src.protocols.parameters import (
     ParameterCode, ControlMode, RunStatus, 
     AutoTuneMode, ManualAutoMode,
     get_model_name, get_parameter_info
@@ -452,6 +452,11 @@ class AIHeaterDevice(BaseDevice):
                 return False
     
     def set_temperature(self, temperature: float) -> bool:
+        if temperature > self._heater_config.max_temperature:
+            raise ValueError(
+                f"Temperature {temperature} exceeds configured maximum "
+                f"{self._heater_config.max_temperature}"
+            )
         if temperature > self._heater_config.safety_limit:
             raise ValueError(
                 f"Temperature {temperature} exceeds safety limit "

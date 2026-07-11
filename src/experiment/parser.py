@@ -83,14 +83,32 @@ def parse_experiment(filepath: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    if not data or "steps" not in data:
+    if not isinstance(data, dict) or "steps" not in data:
         raise ValueError("Invalid experiment file: missing 'steps'")
+    if not isinstance(data["steps"], list):
+        raise ValueError("Invalid experiment file: 'steps' must be a list")
 
     steps = []
+    step_ids = set()
     for s in data.get("steps", []):
+        if not isinstance(s, dict):
+            raise ValueError("Invalid experiment step: expected object")
         wait_data = s.get("wait", {})
+        if not isinstance(wait_data, dict):
+            raise ValueError(
+                f"Invalid wait definition for step {s.get('id', '<unknown>')}: expected object"
+            )
+        wait_type_name = wait_data.get("type", "none")
+        if wait_type_name not in WAIT_MAP:
+            raise ValueError(f"Unknown wait type: {wait_type_name}")
+        params = s.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"Invalid params for step {s.get('id', '<unknown>')}: expected object")
+        enabled = s.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"Invalid enabled value for step {s.get('id', '<unknown>')}: expected bool")
         wait = WaitCondition(
-            type=WAIT_MAP.get(wait_data.get("type", "none"), WaitType.NONE),
+            type=WAIT_MAP[wait_type_name],
             seconds=wait_data.get("seconds", 0),
             device_id=wait_data.get("device_id", ""),
             tolerance=wait_data.get("tolerance", 1.0),
@@ -104,13 +122,24 @@ def parse_experiment(filepath: str) -> dict:
         if action_type is None:
             raise ValueError(f"Unknown action type: {s.get('type')}")
 
+        step_id = s.get("id")
+        if not isinstance(step_id, str) or not step_id.strip():
+            raise ValueError("Experiment step requires a non-empty string 'id'")
+        if step_id in step_ids:
+            raise ValueError(f"Duplicate step id: {step_id}")
+        step_ids.add(step_id)
+
+        on_error = s.get("on_error", "stop")
+        if on_error not in {"stop", "skip"}:
+            raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
+
         step = ExperimentStep(
-            id=s["id"],
+            id=step_id,
             type=action_type,
-            params=s.get("params", {}),
+            params=params,
             wait=wait,
-            enabled=s.get("enabled", True),
-            on_error=s.get("on_error", "stop"),
+            enabled=enabled,
+            on_error=on_error,
         )
         steps.append(step)
 

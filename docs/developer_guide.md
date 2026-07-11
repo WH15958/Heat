@@ -119,6 +119,8 @@ FastAPI 是异步的，但设备是同步的。
 
 - `src/science/sample_id.py`：`sample_id`、`batch_id`、`condition_id`
 - `src/science/sample_record.py`：`samples.csv` 写入与去重
+- `ExperimentRun.persistence_status` 独立记录追踪持久化结果；`log_saved`、`sample_record_saved` 和 `persistence_errors` 用于区分“设备流程完成”和“记录完整落盘”
+- 实验日志、`samples.csv` 和 campaign JSON 采用同目录临时文件加 `os.replace()` 的原子替换；进程内写入使用锁保护读改写序列
 
 ---
 
@@ -139,6 +141,7 @@ FastAPI 是异步的，但设备是同步的。
 3. 在配置层接入
    - 补 `config/system_config.yaml` 对应结构
    - 补 `utils/config.py` 的解析逻辑（若需要）
+   - `src/web/app.py -> DeviceManager -> DeviceConfig` 必须透传连接超时、重试、温度/功率上限等安全字段，不能只传端口和波特率
 4. 在 `DeviceManager` 中注册并暴露控制入口
 5. 如需 Web 控制，再补 `api/devices.py`
 6. 如需实验引擎接入，再扩动作和执行器
@@ -258,6 +261,10 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 - `samples.csv`
 - 单实验保护
 - stop / wait 语义
+- pause 必须暂停当前等待的计时与轮询，并阻止步骤在 paused 状态下完成
+- `pump_complete` 只接受新鲜读取，并要求观察到 running 后的停止转换
+- 急停跳过未连接设备时总体结果必须为失败，不能报告全部停机成功
+- 日志或 `samples.csv` 写入失败时保留设备执行状态，同时把 `persistence_status` 标成 `error`
 - WebSocket 断开不影响设备
 - 微波仪前端手动控制和 YAML 自动启动已开放，但真实硬件行为仍需实验室确认
 

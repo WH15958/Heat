@@ -7,8 +7,8 @@ name = "heat"
 version = "0.1.0"
 description = "自动化控制系统"
 readme = "README.md"
-requires-python = ">=3.8"
-license = {text = "MIT"}
+requires-python = ">=3.10"
+license = "MIT"
 authors = []
 dependencies = [
     "pyserial>=3.5",
@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
 windows = [
     "pywin32>=306",
     "psutil>=5.9.0",
@@ -30,4 +33,8 @@ windows = [
 heat = "src.main:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

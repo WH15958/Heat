@@ -42,6 +42,8 @@ class ExperimentEngine:
         self._start_time: Optional[float] = None
         self._pause_event = asyncio.Event()
         self._pause_event.set()
+        if hasattr(self._executor, "set_pause_checker"):
+            self._executor.set_pause_checker(lambda: not self._pause_event.is_set())
         self._stop_flag = False
         self._on_progress: Optional[Callable] = None
         self._on_complete: Optional[Callable] = None
@@ -135,6 +137,9 @@ class ExperimentEngine:
             step_start = time.time()
             success = await self._executor.execute(step)
             wait_duration = time.time() - step_start
+
+            if not self._stop_flag:
+                await self._pause_event.wait()
 
             if self._stop_flag:
                 self._exp_logger.finish_step(i, success=False, error="Stopped by user", wait_duration=wait_duration)

@@ -25,6 +25,8 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 ## 快速开始
 
+后端要求 Python 3.10 或更高版本。
+
 ### 1. 安装 Python 依赖
 
 推荐使用 Conda：
@@ -99,6 +101,7 @@ python run_server.py
 
 ```bash
 python tests\test_metadata.py
+python tests\test_code_review_fixes.py
 python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"
 cd frontend && npm run build
 ```

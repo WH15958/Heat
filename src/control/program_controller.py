@@ -14,6 +14,7 @@ from datetime import datetime
 from enum import Enum, IntEnum
 from typing import Any, Dict, List, Optional, Callable
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ class ProgramController:
         self._pump = pump
         self._program: Optional[ProgramConfig] = None
         self._status = ProgramStatus()
+        self._started_at_monotonic: Optional[float] = None
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._pause_event = asyncio.Event()
@@ -220,13 +222,14 @@ class ProgramController:
         self._status.completed = False
         self._status.current_step = 0
         self._status.error = None
+        self._started_at_monotonic = time.monotonic()
 
         self._task = asyncio.create_task(self._run_program())
 
         self._logger.info("Program started")
         return True
 
-    async def stop(self):
+    async def stop(self) -> bool:
         """停止程序"""
         self._stop_event.set()
         self._pause_event.set()
@@ -242,11 +245,18 @@ class ProgramController:
         self._status.running = False
         self._status.paused = False
 
+        loop = asyncio.get_event_loop()
+        success = True
         if self._pump is not None:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._pump.stop_all)
+            success = bool(await loop.run_in_executor(None, self._pump.stop_all)) and success
+        if self._heater is not None:
+            success = bool(await loop.run_in_executor(None, self._heater.stop)) and success
 
-        self._logger.info("Program stopped")
+        if success:
+            self._logger.info("Program stopped")
+        else:
+            self._logger.error("Program stop completed with device stop failures")
+        return success
 
     async def pause(self):
         """暂停程序执行"""
@@ -263,6 +273,8 @@ class ProgramController:
     async def _run_program(self):
         try:
             while not self._stop_event.is_set():
+                if self._program_timed_out():
+                    break
                 await self._pause_event.wait()
 
                 if self._stop_event.is_set():
@@ -275,6 +287,9 @@ class ProgramController:
                 step = self._program.steps[self._status.current_step]
 
                 if not await self._execute_step(step):
+                    if self._status.error is None:
+                        self._status.error = f"Step failed: {step.step_id}"
+                    self._logger.error(self._status.error)
                     break
 
                 self._status.current_step += 1
@@ -325,7 +340,7 @@ class ProgramController:
                 return await self._execute_end(step)
             else:
                 self._logger.warning(f"Unknown step type: {step.step_type}")
-                return True
+                return False
 
         except Exception as e:
             self._logger.error(f"Step execution error: {e}")
@@ -337,29 +352,34 @@ class ProgramController:
     async def _execute_heat(self, step: ProgramStep) -> bool:
         """执行加热步骤"""
         if self._heater is None:
-            self._logger.warning("No heater configured")
-            return True
+            self._logger.error("No heater configured")
+            return False
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._heater.set_temperature, step.temperature)
-        await loop.run_in_executor(None, self._heater.start)
+        if not await loop.run_in_executor(None, self._heater.set_temperature, step.temperature):
+            return False
+        if not await loop.run_in_executor(None, self._heater.start):
+            return False
 
         if step.trigger == TriggerType.TEMPERATURE_REACHED:
             tolerance = step.trigger_value if step.trigger_value > 0 else 2.0
             while not self._stop_event.is_set():
+                if self._program_timed_out():
+                    return False
                 await self._pause_event.wait()
                 data = await loop.run_in_executor(None, self._heater.read_data)
                 if abs(data.pv - step.temperature) <= tolerance:
                     break
                 await asyncio.sleep(0.5)
 
-        return True
+        return not self._stop_event.is_set()
 
     async def _execute_hold(self, step: ProgramStep) -> bool:
-        import time
         start_time = time.time()
 
         while not self._stop_event.is_set():
+            if self._program_timed_out():
+                return False
             await self._pause_event.wait()
             elapsed = time.time() - start_time
             self._status.elapsed_time = elapsed
@@ -370,78 +390,96 @@ class ProgramController:
 
             await asyncio.sleep(0.5)
 
-        return True
+        return not self._stop_event.is_set()
 
     async def _execute_cool(self, step: ProgramStep) -> bool:
         """执行冷却步骤"""
         if self._heater is None:
-            return True
+            self._logger.error("No heater configured")
+            return False
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._heater.stop)
+        if not await loop.run_in_executor(None, self._heater.stop):
+            return False
 
         if step.trigger == TriggerType.TEMPERATURE_REACHED:
             tolerance = step.trigger_value if step.trigger_value > 0 else 5.0
             while not self._stop_event.is_set():
+                if self._program_timed_out():
+                    return False
                 await self._pause_event.wait()
                 data = await loop.run_in_executor(None, self._heater.read_data)
                 if data.pv <= step.temperature + tolerance:
                     break
                 await asyncio.sleep(1.0)
 
-        return True
+        return not self._stop_event.is_set()
 
     async def _execute_pump_start(self, step: ProgramStep) -> bool:
         """执行泵启动步骤"""
         if self._pump is None:
-            self._logger.warning("No pump configured")
-            return True
+            self._logger.error("No pump configured")
+            return False
 
         loop = asyncio.get_event_loop()
         if step.pump_flow_rate > 0:
-            await loop.run_in_executor(None, self._pump.set_flow_rate, step.pump_channel, step.pump_flow_rate)
+            if not await loop.run_in_executor(None, self._pump.set_flow_rate, step.pump_channel, step.pump_flow_rate):
+                return False
 
-        await loop.run_in_executor(None, self._pump.set_direction, step.pump_channel, step.pump_direction)
-        await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel)
+        if not await loop.run_in_executor(None, self._pump.set_direction, step.pump_channel, step.pump_direction):
+            return False
+        if not await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel):
+            return False
 
         return True
 
     async def _execute_pump_stop(self, step: ProgramStep) -> bool:
         """执行泵停止步骤"""
         if self._pump is None:
-            return True
+            self._logger.error("No pump configured")
+            return False
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._pump.stop_channel, step.pump_channel)
-        return True
+        return bool(await loop.run_in_executor(None, self._pump.stop_channel, step.pump_channel))
 
     async def _execute_pump_dispense(self, step: ProgramStep) -> bool:
         """执行定量分装步骤"""
         if self._pump is None:
-            return True
+            self._logger.error("No pump configured")
+            return False
 
-        from protocols.pump_params import PumpRunMode
+        from src.protocols.pump_params import PumpRunMode
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._pump.set_run_mode, step.pump_channel, PumpRunMode.TIME_QUANTITY)
-        await loop.run_in_executor(None, self._pump.set_dispense_volume, step.pump_channel, step.pump_volume)
-        await loop.run_in_executor(None, self._pump.set_flow_rate, step.pump_channel, step.pump_flow_rate)
-        await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel)
+        if not await loop.run_in_executor(None, self._pump.set_run_mode, step.pump_channel, PumpRunMode.TIME_QUANTITY):
+            return False
+        if not await loop.run_in_executor(None, self._pump.set_dispense_volume, step.pump_channel, step.pump_volume):
+            return False
+        if not await loop.run_in_executor(None, self._pump.set_flow_rate, step.pump_channel, step.pump_flow_rate):
+            return False
+        if not await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel):
+            return False
 
         if step.trigger == TriggerType.PUMP_COMPLETE:
+            seen_running = False
             while not self._stop_event.is_set():
+                if self._program_timed_out():
+                    return False
                 await self._pause_event.wait()
                 data = await loop.run_in_executor(None, self._pump.read_channel_status, step.pump_channel)
-                if data is not None and not data.running:
+                if data is not None and data.running:
+                    seen_running = True
+                elif data is not None and seen_running:
                     break
                 await asyncio.sleep(0.5)
 
-        return True
+        return not self._stop_event.is_set()
 
     async def _execute_wait(self, step: ProgramStep) -> bool:
-        import time
         start_time = time.time()
 
         while not self._stop_event.is_set():
+            if self._program_timed_out():
+                return False
             await self._pause_event.wait()
             elapsed = time.time() - start_time
             self._status.elapsed_time = elapsed
@@ -452,7 +490,7 @@ class ProgramController:
 
             await asyncio.sleep(0.5)
 
-        return True
+        return not self._stop_event.is_set()
 
     def _execute_loop(self, step: ProgramStep) -> bool:
         if step.loop_start < 0:
@@ -470,11 +508,22 @@ class ProgramController:
     async def _execute_end(self, step: ProgramStep) -> bool:
         """执行结束步骤"""
         loop = asyncio.get_event_loop()
+        success = True
         if self._pump is not None:
-            await loop.run_in_executor(None, self._pump.stop_all)
+            success = bool(await loop.run_in_executor(None, self._pump.stop_all)) and success
         if self._heater is not None:
-            await loop.run_in_executor(None, self._heater.stop)
+            success = bool(await loop.run_in_executor(None, self._heater.stop)) and success
 
+        return success
+
+    def _program_timed_out(self) -> bool:
+        if self._program is None or self._started_at_monotonic is None:
+            return False
+        if time.monotonic() - self._started_at_monotonic <= self._program.max_duration:
+            return False
+        self._status.error = f"Program exceeded max_duration={self._program.max_duration}s"
+        self._stop_event.set()
+        self._logger.error(self._status.error)
         return True
 
     def _complete_program(self):

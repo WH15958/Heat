@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 import logging
 
-from devices.base_device import (
+from src.devices.base_device import (
     BaseDevice,
     DeviceConfig,
     DeviceData,
@@ -18,8 +18,8 @@ from devices.base_device import (
     DeviceStatus,
     DeviceType,
 )
-from protocols.modbus_rtu import ModbusRTUProtocol
-from protocols.microwave_params import (
+from src.protocols.modbus_rtu import ModbusRTUProtocol
+from src.protocols.microwave_params import (
     CONTROL_MICROWAVE_START,
     CONTROL_STOP,
     CONTROL_WORD,

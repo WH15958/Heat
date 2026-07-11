@@ -1,5 +1,6 @@
 import csv
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -10,6 +11,7 @@ logger = get_logger(__name__)
 
 SAMPLES_DIR = Path("data/datasets")
 SAMPLES_CSV = SAMPLES_DIR / "samples.csv"
+_SAMPLE_FILE_LOCK = threading.Lock()
 
 SAMPLE_HEADERS = [
     "sample_id",
@@ -71,11 +73,12 @@ def existing_sample_ids(*, strict: bool = False) -> set:
     return ids
 
 
-def remove_sample_records_for_run_ids(run_ids: Iterable[str]) -> int:
+def _remove_sample_records_for_run_ids_unlocked(run_ids: Iterable[str]) -> int:
     run_ids = {str(run_id).strip() for run_id in run_ids if str(run_id).strip()}
     if not run_ids or not SAMPLES_CSV.exists():
         return 0
 
+    temp_path = SAMPLES_CSV.with_suffix(SAMPLES_CSV.suffix + ".tmp")
     try:
         with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
@@ -88,11 +91,14 @@ def remove_sample_records_for_run_ids(run_ids: Iterable[str]) -> int:
                 else:
                     kept_rows.append(row)
 
-        with open(SAMPLES_CSV, "w", encoding="utf-8", newline="") as f:
+        with open(temp_path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for row in kept_rows:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, SAMPLES_CSV)
 
         if removed:
             logger.info(f"Removed {removed} sample records for deleted runs")
@@ -100,9 +106,19 @@ def remove_sample_records_for_run_ids(run_ids: Iterable[str]) -> int:
     except Exception as e:
         logger.error(f"Failed to remove sample records from {SAMPLES_CSV}: {e}")
         return 0
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
-def write_sample_record(
+def remove_sample_records_for_run_ids(run_ids: Iterable[str]) -> int:
+    with _SAMPLE_FILE_LOCK:
+        return _remove_sample_records_for_run_ids_unlocked(run_ids)
+
+
+def _write_sample_record_unlocked(
     run_id: str,
     metadata: dict,
     *,
@@ -140,31 +156,64 @@ def write_sample_record(
     finished_at = metadata.get("finished_at", datetime.now().isoformat())
     raw_log_path = log_file_path or metadata.get("raw_log_path", "")
 
-    write_header = not SAMPLES_CSV.exists() or os.path.getsize(SAMPLES_CSV) == 0
-
+    temp_path = SAMPLES_CSV.with_suffix(SAMPLES_CSV.suffix + ".tmp")
     try:
-        with open(SAMPLES_CSV, "a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            if write_header:
-                writer.writerow(SAMPLE_HEADERS)
-            row = [
-                sample_id,
-                batch_id,
-                condition_id,
-                run_id,
-                recipe_file,
-                material_system,
-                operator,
-                started_at,
-                finished_at,
-                status,
-                raw_log_path,
-                notes,
-                str(error_flag).lower(),
-            ]
+        existing_rows = []
+        if SAMPLES_CSV.exists() and os.path.getsize(SAMPLES_CSV) > 0:
+            with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
+                existing_rows = list(csv.DictReader(f))
+
+        row = {
+            "sample_id": sample_id,
+            "batch_id": batch_id,
+            "condition_id": condition_id,
+            "run_id": run_id,
+            "recipe_file": recipe_file,
+            "material_system": material_system,
+            "operator": operator,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "status": status,
+            "raw_log_path": raw_log_path,
+            "notes": notes,
+            "error_flag": str(error_flag).lower(),
+        }
+        with open(temp_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=SAMPLE_HEADERS)
+            writer.writeheader()
+            for existing_row in existing_rows:
+                writer.writerow({key: existing_row.get(key, "") for key in SAMPLE_HEADERS})
             writer.writerow(row)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, SAMPLES_CSV)
         logger.info(f"Sample record written to {SAMPLES_CSV}: run_id={run_id}, sample_id={sample_id}")
         return True
     except Exception as e:
         logger.error(f"Failed to write sample record: {e}")
         return False
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def write_sample_record(
+    run_id: str,
+    metadata: dict,
+    *,
+    status: str = "completed",
+    notes: str = "",
+    error_flag: bool = False,
+    log_file_path: str = "",
+) -> bool:
+    with _SAMPLE_FILE_LOCK:
+        return _write_sample_record_unlocked(
+            run_id,
+            metadata,
+            status=status,
+            notes=notes,
+            error_flag=error_flag,
+            log_file_path=log_file_path,
+        )

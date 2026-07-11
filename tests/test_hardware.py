@@ -35,8 +35,8 @@ def test_serial_connection(port: str, baudrate: int = 9600, address: int = 0):
     print(f"仪表地址: {address}")
     print(f"{'='*60}\n")
     
-    from protocols.aibus import AIBUSProtocol
-    from protocols.parameters import ParameterCode, get_model_name
+    from src.protocols.aibus import AIBUSProtocol
+    from src.protocols.parameters import ParameterCode, get_model_name
     
     protocol = AIBUSProtocol(
         port=port,
@@ -105,8 +105,8 @@ def test_heater_device(port: str, baudrate: int = 9600, address: int = 0):
     print(f"加热器设备驱动测试")
     print(f"{'='*60}\n")
     
-    from devices.heater import AIHeaterDevice, HeaterConfig
-    from devices.base_device import DeviceInfo, DeviceType
+    from src.devices.heater import AIHeaterDevice, HeaterConfig
+    from src.devices.base_device import DeviceInfo, DeviceType
     
     config = HeaterConfig(
         device_id="test_heater",

@@ -38,8 +38,8 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _project_root)
 sys.path.insert(0, os.path.join(_project_root, "src"))
 
-from devices.microwave import MicrowaveConfig, MicrowaveDevice, MicrowaveSegment
-from protocols.microwave_params import (
+from src.devices.microwave import MicrowaveConfig, MicrowaveDevice, MicrowaveSegment
+from src.protocols.microwave_params import (
     CONTROL_AUTO_POWER,
     CONTROL_CONSTANT_RATE,
     CONTROL_MANUAL_POWER,
@@ -249,7 +249,7 @@ def test_read_data_not_connected_raises_ioerror():
 
 
 def test_config_manager_loads_disabled_microwave_config():
-    from utils.config import ConfigManager
+    from src.utils.config import ConfigManager
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         config_path = Path(tmp_dir) / "system_config.yaml"

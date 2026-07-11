@@ -256,12 +256,21 @@ Codex 收到 `/git` 时，按以下含义执行：
 
 ### 10.1 按变更类型选择验证
 
+完整 pytest 收集需要先安装测试依赖：
+
+```powershell
+python -m pip install -e ".[test]"
+python -m pytest -q
+```
+
+直接运行 `tests\test_campaigns.py` 不会执行 pytest fixture 测试，不能把其退出码 0 当作测试通过。
+
 不是所有提交都需要完整编译验证：
 
 | 变更类型 | 默认验证 |
 | --- | --- |
 | 仅文档、规则、Skill | `git diff --check -- <paths>` + 内容一致性检查 |
-| Python 后端 | `python tests\test_metadata.py` + 相关 import 检查 |
+| Python 后端 | `python tests\test_metadata.py` + `python tests\test_code_review_fixes.py` + 相关 import 检查 |
 | Campaign / planner | 后端检查 + `import src.web.api.campaigns; import src.campaigns.store; import src.ml.planner` |
 | 前端源码 | `cd frontend; npm run build -- --mode production` |
 | YAML parser / ExperimentEngine | metadata 测试 + 定向行为或 import 检查 |

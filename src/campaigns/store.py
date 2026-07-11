@@ -1,4 +1,7 @@
 import json
+import os
+import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -23,8 +26,18 @@ CAMPAIGNS_JSON = CAMPAIGNS_DIR / "campaigns.json"
 TRIALS_JSON = CAMPAIGNS_DIR / "trials.json"
 RECOMMENDATIONS_JSON = CAMPAIGNS_DIR / "recommendations.json"
 CHARACTERIZATIONS_JSON = CAMPAIGNS_DIR / "characterizations.json"
+_STORE_LOCK = threading.RLock()
 
 
+def _synchronized(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with _STORE_LOCK:
+            return func(*args, **kwargs)
+    return wrapper
+
+
+@_synchronized
 def _ensure_store() -> None:
     CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
     for path in (CAMPAIGNS_JSON, TRIALS_JSON, RECOMMENDATIONS_JSON, CHARACTERIZATIONS_JSON):
@@ -32,6 +45,7 @@ def _ensure_store() -> None:
             path.write_text("[]\n", encoding="utf-8")
 
 
+@_synchronized
 def _read_list(path: Path) -> List[Dict[str, Any]]:
     _ensure_store()
     try:
@@ -48,12 +62,22 @@ def _read_list(path: Path) -> List[Dict[str, Any]]:
         raise
 
 
+@_synchronized
 def _write_list(path: Path, rows: List[Dict[str, Any]]) -> None:
     _ensure_store()
-    path.write_text(
-        json.dumps(rows, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _make_id(prefix: str) -> str:
@@ -70,6 +94,7 @@ class CampaignStore:
                 return campaign
         return None
 
+    @_synchronized
     def create_campaign(
         self,
         *,
@@ -105,6 +130,7 @@ class CampaignStore:
                 return trial
         return None
 
+    @_synchronized
     def create_trials(
         self,
         *,
@@ -130,6 +156,7 @@ class CampaignStore:
         _write_list(TRIALS_JSON, trials)
         return created
 
+    @_synchronized
     def update_trial(self, campaign_id: str, trial_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         rows = _read_list(TRIALS_JSON)
         for idx, trial in enumerate(rows):
@@ -148,6 +175,7 @@ class CampaignStore:
     def list_recommendations(self, campaign_id: str) -> List[Dict[str, Any]]:
         return [row for row in _read_list(RECOMMENDATIONS_JSON) if row.get("campaign_id") == campaign_id]
 
+    @_synchronized
     def create_recommendation(
         self,
         *,
@@ -178,6 +206,7 @@ class CampaignStore:
     def list_characterizations(self, campaign_id: str) -> List[Dict[str, Any]]:
         return [row for row in _read_list(CHARACTERIZATIONS_JSON) if row.get("campaign_id") == campaign_id]
 
+    @_synchronized
     def create_characterization(
         self,
         *,
@@ -234,6 +263,7 @@ class CampaignStore:
             )
         return history
 
+    @_synchronized
     def update_campaign_status(self, campaign_id: str, status: str) -> Dict[str, Any]:
         rows = self.list_campaigns()
         for idx, campaign in enumerate(rows):

@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 from datetime import datetime
@@ -66,6 +67,10 @@ class ExperimentRun:
     steps: List[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
     sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}, "microwaves": {}})
+    persistence_status: str = "pending"
+    log_saved: Optional[bool] = None
+    sample_record_saved: Optional[bool] = None
+    persistence_errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -242,35 +247,53 @@ class ExperimentLogger:
             self._active_run.status = RunStatus.RUNNING.value
             self._emit("run_resumed", {"run_id": self._active_run.run_id})
 
-    def finish_run(self, status: str):
+    def finish_run(self, status: str) -> bool:
         if not self._active_run:
-            return
+            return False
         self._active_run.status = status
         self._active_run.finished_at = datetime.now().isoformat()
         if self._active_run.started_at:
             start = datetime.fromisoformat(self._active_run.started_at)
             self._active_run.total_duration = (datetime.now() - start).total_seconds()
-        self._save_to_file()
-        try:
-            self._write_sample_record(status)
-        except Exception as e:
-            logger.error(f"Failed to write sample record: {e}")
-        self._emit("run_finished", self._active_run.to_dict())
-        logger.info(f"Experiment run {status}: {self._active_run.run_id}")
+        self._active_run.log_saved = True if self._save_log else None
+        self._active_run.sample_record_saved = False
+        self._active_run.persistence_errors = []
 
-    def _write_sample_record(self, status: str):
+        try:
+            self._active_run.sample_record_saved = bool(self._write_sample_record(status))
+            if not self._active_run.sample_record_saved:
+                self._active_run.persistence_errors.append("sample_record_not_saved")
+        except Exception as e:
+            self._active_run.sample_record_saved = False
+            self._active_run.persistence_errors.append(f"sample_record_error: {e}")
+            logger.error(f"Failed to write sample record: {e}")
+
+        self._active_run.persistence_status = (
+            "ok" if self._active_run.sample_record_saved else "error"
+        )
+
+        if self._save_log and not self._save_to_file():
+            self._active_run.log_saved = False
+            self._active_run.persistence_status = "error"
+            self._active_run.persistence_errors.append("experiment_log_not_saved")
+
+        self._emit("run_finished", self._active_run.to_dict())
+        logger.info(
+            f"Experiment run {status}: {self._active_run.run_id}, "
+            f"persistence={self._active_run.persistence_status}"
+        )
+        return self._active_run.persistence_status == "ok"
+
+    def _write_sample_record(self, status: str) -> bool:
         run = self._active_run
         metadata = run.metadata or {}
         metadata["finished_at"] = run.finished_at
 
-        log_path = ""
-        if self._save_log:
-            log_filename = f"{run.run_id}_{run.experiment_name}.json"
-            log_path = str(LOGS_DIR / log_filename)
+        log_path = str(self._log_filepath(run)) if self._save_log else ""
 
         error_flag = status in (RunStatus.FAILED.value, RunStatus.STOPPED.value)
 
-        write_sample_record(
+        return write_sample_record(
             run_id=run.run_id,
             metadata=metadata,
             status=status,
@@ -278,17 +301,40 @@ class ExperimentLogger:
             log_file_path=log_path,
         )
 
-    def _save_to_file(self):
+    @staticmethod
+    def _safe_experiment_name(name: str) -> str:
+        safe = "".join(
+            char if char.isalnum() or char in {"-", "_", "."} else "_"
+            for char in str(name)
+        ).strip("._")
+        return safe or "experiment"
+
+    def _log_filepath(self, run: ExperimentRun) -> Path:
+        safe_name = self._safe_experiment_name(run.experiment_name)
+        return LOGS_DIR / f"{run.run_id}_{safe_name}.json"
+
+    def _save_to_file(self) -> bool:
         if not self._save_log or not self._active_run:
-            return
+            return True
+        filepath = self._log_filepath(self._active_run)
+        temp_path = filepath.with_suffix(filepath.suffix + ".tmp")
         try:
-            filename = f"{self._active_run.run_id}_{self._active_run.experiment_name}.json"
-            filepath = LOGS_DIR / filename
-            with open(filepath, "w", encoding="utf-8") as f:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(self._active_run.to_dict(), f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, filepath)
             logger.info(f"Experiment log saved: {filepath}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save experiment log: {e}")
+            return False
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _emit(self, event_type: str, data: dict):
         if self._on_log:

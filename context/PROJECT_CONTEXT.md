@@ -119,6 +119,8 @@
 - 设备返回 `False` 必须视为失败，而不是静默继续
 - stop / pause / resume / complete 的状态机语义必须和日志语义一致
 - 长时间等待必须可中断
+- pause 必须暂停当前等待的计时与轮询，不能让步骤在 `paused` 状态下完成
+- 设备执行状态与追踪持久化状态分开记录；日志或 `samples.csv` 写入失败必须显式暴露为 `persistence_status=error`
 
 ### 2.4 串口与资源访问必须经过统一管理
 

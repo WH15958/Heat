@@ -20,12 +20,12 @@ import atexit
 import weakref
 import struct
 
-from devices.base_device import (
+from src.devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
     DeviceStatus, DeviceType
 )
-from protocols.modbus_rtu import ModbusRTUProtocol, ModbusException
-from protocols.pump_params import (
+from src.protocols.modbus_rtu import ModbusRTUProtocol, ModbusException
+from src.protocols.pump_params import (
     PumpRunMode, PumpRunStatus, PumpDirection, TimeUnit, FlowUnit,
     get_channel_address, get_register_info,
     CHANNEL_CONTROL_REGISTERS, PARAMETER_REGISTERS,
@@ -1033,8 +1033,7 @@ class LabSmartPumpDevice(BaseDevice):
             data.run_mode = self._safe_enum(PumpRunMode, control_values[6], PumpRunMode.FLOW_MODE)
         else:
             logger.debug(f"CH{channel} control read failed: {control_values}")
-            self._channel_data[channel] = data
-            return data
+            return None
 
         param_values = self._read_registers(param_base, 13)
         if param_values is not None and len(param_values) >= 13:

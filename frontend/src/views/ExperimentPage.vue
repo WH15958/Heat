@@ -360,11 +360,16 @@ function handleWsMessage(event: MessageEvent) {
       } else if (evt === 'run_resumed') {
         addLog('info', '实验恢复', `Run: ${data.run_id}`)
       } else if (evt === 'run_finished') {
-        const level = data.status === 'completed' ? 'success' : data.status === 'failed' ? 'error' : 'warning'
-        const label = data.status === 'completed' ? '实验完成' : data.status === 'failed' ? '实验失败' : '实验停止'
+        const persistenceFailed = data.persistence_status === 'error'
+        const level = persistenceFailed ? 'error' : data.status === 'completed' ? 'success' : data.status === 'failed' ? 'error' : 'warning'
+        const label = persistenceFailed
+          ? '实验执行结束，但追踪记录失败'
+          : data.status === 'completed' ? '实验完成' : data.status === 'failed' ? '实验失败' : '实验停止'
         const dur = data.total_duration ? ` 总耗时 ${data.total_duration.toFixed(1)}s` : ''
         addLog(level, label, `${data.experiment_name}${dur}`,
-          `完成: ${data.completed_steps} 失败: ${data.failed_steps}`)
+          persistenceFailed
+            ? `持久化错误: ${(data.persistence_errors || []).join('; ') || 'unknown'}`
+            : `完成: ${data.completed_steps} 失败: ${data.failed_steps}`)
         const totalSteps = progress.value?.total_steps ?? selectedExp.value?.steps.length ?? 0
         progress.value = normalizeProgress({
           state: data.status,

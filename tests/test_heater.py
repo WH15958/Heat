@@ -19,7 +19,7 @@ def test_protocol_structure():
     """测试协议帧结构"""
     print("\n=== 测试AIBUS协议帧结构 ===")
     
-    from protocols.aibus import AIBUSProtocol
+    from src.protocols.aibus import AIBUSProtocol
     
     protocol = AIBUSProtocol(port="COM3", address=0)
     
@@ -40,7 +40,7 @@ def test_checksum_calculation():
     """测试校验和计算"""
     print("\n=== 测试校验和计算 ===")
     
-    from protocols.aibus import AIBUSProtocol
+    from src.protocols.aibus import AIBUSProtocol
     
     protocol = AIBUSProtocol(port="COM3", address=1)
     
@@ -61,7 +61,7 @@ def test_response_parsing():
     """测试响应解析"""
     print("\n=== 测试响应解析 ===")
     
-    from protocols.aibus import AIBUSProtocol
+    from src.protocols.aibus import AIBUSProtocol
     
     protocol = AIBUSProtocol(port="COM3", address=1)
     
@@ -92,7 +92,7 @@ def test_parameter_codes():
     """测试参数代号"""
     print("\n=== 测试参数代号定义 ===")
     
-    from protocols.parameters import ParameterCode, get_parameter_info
+    from src.protocols.parameters import ParameterCode, get_parameter_info
     
     print(f"SV(给定值)代号: {ParameterCode.SV}")
     print(f"PV(测量值)代号: {ParameterCode.PV}")
@@ -109,7 +109,7 @@ def test_device_config():
     """测试设备配置"""
     print("\n=== 测试设备配置 ===")
     
-    from devices.heater import HeaterConfig
+    from src.devices.heater import HeaterConfig
     
     config = HeaterConfig(
         device_id="test_heater",
@@ -136,21 +136,18 @@ def test_csv_data_logger():
     """测试CSV数据记录"""
     print("\n=== 测试CSV数据记录 ===")
     
-    from utils.csv_logger import SimpleDataPoint
+    from src.utils.csv_logger import SimpleDataPoint
     from datetime import datetime
     
     data_point = SimpleDataPoint(
-        timestamp=datetime.now().isoformat(),
-        device_id="heater1",
+        timestamp=datetime.now(),
         pv=100.5,
         sv=100.0,
     )
-    
-    data_dict = data_point.to_dict()
-    print(f"数据点字典: {data_dict}")
-    
-    assert data_dict['device_id'] == "heater1"
-    assert data_dict['pv'] == 100.5
+    data_point.device_id = "heater1"
+
+    assert data_point.device_id == "heater1"
+    assert data_point.pv == 100.5
     
     print("[OK] CSV数据记录测试通过")
 
@@ -176,7 +173,7 @@ def test_statistics():
     """测试统计计算"""
     print("\n=== 测试统计计算 ===")
     
-    from reports.report_generator import calculate_statistics
+    from src.reports.report_generator import calculate_statistics
     
     values = [100.0, 101.0, 99.0, 102.0, 98.0, 100.5, 99.5]
     stats = calculate_statistics(values)
@@ -199,7 +196,7 @@ def test_config_manager():
     """测试配置管理"""
     print("\n=== 测试配置管理 ===")
     
-    from utils.config import ConfigManager
+    from src.utils.config import ConfigManager
     import tempfile
     import os
     
@@ -231,7 +228,7 @@ def run_all_tests():
         test_response_parsing,
         test_parameter_codes,
         test_device_config,
-        test_monitor_data_structure,
+        test_csv_data_logger,
         test_alarm_rule,
         test_statistics,
         test_config_manager,

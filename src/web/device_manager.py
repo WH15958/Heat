@@ -2,16 +2,16 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from devices.heater import AIHeaterDevice, HeaterConfig
-from devices.microwave import MicrowaveConfig, MicrowaveDevice
-from devices.peristaltic_pump import (
+from src.devices.heater import AIHeaterDevice, HeaterConfig
+from src.devices.microwave import MicrowaveConfig, MicrowaveDevice
+from src.devices.peristaltic_pump import (
     LabSmartPumpDevice,
     PeristalticPumpConfig,
     PumpChannelConfig,
 )
-from protocols.microwave_params import MODE_CONTROL_MASKS
-from utils.logger import get_logger
-from utils.serial_binding import resolve_connection
+from src.protocols.microwave_params import MODE_CONTROL_MASKS
+from src.utils.logger import get_logger
+from src.utils.serial_binding import resolve_connection
 
 logger = get_logger(__name__)
 
@@ -37,7 +37,16 @@ class DeviceManager:
         port: str,
         baudrate: int = 9600,
         address: int = 1,
+        parity: str = "N",
+        timeout: float = 2.0,
         decimal_places: int = 1,
+        temperature_unit: str = "C",
+        max_temperature: float = 400.0,
+        min_temperature: float = 0.0,
+        safety_limit: float = 450.0,
+        poll_interval: float = 1.0,
+        retry_count: int = 3,
+        retry_delay: float = 0.5,
         binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         """添加加热器配置
@@ -54,8 +63,21 @@ class DeviceManager:
         """
         config = HeaterConfig(
             device_id=device_id,
-            connection_params={"port": port, "baudrate": baudrate, "address": address},
+            connection_params={
+                "port": port,
+                "baudrate": baudrate,
+                "address": address,
+                "parity": parity,
+            },
+            timeout=timeout,
+            poll_interval=poll_interval,
+            retry_count=retry_count,
+            retry_delay=retry_delay,
             decimal_places=decimal_places,
+            temperature_unit=temperature_unit,
+            max_temperature=max_temperature,
+            min_temperature=min_temperature,
+            safety_limit=safety_limit,
         )
         self._heaters[device_id] = AIHeaterDevice(config)
         self._heater_bindings[device_id] = self._normalize_binding_info(binding_info, port)
@@ -69,6 +91,12 @@ class DeviceManager:
         baudrate: int = 19200,
         slave_address: int = 1,
         parity: str = "E",
+        timeout: float = 2.0,
+        poll_interval: float = 1.0,
+        retry_count: int = 3,
+        retry_delay: float = 0.5,
+        stopbits: int = 1,
+        bytesize: int = 8,
         channels: Optional[list] = None,
         binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
@@ -111,10 +139,18 @@ class DeviceManager:
                 "port": port,
                 "baudrate": baudrate,
                 "parity": parity,
-                "stopbits": 1,
-                "bytesize": 8,
+                "stopbits": stopbits,
+                "bytesize": bytesize,
             },
             slave_address=slave_address,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            retry_count=retry_count,
+            retry_delay=retry_delay,
+            baudrate=baudrate,
+            parity=parity,
+            stopbits=stopbits,
+            bytesize=bytesize,
             channels=channel_configs,
         )
         self._pumps[device_id] = LabSmartPumpDevice(config)
@@ -438,6 +474,7 @@ class DeviceManager:
                 }
 
         for ch in range(1, 5):
+            read_ok = False
             try:
                 ch_data = pump.read_channel_status(ch)
                 if ch_data is not None:
@@ -452,8 +489,11 @@ class DeviceManager:
                         if ch_data.flow_unit
                         else "ML_MIN",
                     }
+                    read_ok = True
             except Exception as e:
                 logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
+
+            self._pump_channel_cache[device_id][str(ch)]["read_ok"] = read_ok
 
         return self._binding_enriched_payload({
             "device_id": device_id,
@@ -531,9 +571,12 @@ class DeviceManager:
         """紧急停止所有设备"""
         logger.warning("EMERGENCY STOP ALL DEVICES")
         success = True
+        attempted = False
         for heater in self._heaters.values():
+            attempted = True
             try:
                 if not heater.is_connected():
+                    success = False
                     logger.warning(f"Emergency stop heater skipped, not connected: {heater.config.device_id}")
                     continue
                 result = heater.emergency_stop()
@@ -544,8 +587,10 @@ class DeviceManager:
                 success = False
                 logger.error(f"Emergency stop heater failed: {e}")
         for pump in self._pumps.values():
+            attempted = True
             try:
                 if not pump.is_connected():
+                    success = False
                     logger.warning(f"Emergency stop pump skipped, not connected: {pump.config.device_id}")
                     continue
                 result = pump.emergency_stop()
@@ -556,8 +601,10 @@ class DeviceManager:
                 success = False
                 logger.error(f"Emergency stop pump failed: {e}")
         for microwave in self._microwaves.values():
+            attempted = True
             try:
                 if not microwave.is_connected():
+                    success = False
                     logger.warning(
                         f"Emergency stop microwave skipped, not connected: {microwave.config.device_id}"
                     )
@@ -571,7 +618,9 @@ class DeviceManager:
             except Exception as e:
                 success = False
                 logger.error(f"Emergency stop microwave failed: {e}")
-        return success
+        if not attempted:
+            logger.error("Emergency stop requested with no registered devices")
+        return success and attempted
 
     def get_all_status(self) -> dict:
         """获取所有设备状态摘要
