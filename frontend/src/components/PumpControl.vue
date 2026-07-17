@@ -31,10 +31,14 @@
     <div v-for="ch in [1, 2, 3, 4]" :key="ch" class="channel-control">
       <div class="channel-header">
         <span class="channel-name">通道 {{ ch }}</span>
-        <el-tag v-if="pump.connected && channelStatus(pumpId, ch)?.running" type="success" size="small">
-          运行中 {{ channelStatus(pumpId, ch)?.flow_rate }} mL/min
+        <el-tag v-if="pump.connected && channelStatus(pumpId, ch)?.read_ok === false" type="danger" size="small">
+          读取失败
         </el-tag>
-        <el-tag v-else-if="pump.connected" type="info" size="small">停止</el-tag>
+        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)?.running" type="success" size="small">
+          运行中 {{ channelStatus(pumpId, ch)?.flow_rate }} {{ statusFlowUnitLabel(channelStatus(pumpId, ch)?.flow_unit) }}
+        </el-tag>
+        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)" type="info" size="small">停止</el-tag>
+        <el-tag v-else-if="pump.connected" type="warning" size="small">状态未知</el-tag>
         <el-tag v-else type="info" size="small">未连接</el-tag>
       </div>
       <div class="channel-row">
@@ -58,12 +62,18 @@
         <template v-else>
           <el-input-number
             v-model="pump.channels[ch].flowRate"
-            :min="0.001" :max="pump.channels[ch].flowUnit === 3 ? 150 : pump.channels[ch].maxFlowRate" :step="0.001" :precision="3"
+            :min="0.01" :max="flowRateMax(pump.channels[ch])" :step="0.01" :precision="3"
             size="small"
             style="width: 100px"
           />
-          <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px">
-            <el-option v-for="u in FLOW_UNITS" :key="u.value" :label="u.label" :value="u.value" />
+          <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px" @change="clampFlowRate(pump.channels[ch])">
+            <el-option
+              v-for="u in FLOW_UNITS"
+              :key="u.value"
+              :label="u.label"
+              :value="u.value"
+              :disabled="!isFlowUnitAvailable(pump.channels[ch], u.value)"
+            />
           </el-select>
         </template>
       </div>
@@ -215,9 +225,29 @@ function needsDispenseVolume(mode: PumpMode): boolean {
 
 function calcFlowRate(ch: ChannelConfig): number {
   if (ch.mode === 'TIME_QUANTITY' && ch.runTime > 0) {
-    return ch.dispenseVolume / (ch.runTime / 60)
+    const volumeMl = ch.volumeUnit === 0
+      ? ch.dispenseVolume / 1000
+      : ch.volumeUnit === 2
+        ? ch.dispenseVolume * 1000
+        : ch.dispenseVolume
+    const timeMinutes = ch.timeUnit === 0
+      ? ch.runTime / 60
+      : ch.timeUnit === 2
+        ? ch.runTime * 60
+        : ch.runTime
+    return volumeMl / timeMinutes
   }
   return ch.flowRate
+}
+
+function statusFlowUnitLabel(unit: unknown): string {
+  const labels: Record<string, string> = {
+    UL_MIN: 'uL/min',
+    ML_MIN: 'mL/min',
+    L_MIN: 'L/min',
+    RPM: 'RPM',
+  }
+  return typeof unit === 'string' ? labels[unit] || unit : '--'
 }
 
 function getMaxFlowRate(tubeModel: number): number {
@@ -225,11 +255,35 @@ function getMaxFlowRate(tubeModel: number): number {
   return found ? found.maxFlow : 7.55
 }
 
+function flowRateMaxForUnit(maxFlowRate: number, flowUnit: number): number {
+  if (flowUnit === 3) return 150
+  const convertedMax = flowUnit === 0
+    ? maxFlowRate * 1000
+    : flowUnit === 2
+      ? maxFlowRate / 1000
+      : maxFlowRate
+  return Math.min(convertedMax, 9999)
+}
+
+function flowRateMax(ch: ChannelConfig): number {
+  const effectiveMaxFlowRate = Math.min(ch.maxFlowRate, getMaxFlowRate(ch.tubeModel))
+  return flowRateMaxForUnit(effectiveMaxFlowRate, ch.flowUnit)
+}
+
+function isFlowUnitAvailable(ch: ChannelConfig, flowUnit: number): boolean {
+  const effectiveMaxFlowRate = Math.min(ch.maxFlowRate, getMaxFlowRate(ch.tubeModel))
+  return flowUnit === 3 || flowRateMaxForUnit(effectiveMaxFlowRate, flowUnit) >= 0.01
+}
+
+function clampFlowRate(ch: ChannelConfig) {
+  ch.flowRate = Math.min(Math.max(ch.flowRate, 0.01), flowRateMax(ch))
+}
+
 function onTubeModelChange(ch: ChannelConfig) {
-  ch.maxFlowRate = getMaxFlowRate(ch.tubeModel)
-  if (ch.flowRate > ch.maxFlowRate) {
-    ch.flowRate = ch.maxFlowRate
+  if (!isFlowUnitAvailable(ch, ch.flowUnit)) {
+    ch.flowUnit = [1, 0, 2].find(unit => isFlowUnitAvailable(ch, unit)) ?? 3
   }
+  clampFlowRate(ch)
 }
 </script>
 

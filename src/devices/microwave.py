@@ -265,63 +265,102 @@ class MicrowaveDevice(BaseDevice):
 
     def configure_manual(self, segments: Iterable[MicrowaveSegment]) -> bool:
         """Write manual-power segment parameters."""
-        for segment in self._coerce_segments(segments):
-            if not self._validate_segment(segment, include_manual_power=True):
+        with self._lock:
+            writes: List[tuple[int, List[int]]] = []
+            try:
+                for segment in self._coerce_segments(segments):
+                    if not self._validate_segment(segment, include_manual_power=True):
+                        return False
+                    segment_number = int(segment.segment)
+                    params = [
+                        self._register_value(segment.heating_temperature),
+                        self._register_value(segment.heating_power_percent),
+                        self._register_value(segment.holding_temperature),
+                        self._register_value(segment.holding_power_percent),
+                        self._register_value(segment.holding_deviation),
+                    ]
+                    hold_time = [
+                        self._register_value(segment.hours),
+                        self._register_value(segment.minutes),
+                        self._register_value(segment.seconds),
+                    ]
+                    writes.extend(
+                        [
+                            (manual_segment_start(segment_number), params),
+                            (manual_hold_time_start(segment_number), hold_time),
+                        ]
+                    )
+            except (TypeError, ValueError, OverflowError) as exc:
+                self._logger.error(f"Invalid microwave manual configuration: {exc}")
                 return False
-            params = [
-                self._register_value(segment.heating_temperature),
-                self._register_value(segment.heating_power_percent),
-                self._register_value(segment.holding_temperature),
-                self._register_value(segment.holding_power_percent),
-                self._register_value(segment.holding_deviation),
-            ]
-            hold_time = [int(segment.hours), int(segment.minutes), int(segment.seconds)]
-            if not self._write_registers(manual_segment_start(segment.segment), params):
-                return False
-            if not self._write_registers(manual_hold_time_start(segment.segment), hold_time):
-                return False
-        return True
+
+            for start_address, values in writes:
+                if not self._write_registers(start_address, values):
+                    return False
+            return True
 
     def configure_auto_power(self, segments: Iterable[MicrowaveSegment]) -> bool:
         """Write auto-power segment parameters."""
-        for segment in self._coerce_segments(segments):
-            if not self._validate_segment(segment):
+        with self._lock:
+            writes: List[tuple[int, List[int]]] = []
+            try:
+                for segment in self._coerce_segments(segments):
+                    if not self._validate_segment(segment):
+                        return False
+                    target_temperature = self._temperature_value(
+                        segment.target_temperature, segment.heating_temperature
+                    )
+                    params = [
+                        self._register_value(target_temperature),
+                        self._register_value(segment.holding_temperature),
+                        self._register_value(segment.hours),
+                        self._register_value(segment.minutes),
+                        self._register_value(segment.seconds),
+                    ]
+                    writes.append(
+                        (auto_power_segment_start(int(segment.segment)), params)
+                    )
+            except (TypeError, ValueError, OverflowError) as exc:
+                self._logger.error(f"Invalid microwave auto-power configuration: {exc}")
                 return False
-            target_temperature = self._temperature_value(
-                segment.target_temperature, segment.heating_temperature
-            )
-            params = [
-                self._register_value(target_temperature),
-                self._register_value(segment.holding_temperature),
-                int(segment.hours),
-                int(segment.minutes),
-                int(segment.seconds),
-            ]
-            if not self._write_registers(auto_power_segment_start(segment.segment), params):
-                return False
-        return True
+
+            for start_address, values in writes:
+                if not self._write_registers(start_address, values):
+                    return False
+            return True
 
     def configure_constant_rate(self, segments: Iterable[MicrowaveSegment]) -> bool:
         """Write constant-rate segment parameters."""
-        for segment in self._coerce_segments(segments):
-            if not self._validate_segment(segment, include_ramp_time=True):
+        with self._lock:
+            writes: List[tuple[int, List[int]]] = []
+            try:
+                for segment in self._coerce_segments(segments):
+                    if not self._validate_segment(segment, include_ramp_time=True):
+                        return False
+                    target_temperature = self._temperature_value(
+                        segment.target_temperature, segment.heating_temperature
+                    )
+                    params = [
+                        self._register_value(segment.ramp_hours),
+                        self._register_value(segment.ramp_minutes),
+                        self._register_value(segment.ramp_seconds),
+                        self._register_value(target_temperature),
+                        self._register_value(segment.hours),
+                        self._register_value(segment.minutes),
+                        self._register_value(segment.seconds),
+                        self._register_value(segment.holding_temperature),
+                    ]
+                    writes.append(
+                        (constant_rate_segment_start(int(segment.segment)), params)
+                    )
+            except (TypeError, ValueError, OverflowError) as exc:
+                self._logger.error(f"Invalid microwave constant-rate configuration: {exc}")
                 return False
-            target_temperature = self._temperature_value(
-                segment.target_temperature, segment.heating_temperature
-            )
-            params = [
-                int(segment.ramp_hours),
-                int(segment.ramp_minutes),
-                int(segment.ramp_seconds),
-                self._register_value(target_temperature),
-                int(segment.hours),
-                int(segment.minutes),
-                int(segment.seconds),
-                self._register_value(segment.holding_temperature),
-            ]
-            if not self._write_registers(constant_rate_segment_start(segment.segment), params):
-                return False
-        return True
+
+            for start_address, values in writes:
+                if not self._write_registers(start_address, values):
+                    return False
+            return True
 
     def start(self, mode: MicrowaveMode | str) -> bool:
         """Write the explicit mode bit and start bit to the control word."""
@@ -421,6 +460,10 @@ class MicrowaveDevice(BaseDevice):
                 coerced.append(MicrowaveSegment(**segment))
             else:
                 raise TypeError(f"Unsupported microwave segment: {type(segment).__name__}")
+        if not 1 <= len(coerced) <= MAX_SEGMENTS:
+            raise ValueError(
+                f"Microwave configuration requires 1-{MAX_SEGMENTS} segments"
+            )
         return coerced
 
     def _validate_segment(

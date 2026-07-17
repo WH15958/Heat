@@ -7,6 +7,11 @@ steps:
     params:
       device_id: heater1
       temperature: 80.0
+
+  - id: start_heater
+    type: heater.start
+    params:
+      device_id: heater1
     wait:
       type: temperature_reached
       device_id: heater1
@@ -39,7 +44,7 @@ steps:
       channel: 2
       flow_rate: 10.0
       mode: TIME_QUANTITY
-      run_time: 1
+      run_time: 2
       time_unit: 1
       dispense_volume: 20.0
       volume_unit: 1
@@ -49,7 +54,7 @@ steps:
       type: pump_complete
       device_id: pump1
       channel: 2
-      timeout: 120
+      timeout: 180
 
   - id: hold_reaction
     type: wait

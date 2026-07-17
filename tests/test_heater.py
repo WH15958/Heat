@@ -152,23 +152,6 @@ def test_csv_data_logger():
     print("[OK] CSV数据记录测试通过")
 
 
-def test_alarm_rule():
-    """测试报警规则"""
-    print("\n=== 测试报警规则 ===")
-    
-    threshold = 300.0
-    
-    assert 350.0 > threshold, "温度350应触发报警"
-    assert not (250.0 > threshold), "温度250不应触发报警"
-    
-    print(f"报警规则: high_temp")
-    print(f"条件: pv > {threshold}")
-    print(f"测试350: {'触发' if 350.0 > threshold else '未触发'}")
-    print(f"测试250: {'触发' if 250.0 > threshold else '未触发'}")
-    
-    print("[OK] 报警规则测试通过")
-
-
 def test_statistics():
     """测试统计计算"""
     print("\n=== 测试统计计算 ===")
@@ -229,7 +212,6 @@ def run_all_tests():
         test_parameter_codes,
         test_device_config,
         test_csv_data_logger,
-        test_alarm_rule,
         test_statistics,
         test_config_manager,
     ]

@@ -1,3 +1,4 @@
+import math
 import yaml
 from pathlib import Path
 from typing import List
@@ -10,6 +11,20 @@ from src.experiment.actions import (
 )
 
 EXPERIMENTS_DIR = Path("experiments")
+
+
+def _validate_nonnegative_finite_number(value, field_name: str, step_id: str):
+    invalid = isinstance(value, bool) or not isinstance(value, (int, float))
+    if not invalid:
+        try:
+            invalid = not math.isfinite(value) or value < 0
+        except (TypeError, ValueError, OverflowError):
+            invalid = True
+    if invalid:
+        raise ValueError(
+            f"Invalid {field_name} for step {step_id}: expected a finite number >= 0"
+        )
+    return value
 
 
 def _validate_filename(filename: str) -> Path:
@@ -90,37 +105,66 @@ def parse_experiment(filepath: str) -> dict:
 
     steps = []
     step_ids = set()
+    pump_repeat_counts = {}
     for s in data.get("steps", []):
         if not isinstance(s, dict):
             raise ValueError("Invalid experiment step: expected object")
+        step_label = s.get("id", "<unknown>")
         wait_data = s.get("wait", {})
         if not isinstance(wait_data, dict):
             raise ValueError(
-                f"Invalid wait definition for step {s.get('id', '<unknown>')}: expected object"
+                f"Invalid wait definition for step {step_label}: expected object"
             )
         wait_type_name = wait_data.get("type", "none")
         if wait_type_name not in WAIT_MAP:
             raise ValueError(f"Unknown wait type: {wait_type_name}")
         params = s.get("params", {})
         if not isinstance(params, dict):
-            raise ValueError(f"Invalid params for step {s.get('id', '<unknown>')}: expected object")
+            raise ValueError(f"Invalid params for step {step_label}: expected object")
         enabled = s.get("enabled", True)
         if not isinstance(enabled, bool):
-            raise ValueError(f"Invalid enabled value for step {s.get('id', '<unknown>')}: expected bool")
+            raise ValueError(f"Invalid enabled value for step {step_label}: expected bool")
+        seconds = _validate_nonnegative_finite_number(
+            wait_data.get("seconds", 0), "wait.seconds", step_label
+        )
+        timeout = _validate_nonnegative_finite_number(
+            wait_data.get("timeout", 3600), "wait.timeout", step_label
+        )
+        tolerance = wait_data.get("tolerance", 1.0)
+        target_temperature = wait_data.get(
+            "target_temperature", wait_data.get("temperature")
+        )
+        if wait_type_name in {
+            "temperature_reached",
+            "microwave_temperature_reached",
+        }:
+            tolerance = _validate_nonnegative_finite_number(
+                tolerance, "wait.tolerance", step_label
+            )
+        if wait_type_name == "microwave_temperature_reached":
+            target_temperature = _validate_nonnegative_finite_number(
+                target_temperature, "wait.target_temperature", step_label
+            )
         wait = WaitCondition(
             type=WAIT_MAP[wait_type_name],
-            seconds=wait_data.get("seconds", 0),
+            seconds=seconds,
             device_id=wait_data.get("device_id", ""),
-            tolerance=wait_data.get("tolerance", 1.0),
-            timeout=wait_data.get("timeout", 3600),
+            tolerance=tolerance,
+            timeout=timeout,
             channel=wait_data.get("channel", 0),
-            target_temperature=wait_data.get(
-                "target_temperature", wait_data.get("temperature")
-            ),
+            target_temperature=target_temperature,
         )
         action_type = ACTION_MAP.get(s.get("type", ""))
         if action_type is None:
             raise ValueError(f"Unknown action type: {s.get('type')}")
+
+        if action_type == ActionType.PUMP_START and wait.type == WaitType.PUMP_COMPLETE:
+            repeat_count = params.get("repeat_count", 1)
+            if isinstance(repeat_count, bool) or repeat_count != 1:
+                raise ValueError(
+                    f"Invalid repeat_count for step {step_label}: "
+                    "pump_complete requires a single run (repeat_count=1)"
+                )
 
         step_id = s.get("id")
         if not isinstance(step_id, str) or not step_id.strip():
@@ -132,6 +176,35 @@ def parse_experiment(filepath: str) -> dict:
         on_error = s.get("on_error", "stop")
         if on_error not in {"stop", "skip"}:
             raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
+
+        if enabled:
+            if action_type == ActionType.PUMP_START:
+                pump_key = (params.get("device_id"), params.get("channel"))
+                if None not in pump_key:
+                    pump_repeat_counts[pump_key] = params.get("repeat_count", 1)
+            elif action_type == ActionType.PUMP_STOP:
+                device_id = params.get("device_id")
+                pump_repeat_counts = {
+                    key: repeat_count
+                    for key, repeat_count in pump_repeat_counts.items()
+                    if key[0] != device_id
+                }
+            elif action_type == ActionType.PUMP_STOP_CHANNEL:
+                pump_repeat_counts.pop(
+                    (params.get("device_id"), params.get("channel")), None
+                )
+            elif action_type == ActionType.EMERGENCY_STOP:
+                pump_repeat_counts.clear()
+
+            if wait.type == WaitType.PUMP_COMPLETE:
+                repeat_count = pump_repeat_counts.get(
+                    (wait.device_id, wait.channel), 1
+                )
+                if isinstance(repeat_count, bool) or repeat_count != 1:
+                    raise ValueError(
+                        f"Invalid repeat_count for step {step_label}: "
+                        "pump_complete requires a single run (repeat_count=1)"
+                    )
 
         step = ExperimentStep(
             id=step_id,
@@ -164,7 +237,11 @@ def list_experiments(directory: str = "experiments") -> List[dict]:
     if not exp_dir.exists():
         return []
     results = []
-    for f in sorted(exp_dir.glob("*.yaml")):
+    experiment_files = (
+        f for f in exp_dir.iterdir()
+        if f.is_file() and f.suffix in {".yaml", ".yml"}
+    )
+    for f in sorted(experiment_files):
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)

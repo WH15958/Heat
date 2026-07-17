@@ -53,16 +53,19 @@
             </div>
             <div v-for="(ch, chId) in pump.channels" :key="chId" class="channel-row">
               <span class="channel-label">通道 {{ chId }}</span>
-              <el-tag :type="ch.running ? 'success' : 'info'" size="small">
+              <el-tag v-if="ch.read_ok === false" type="danger" size="small">
+                读取失败
+              </el-tag>
+              <el-tag v-else :type="ch.running ? 'success' : 'info'" size="small">
                 {{ ch.running ? '运行中' : '停止' }}
               </el-tag>
-              <span v-if="ch.running" class="channel-detail">
+              <span v-if="ch.read_ok !== false && ch.running" class="channel-detail">
                 {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} {{ flowUnitLabel(ch.flow_unit) }}
               </span>
-              <span v-if="ch.running && ch.volume > 0" class="channel-detail">
+              <span v-if="ch.read_ok !== false && ch.running && ch.volume > 0" class="channel-detail">
                 已泵 {{ ch.volume?.toFixed(1) ?? '0.0' }} mL
               </span>
-              <span v-if="ch.running && ch.direction" class="channel-detail">
+              <span v-if="ch.read_ok !== false && ch.running && ch.direction" class="channel-detail">
                 {{ ch.direction === 'CLOCKWISE' ? '顺时针' : '逆时针' }}
               </span>
             </div>
@@ -208,7 +211,6 @@ interface PumpSeriesData {
   channels: Record<string, [number, number][]>
 }
 const pumpDataMap: Record<string, PumpSeriesData> = {}
-const channelFlowUnitMap: Record<string, string> = {}
 
 const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 
@@ -269,6 +271,13 @@ const FLOW_UNIT_LABELS: Record<string, string> = {
 
 function flowUnitLabel(unit: string | undefined): string {
   return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
+}
+
+function flowRateToMlMin(flowRate: number, unit: string | undefined): number | null {
+  if (unit === 'UL_MIN') return flowRate / 1000
+  if (unit === 'ML_MIN') return flowRate
+  if (unit === 'L_MIN') return flowRate * 1000
+  return null
 }
 
 function microwaveModeLabel(mode: string | undefined, currentModeCode?: number): string {
@@ -360,7 +369,7 @@ function initCharts() {
         legend: { data: [], top: 0 },
         grid: { left: 60, right: 20, top: 30, bottom: 30 },
         xAxis: { type: 'time' },
-        yAxis: { type: 'value', name: '流量' },
+        yAxis: { type: 'value', name: '流量(mL/min)' },
         series: [],
       })
     }
@@ -472,15 +481,16 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       if (!pump.channels) continue
       if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
       for (const [chId, chData] of Object.entries(pump.channels)) {
+        if (chData.read_ok === false) continue
         if (!pumpDataMap[pumpId].channels[chId]) pumpDataMap[pumpId].channels[chId] = []
         const flowRate = chData.running ? chData.flow_rate : 0
         if (typeof flowRate !== 'number') continue
-        pumpDataMap[pumpId].channels[chId].push([now, flowRate])
+        const flowRateMlMin = chData.running
+          ? flowRateToMlMin(flowRate, chData.flow_unit)
+          : 0
+        if (flowRateMlMin === null) continue
+        pumpDataMap[pumpId].channels[chId].push([now, flowRateMlMin])
         pumpDataMap[pumpId].channels[chId] = pumpDataMap[pumpId].channels[chId].slice(-maxPoints)
-        const unitKey = `${pumpId}_CH${chId}`
-        if (chData.flow_unit) {
-          channelFlowUnitMap[unitKey] = chData.flow_unit
-        }
       }
     }
 
@@ -505,12 +515,8 @@ watch(realtimeData, (newData: RealtimeData | null) => {
       }
     }
     if (flowSeries.length > 0) {
-      const units = new Set(Object.values(channelFlowUnitMap))
-      const yAxisName = units.size === 1
-        ? `流量(${flowUnitLabel([...units][0])})`
-        : '流量'
       flowChart.setOption(
-        { legend: { data: flowLegend }, yAxis: { name: yAxisName }, series: flowSeries },
+        { legend: { data: flowLegend }, series: flowSeries },
         { replaceMerge: ['series'] }
       )
     }

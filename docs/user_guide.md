@@ -10,6 +10,8 @@
 - 想启动系统：看“系统启动”
 - 想操作页面：看“页面与操作”
 - 想编写实验：先看本文，再看 [experiment_yaml_spec.md](experiment_yaml_spec.md)
+- 想搭建设备就位后的水/替代液 MVP：看 [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md)
+- 想做批次式人工闭环优化：看 [campaign_workflow.md](campaign_workflow.md)
 - 想排错：看 [troubleshooting.md](troubleshooting.md)
 
 ---
@@ -51,7 +53,10 @@ npm run build
 | 实时仪表盘 | `/` | 查看实时温度、泵状态、微波仪状态与推送数据 |
 | 设备控制 | `/control` | 连接设备、控制加热器、泵与微波仪 |
 | 实验页面 | `/experiment` | 选择 YAML 实验、启动、暂停、恢复、停止 |
+| 智能实验 | `/campaigns` | 管理 Campaign、Trial、人工推荐与离线表征结果 |
 | 历史记录 | `/history` | 查看实验历史记录和已保存日志 |
+
+智能实验页面使用 `/api/campaigns` 接口，完整人工闭环流程见 [campaign_workflow.md](campaign_workflow.md)。
 
 ### 2.2 设备连接
 
@@ -60,9 +65,11 @@ npm run build
 1. 找到目标设备
 2. 点击“连接”
 3. 连接成功后状态会更新
-4. 控制卡片会显示注册串口，例如加热器 `COM7`/`COM9`、蠕动泵 `COM10`、微波仪 `COM12`。
+4. 控制卡片会显示注册串口，例如加热器 `COM7`/`COM9`、蠕动泵 `COM10`；微波仪以当前 `system_config.yaml` 为准（本地当前为 `COM17`）。
 
 设备参数可以在连接前预填。写入、启动或停止按钮不再仅靠前端置灰来拦截；点击后会先做连接/状态检查，必要时弹出设备检查确认。未连接、后端返回 `False`、超时或状态异常都会显示为失败。
+
+点击“断开”时，后端会先取消尚未执行的启动请求并确认对应设备已停止；只有 stop 成功后才释放串口。如果 stop 返回 `False` 或抛出异常，系统会保留连接并报告断开失败，此时必须按现场 SOP 停机或使用物理急停，不能把“断开”当作急停手段。
 
 如果连接失败，优先检查：
 
@@ -92,6 +99,7 @@ npm run build
 如果你只需要会用，直接在页面里选模式、填参数即可。  
 如果你需要理解 YAML 字段和单位，请看 [experiment_yaml_spec.md](experiment_yaml_spec.md)。
 如果你要把蠕动泵接入前驱体管路、微波入口或长管路定量输运，请先按 [system_engineering_design.md](system_engineering_design.md) 做死体积、预灌和真实流量标定。
+如果你要从设备就位推进到水/替代液闭环 MVP，请按 [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md) 先完成设备确认、三层液路标定和运行记录。
 
 Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS232，也可能是设备支持的其他串口接法。界面里的 COM 口和驱动协议不等于强制要求现场一定使用 RS485。
 
@@ -99,9 +107,11 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 
 启动泵通道前，页面会提示确认串口、通道、模式、软管、流向、入口/出口、收集或废液容器和现场看护。停止操作仍应优先用于安全停机；如果泵设备返回失败，页面会明确显示失败。
 
+页面按实际单位显示泵流量；`TIME_QUANTITY` 会先把体积和时间换算为 `mL/min`。输入上限取所选管型额定上限与通道配置 `max_flow_rate` 的较小值；若换算后某单位没有满足协议最小值 `0.01` 的合法区间，该单位会被禁用。流量曲线统一换算为 `mL/min` 后绘制，RPM 或未知单位不会与体积流量混在同一坐标轴。某通道状态读取失败时会明确显示“读取失败”，该次缓存值不会继续画入曲线或写入实验传感器日志。
+
 ### 2.5 微波仪操作
 
-微波仪是高压、加热、微波输出设备，不能按普通加热器处理。当前页面支持连接、断开、刷新状态、配置参数、启动和停止；按 2026-06-20 用户确认，微波仪手动前端控制已像加热器/蠕动泵一样开放。页面会显示当前注册串口，例如 COM12；按钮可以点击，但未连接、状态读取失败、故障码非零、已有功率/电流输出、用户取消确认或设备返回失败时，不会显示为成功。
+微波仪是高压、加热、微波输出设备，不能按普通加热器处理。当前页面支持连接、断开、刷新状态、配置参数、启动和停止；按 2026-06-20 用户确认，微波仪手动前端控制已像加热器/蠕动泵一样开放。页面会显示当前注册串口（本地当前为 COM17）；按钮可以点击，但未连接、状态读取失败、故障码非零、已有功率/电流输出、用户取消确认或设备返回失败时，不会显示为成功。
 
 启动微波前，页面会要求二次确认。实验室人员必须人工确认：
 
@@ -194,7 +204,8 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 #### 停止
 
 - stop 会中断当前等待步骤
-- 实验会尽快结束为 `stopped`
+- 系统会停止本次实验曾尝试启动的加热器、泵通道和微波仪；全部停机确认成功后实验才结束为 `stopped`
+- 任一设备停机返回 `False`、timeout 或异常时，stop 接口返回失败，实验终态为 `failed`；此时必须现场确认并按 SOP 使用设备面板或物理急停，不能把页面请求结束当作设备已停
 - stop 是终止当前 run，不是临时挂起
 - 全局急停只有在所有已注册设备都实际收到并确认停止命令时才返回成功；未连接、跳过或没有注册设备都会显示失败，需要现场确认或使用物理急停
 
@@ -218,7 +229,7 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 - 等温未达到目标
 - 泵完成等待超时
 
-系统会把该步骤视为失败，而不是静默继续往后执行。
+系统会把该步骤视为失败，而不是静默继续往后执行。默认 `on_error: stop` 还会停止本实验曾尝试启动的设备；停机失败同样会保留为失败状态并要求现场处理。
 
 ### 4.3 浏览器刷新 / 关闭是否会影响设备
 
@@ -283,6 +294,12 @@ steps:
 
 - [experiment_yaml_spec.md](experiment_yaml_spec.md)
 
+设备就位后的低风险 MVP 基线文件是：
+
+- `experiments/mvp_water_loop_baseline.yaml`
+
+运行它之前必须完成 [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md) 中的设备确认、液路标定和微波人工确认。该 YAML 是水/替代液闭环验证，不是化学配方；任何 skipped、timeout 或 read_failed 都不算 MVP 通过。
+
 ---
 
 ## 6. 历史记录与日志
@@ -315,24 +332,22 @@ steps:
 
 ### 7.1 启动实验
 
-```bash
-curl -X POST http://localhost:8000/api/experiments/simple_heat_test.yaml/start ^
-  -H "Content-Type: application/json" ^
-  -d "{\"save_log\": true}"
+```powershell
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/start' -ContentType 'application/json' -Body '{"save_log": true}'
 ```
 
 ### 7.2 暂停 / 恢复 / 停止实验
 
-```bash
-curl -X POST http://localhost:8000/api/experiments/simple_heat_test.yaml/pause
-curl -X POST http://localhost:8000/api/experiments/simple_heat_test.yaml/resume
-curl -X POST http://localhost:8000/api/experiments/simple_heat_test.yaml/stop
+```powershell
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/pause'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/resume'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/stop'
 ```
 
 ### 7.3 查询实验进度
 
-```bash
-curl http://localhost:8000/api/experiments/simple_heat_test.yaml/progress
+```powershell
+Invoke-RestMethod -Method Get -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/progress'
 ```
 
 ---
@@ -384,6 +399,8 @@ stop 会尽快中断等待并结束实验，而不是等完整等待时间走完
 ## 9. 去哪继续看
 
 - YAML 规范： [experiment_yaml_spec.md](experiment_yaml_spec.md)
+- 设备就位 MVP 运行手册： [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md)
+- Campaign 工作流： [campaign_workflow.md](campaign_workflow.md)
 - 微波实机 smoke test： [microwave_smoke_test.md](microwave_smoke_test.md)
 - 故障排查： [troubleshooting.md](troubleshooting.md)
 - 开发维护： [developer_guide.md](developer_guide.md)

@@ -17,13 +17,16 @@ _engines: dict = {}
 
 def _get_active_engine():
     for fname, engine in _engines.items():
-        if engine.state.value in ("running", "paused"):
+        if engine.state.value in ("running", "paused") or getattr(
+            engine, "cleanup_pending", False
+        ):
             return fname, engine
     return None, None
 
 
-def _cleanup_engine(filename: str):
-    if filename in _engines:
+def _cleanup_engine(filename: str, expected_engine=None):
+    engine = _engines.get(filename)
+    if engine is not None and (expected_engine is None or engine is expected_engine):
         del _engines[filename]
         logger.info(f"Cleaned up engine for: {filename}")
 
@@ -75,7 +78,10 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
 
     for fname in list(_engines.keys()):
         engine = _engines[fname]
-        if engine.state.value in ("completed", "failed", "stopped"):
+        if (
+            engine.state.value in ("completed", "failed", "stopped")
+            and not getattr(engine, "cleanup_pending", False)
+        ):
             _cleanup_engine(fname)
 
     active_fname, active_engine = _get_active_engine()
@@ -127,7 +133,7 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
             pass
 
     def on_complete():
-        _cleanup_engine(filename)
+        _cleanup_engine(filename, engine)
 
     engine.on_progress(on_progress)
     engine.on_complete(on_complete)
@@ -136,7 +142,7 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
     try:
         await engine.start()
     except Exception as e:
-        _cleanup_engine(filename)
+        _cleanup_engine(filename, engine)
         logger.error(f"Failed to start experiment {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start experiment: {e}")
     return {
@@ -171,8 +177,8 @@ async def stop_experiment(filename: str):
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
-    await engine.stop()
-    return {"success": True}
+    success = await engine.stop()
+    return {"success": success}
 
 
 @router.get("/{filename}/progress")

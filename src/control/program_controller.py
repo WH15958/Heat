@@ -134,6 +134,14 @@ class ProgramController:
         self._stop_event = asyncio.Event()
         self._pause_event = asyncio.Event()
         self._pause_event.set()
+        self._paused_at_monotonic: Optional[float] = None
+        self._total_paused_duration = 0.0
+        self._heater_started = False
+        self._pump_channels_started = set()
+        self._explicit_stop_requested = False
+        self._automatic_cleanup_attempted = False
+        self._automatic_cleanup_result: Optional[bool] = None
+        self._device_stop_task: Optional[asyncio.Task] = None
         self._callbacks: Dict[str, List[Callable]] = {
             'on_step_start': [],
             'on_step_complete': [],
@@ -203,6 +211,10 @@ class ProgramController:
             self._logger.error("No program loaded")
             return False
 
+        if self._device_stop_task is not None and not self._device_stop_task.done():
+            self._logger.warning("Program start blocked while stop is in progress")
+            return False
+
         if self._status.running:
             self._logger.warning("Program already running")
             return False
@@ -215,8 +227,26 @@ class ProgramController:
                 pass
             self._task = None
 
+        if self._automatic_cleanup_result is False:
+            self._automatic_cleanup_attempted = False
+            self._automatic_cleanup_result = None
+            if not await self._cleanup_started_devices_once():
+                self._logger.error(
+                    "Program start blocked because prior device cleanup still fails"
+                )
+                return False
+
+        if self._device_stop_task is not None and not self._device_stop_task.done():
+            self._logger.warning("Program start blocked while stop is in progress")
+            return False
+
         self._stop_event.clear()
         self._pause_event.set()
+        self._paused_at_monotonic = None
+        self._total_paused_duration = 0.0
+        self._explicit_stop_requested = False
+        self._automatic_cleanup_attempted = False
+        self._automatic_cleanup_result = None
         self._status.running = True
         self._status.paused = False
         self._status.completed = False
@@ -230,7 +260,14 @@ class ProgramController:
         return True
 
     async def stop(self) -> bool:
+        """Stop the program and wait for device cleanup to finish."""
+        if self._device_stop_task is None or self._device_stop_task.done():
+            self._device_stop_task = asyncio.create_task(self._stop_impl())
+        return await asyncio.shield(self._device_stop_task)
+
+    async def _stop_impl(self) -> bool:
         """停止程序"""
+        self._explicit_stop_requested = True
         self._stop_event.set()
         self._pause_event.set()
 
@@ -248,9 +285,34 @@ class ProgramController:
         loop = asyncio.get_event_loop()
         success = True
         if self._pump is not None:
-            success = bool(await loop.run_in_executor(None, self._pump.stop_all)) and success
+            try:
+                pump_stopped = bool(
+                    await loop.run_in_executor(None, self._pump.stop_all)
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to stop program pump: {e}")
+                pump_stopped = False
+            if pump_stopped:
+                self._pump_channels_started.clear()
+            success = pump_stopped and success
         if self._heater is not None:
-            success = bool(await loop.run_in_executor(None, self._heater.stop)) and success
+            try:
+                heater_stopped = bool(
+                    await loop.run_in_executor(None, self._heater.stop)
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to stop program heater: {e}")
+                heater_stopped = False
+            if heater_stopped:
+                self._heater_started = False
+            success = heater_stopped and success
+
+        if success:
+            self._automatic_cleanup_attempted = False
+            self._automatic_cleanup_result = None
+        else:
+            self._automatic_cleanup_attempted = True
+            self._automatic_cleanup_result = False
 
         if success:
             self._logger.info("Program stopped")
@@ -260,12 +322,17 @@ class ProgramController:
 
     async def pause(self):
         """暂停程序执行"""
-        self._pause_event.clear()
+        if self._pause_event.is_set():
+            self._paused_at_monotonic = time.monotonic()
+            self._pause_event.clear()
         self._status.paused = True
         self._logger.info("Program paused")
 
     async def resume(self):
         """恢复程序执行"""
+        if not self._pause_event.is_set() and self._paused_at_monotonic is not None:
+            self._total_paused_duration += time.monotonic() - self._paused_at_monotonic
+            self._paused_at_monotonic = None
         self._pause_event.set()
         self._status.paused = False
         self._logger.info("Program resumed")
@@ -281,7 +348,8 @@ class ProgramController:
                     break
 
                 if self._status.current_step >= len(self._program.steps):
-                    self._complete_program()
+                    if await self._cleanup_started_devices_once():
+                        self._complete_program()
                     break
 
                 step = self._program.steps[self._status.current_step]
@@ -292,7 +360,10 @@ class ProgramController:
                     self._logger.error(self._status.error)
                     break
 
-                self._status.current_step += 1
+                if step.step_type == StepType.END:
+                    self._status.current_step = len(self._program.steps)
+                else:
+                    self._status.current_step += 1
 
         except asyncio.CancelledError:
             pass
@@ -301,6 +372,8 @@ class ProgramController:
             self._logger.error(f"Program error: {e}")
             self._trigger_callbacks('on_error', e)
         finally:
+            if not self._explicit_stop_requested:
+                await self._cleanup_started_devices_once()
             self._status.running = False
             self._task = None
 
@@ -358,6 +431,7 @@ class ProgramController:
         loop = asyncio.get_event_loop()
         if not await loop.run_in_executor(None, self._heater.set_temperature, step.temperature):
             return False
+        self._heater_started = True
         if not await loop.run_in_executor(None, self._heater.start):
             return False
 
@@ -375,13 +449,14 @@ class ProgramController:
         return not self._stop_event.is_set()
 
     async def _execute_hold(self, step: ProgramStep) -> bool:
-        start_time = time.time()
+        start_time = time.monotonic()
+        paused_at_start = self._total_paused_duration
 
         while not self._stop_event.is_set():
             if self._program_timed_out():
                 return False
             await self._pause_event.wait()
-            elapsed = time.time() - start_time
+            elapsed = self._active_step_elapsed(start_time, paused_at_start)
             self._status.elapsed_time = elapsed
             self._status.remaining_time = max(0, step.hold_time - elapsed)
 
@@ -401,6 +476,7 @@ class ProgramController:
         loop = asyncio.get_event_loop()
         if not await loop.run_in_executor(None, self._heater.stop):
             return False
+        self._heater_started = False
 
         if step.trigger == TriggerType.TEMPERATURE_REACHED:
             tolerance = step.trigger_value if step.trigger_value > 0 else 5.0
@@ -428,6 +504,7 @@ class ProgramController:
 
         if not await loop.run_in_executor(None, self._pump.set_direction, step.pump_channel, step.pump_direction):
             return False
+        self._pump_channels_started.add(step.pump_channel)
         if not await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel):
             return False
 
@@ -440,7 +517,12 @@ class ProgramController:
             return False
 
         loop = asyncio.get_event_loop()
-        return bool(await loop.run_in_executor(None, self._pump.stop_channel, step.pump_channel))
+        stopped = bool(
+            await loop.run_in_executor(None, self._pump.stop_channel, step.pump_channel)
+        )
+        if stopped:
+            self._pump_channels_started.discard(step.pump_channel)
+        return stopped
 
     async def _execute_pump_dispense(self, step: ProgramStep) -> bool:
         """执行定量分装步骤"""
@@ -456,6 +538,7 @@ class ProgramController:
             return False
         if not await loop.run_in_executor(None, self._pump.set_flow_rate, step.pump_channel, step.pump_flow_rate):
             return False
+        self._pump_channels_started.add(step.pump_channel)
         if not await loop.run_in_executor(None, self._pump.start_channel, step.pump_channel):
             return False
 
@@ -475,13 +558,14 @@ class ProgramController:
         return not self._stop_event.is_set()
 
     async def _execute_wait(self, step: ProgramStep) -> bool:
-        start_time = time.time()
+        start_time = time.monotonic()
+        paused_at_start = self._total_paused_duration
 
         while not self._stop_event.is_set():
             if self._program_timed_out():
                 return False
             await self._pause_event.wait()
-            elapsed = time.time() - start_time
+            elapsed = self._active_step_elapsed(start_time, paused_at_start)
             self._status.elapsed_time = elapsed
             self._status.remaining_time = max(0, step.wait_time - elapsed)
 
@@ -507,14 +591,61 @@ class ProgramController:
 
     async def _execute_end(self, step: ProgramStep) -> bool:
         """执行结束步骤"""
-        loop = asyncio.get_event_loop()
-        success = True
-        if self._pump is not None:
-            success = bool(await loop.run_in_executor(None, self._pump.stop_all)) and success
-        if self._heater is not None:
-            success = bool(await loop.run_in_executor(None, self._heater.stop)) and success
+        return await self._cleanup_started_devices_once()
 
+    async def _cleanup_started_devices_once(self) -> bool:
+        if self._automatic_cleanup_attempted:
+            return bool(self._automatic_cleanup_result)
+
+        self._automatic_cleanup_attempted = True
+        loop = asyncio.get_running_loop()
+        success = True
+
+        for channel in sorted(self._pump_channels_started):
+            try:
+                stopped = self._pump is not None and bool(
+                    await loop.run_in_executor(None, self._pump.stop_channel, channel)
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to stop program pump channel {channel}: {e}")
+                stopped = False
+            if stopped:
+                self._pump_channels_started.discard(channel)
+            else:
+                success = False
+
+        if self._heater_started:
+            try:
+                stopped = self._heater is not None and bool(
+                    await loop.run_in_executor(None, self._heater.stop)
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to stop program heater: {e}")
+                stopped = False
+            if stopped:
+                self._heater_started = False
+            else:
+                success = False
+
+        self._automatic_cleanup_result = success
+        if not success:
+            cleanup_error = "Failed to stop one or more devices started by program"
+            if self._status.error:
+                if cleanup_error not in self._status.error:
+                    self._status.error = f"{self._status.error}; {cleanup_error}"
+            else:
+                self._status.error = cleanup_error
+            self._status.completed = False
+            self._logger.error(cleanup_error)
         return success
+
+    def _active_step_elapsed(
+        self, started_at_monotonic: float, paused_duration_at_start: float
+    ) -> float:
+        paused_duration = self._total_paused_duration - paused_duration_at_start
+        if self._paused_at_monotonic is not None:
+            paused_duration += time.monotonic() - self._paused_at_monotonic
+        return max(0.0, time.monotonic() - started_at_monotonic - paused_duration)
 
     def _program_timed_out(self) -> bool:
         if self._program is None or self._started_at_monotonic is None:

@@ -13,6 +13,11 @@ steps:
     params:
       device_id: heater1
       temperature: 140.0
+
+  - id: start_heater
+    type: heater.start
+    params:
+      device_id: heater1
     wait:
       type: temperature_reached
       device_id: heater1

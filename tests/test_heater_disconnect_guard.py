@@ -12,7 +12,7 @@ class _ClosedProtocol:
     is_open = False
 
 
-def run_test():
+def test_heater_disconnect_guard():
     config = HeaterConfig(
         device_id="heater_guard",
         connection_params={
@@ -38,4 +38,4 @@ def run_test():
 
 
 if __name__ == "__main__":
-    run_test()
+    test_heater_disconnect_guard()

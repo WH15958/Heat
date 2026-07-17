@@ -17,10 +17,10 @@
 
 任何准备合并的改动，至少完成以下软件层检查：
 
-```bash
+```powershell
 python tests\test_metadata.py
 python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"
-cd frontend && npm run build
+npm --prefix frontend run build
 ```
 
 检查目标：
@@ -54,6 +54,14 @@ cd frontend && npm run build
 - 加热器连接、设温、停止
 - 泵连接、单通道启动、停止
 - 一个最小 YAML 实验启动与停止
+
+`tests/test_hardware.py` 是实验室手工脚本，不参与 pytest 收集。它会写入温度设定值并执行真实启动/停止，只有现场条件已确认时才可显式运行：
+
+```powershell
+python tests\test_hardware.py --port COMx --confirm-hardware-write
+```
+
+未提供 `--confirm-hardware-write` 时脚本会拒绝执行；任一检查失败时退出码为 1。
 
 ---
 

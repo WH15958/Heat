@@ -96,14 +96,14 @@ microwaves:
   - device_id: "microwave1"
     name: "MKM-AH1E微波合成仪"
     connection:
-      port: "COM12"
+      port: "COM17"
       baudrate: 9600
       address: 1
       parity: "N"
       timeout: 2.0
       binding:
         mode: "fingerprint"
-        serial_number: "BG047ZQIA"
+        serial_number: "DU0ENS4UA"
     slave_address: 1
     max_temperature: 300.0
     max_power_percent: 100

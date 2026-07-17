@@ -13,7 +13,6 @@ import sys
 import time
 import json
 import atexit
-import signal
 import threading
 import tempfile
 from pathlib import Path
@@ -438,17 +437,7 @@ class SerialPortManager:
         """注册清理函数"""
         if not self._cleanup_registered:
             atexit.register(self.cleanup)
-            try:
-                signal.signal(signal.SIGTERM, self._signal_handler)
-            except (OSError, ValueError):
-                pass
             self._cleanup_registered = True
-    
-    def _signal_handler(self, signum, frame):
-        """信号处理器"""
-        logger.info(f"Received signal {signum}, cleaning up...")
-        self.cleanup()
-        os._exit(0)
     
     def acquire_port(self, port: str, force: bool = False) -> bool:
         """

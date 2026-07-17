@@ -56,7 +56,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, watch } from 'vue'
-import { devicesApi, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type MicrowaveSegmentPayload, type PumpMode } from '../api/devices'
+import { devicesApi, FLOW_UNITS, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type MicrowaveSegmentPayload, type PumpMode } from '../api/devices'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket, type MicrowaveRealtimeData } from '../composables/useWebSocket'
 import HeaterControl from '../components/HeaterControl.vue'
@@ -177,9 +177,64 @@ function isMicrowaveMode(value: unknown): value is MicrowaveMode {
   return value === 'manual_power' || value === 'auto_power' || value === 'constant_rate'
 }
 
-function getMaxFlowRate(tubeModel: number): number {
-  const found = TUBE_MODELS.find(t => t.value === tubeModel)
-  return found ? found.maxFlow : 7.55
+function isPumpMode(value: unknown): value is PumpMode {
+  return value === 'FLOW_MODE' || value === 'TIME_QUANTITY' || value === 'TIME_SPEED' || value === 'QUANTITY_SPEED'
+}
+
+function isPumpDirection(value: unknown): value is 'CW' | 'CCW' {
+  return value === 'CW' || value === 'CCW'
+}
+
+function isFlowUnit(value: unknown): value is number {
+  return value === 0 || value === 1 || value === 2 || value === 3
+}
+
+function isTimeUnit(value: unknown): value is number {
+  return value === 0 || value === 1 || value === 2
+}
+
+function isVolumeUnit(value: unknown): value is number {
+  return value === 0 || value === 1 || value === 2
+}
+
+function isTubeModel(value: unknown): value is number {
+  return typeof value === 'number' && TUBE_MODELS.some(model => model.value === value)
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function configuredChannelFlowRateMax(
+  channel: ChannelConfig,
+  flowUnit = channel.flowUnit,
+): number {
+  if (flowUnit === 3) return 150
+  const tube = TUBE_MODELS.find(model => model.value === channel.tubeModel)
+  const tubeMaxFlowRate = tube ? tube.maxFlow : channel.maxFlowRate
+  const maxMlMin = Math.min(channel.maxFlowRate, tubeMaxFlowRate)
+  const convertedMax = flowUnit === 0
+    ? maxMlMin * 1000
+    : flowUnit === 2
+      ? maxMlMin / 1000
+      : maxMlMin
+  return Math.min(convertedMax, 9999)
+}
+
+function normalizeChannelFlow(channel: ChannelConfig) {
+  if (
+    channel.flowUnit !== 3
+    && configuredChannelFlowRateMax(channel) < 0.01
+  ) {
+    channel.flowUnit = [1, 0, 2].find(
+      unit => configuredChannelFlowRateMax(channel, unit) >= 0.01,
+    ) ?? 3
+  }
+  const flowRate = Number.isFinite(channel.flowRate) ? channel.flowRate : 0.01
+  channel.flowRate = Math.min(
+    Math.max(flowRate, 0.01),
+    configuredChannelFlowRateMax(channel),
+  )
 }
 
 function saveParams() {
@@ -228,20 +283,20 @@ function restoreParams() {
         const channel = devices.pumps[pumpId].channels[Number(ch)]
         if (!channel) continue
         if (cfg.flowRate !== undefined) channel.flowRate = cfg.flowRate
-        if (cfg.direction !== undefined) channel.direction = cfg.direction
-        if (cfg.mode !== undefined) channel.mode = cfg.mode
+        if (isPumpDirection(cfg.direction)) channel.direction = cfg.direction
+        if (isPumpMode(cfg.mode)) channel.mode = cfg.mode
         if (cfg.runTime !== undefined) channel.runTime = cfg.runTime
-        if (cfg.timeUnit !== undefined) channel.timeUnit = cfg.timeUnit
+        if (isTimeUnit(cfg.timeUnit)) channel.timeUnit = cfg.timeUnit
         if (cfg.dispenseVolume !== undefined) channel.dispenseVolume = cfg.dispenseVolume
-        if (cfg.volumeUnit !== undefined) channel.volumeUnit = cfg.volumeUnit
+        if (isVolumeUnit(cfg.volumeUnit)) channel.volumeUnit = cfg.volumeUnit
         if (cfg.repeatCount !== undefined) channel.repeatCount = cfg.repeatCount
         if (cfg.intervalTime !== undefined) channel.intervalTime = cfg.intervalTime
-        if (cfg.intervalTimeUnit !== undefined) channel.intervalTimeUnit = cfg.intervalTimeUnit
-        if (cfg.tubeModel !== undefined) {
+        if (isTimeUnit(cfg.intervalTimeUnit)) channel.intervalTimeUnit = cfg.intervalTimeUnit
+        if (isTubeModel(cfg.tubeModel)) {
           channel.tubeModel = cfg.tubeModel
-          channel.maxFlowRate = getMaxFlowRate(cfg.tubeModel)
         }
-        if (cfg.flowUnit !== undefined) channel.flowUnit = cfg.flowUnit
+        if (isFlowUnit(cfg.flowUnit)) channel.flowUnit = cfg.flowUnit
+        normalizeChannelFlow(channel)
       }
     }
     for (const [heaterId, heater] of Object.entries(params)) {
@@ -273,7 +328,11 @@ function restoreParams() {
   }
 }
 
-watch(devices, saveParams, { deep: true })
+let paramsRestored = false
+
+watch(devices, () => {
+  if (paramsRestored) saveParams()
+}, { deep: true })
 
 function hasUnresolvedBinding(data: any): boolean {
   const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}]
@@ -295,15 +354,29 @@ function applyDeviceData(data: any) {
     devices.heaters[id].bindingError = (info as any).binding_error ?? null
   }
   for (const [id, info] of Object.entries(data.pumps || {})) {
-    if (!devices.pumps[id]) {
+    const isNewPump = !devices.pumps[id]
+    if (isNewPump) {
       devices.pumps[id] = { connected: false, loading: false, stoppingAll: false, channels: createPumpChannels(), bindingResolved: true }
     }
-    devices.pumps[id].connected = (info as any).connected
-    devices.pumps[id].connectionPort = (info as any).connection_port
-    devices.pumps[id].bindingMode = (info as any).connection_binding_mode
-    devices.pumps[id].bindingLabel = (info as any).binding_label
-    devices.pumps[id].bindingResolved = (info as any).binding_resolved !== false
-    devices.pumps[id].bindingError = (info as any).binding_error ?? null
+    const pumpInfo = info as any
+    devices.pumps[id].connected = pumpInfo.connected
+    devices.pumps[id].connectionPort = pumpInfo.connection_port
+    devices.pumps[id].bindingMode = pumpInfo.connection_binding_mode
+    devices.pumps[id].bindingLabel = pumpInfo.binding_label
+    devices.pumps[id].bindingResolved = pumpInfo.binding_resolved !== false
+    devices.pumps[id].bindingError = pumpInfo.binding_error ?? null
+    for (const [channelId, configuredChannel] of Object.entries(pumpInfo.channels || {})) {
+      const channel = devices.pumps[id].channels[Number(channelId)]
+      if (!channel) continue
+      const channelInfo = configuredChannel as any
+      if (isNewPump && isTubeModel(channelInfo.tube_model)) {
+        channel.tubeModel = channelInfo.tube_model
+      }
+      if (isPositiveFiniteNumber(channelInfo.max_flow_rate)) {
+        channel.maxFlowRate = channelInfo.max_flow_rate
+      }
+      normalizeChannelFlow(channel)
+    }
   }
   for (const [id, info] of Object.entries(data.microwaves || {})) {
     if (!devices.microwaves[id]) {
@@ -344,6 +417,10 @@ async function refreshDevices(refreshUnresolvedBindings = true) {
     const res = await devicesApi.list()
     const data = res.data
     applyDeviceData(data)
+    if (!paramsRestored) {
+      restoreParams()
+      paramsRestored = true
+    }
     if (refreshUnresolvedBindings && hasUnresolvedBinding(data)) {
       const refreshed = await devicesApi.refreshBindings()
       applyDeviceData(refreshed.data)
@@ -354,7 +431,7 @@ async function refreshDevices(refreshUnresolvedBindings = true) {
 }
 
 onMounted(() => {
-  refreshDevices().then(restoreParams)
+  void refreshDevices()
 })
 
 function heaterConnectionPort(id: string): string {
@@ -408,12 +485,17 @@ function directionLabel(direction: string): string {
   return direction === 'CCW' ? '逆时针' : '顺时针'
 }
 
+function flowUnitLabel(unit: number): string {
+  return FLOW_UNITS.find(item => item.value === unit)?.label || '未知单位'
+}
+
 async function confirmPumpStart(pumpId: string, channel: number, effectiveFlowRate: number): Promise<boolean> {
   const ch = devices.pumps[pumpId].channels[channel]
+  const effectiveFlowUnit = ch.mode === 'TIME_QUANTITY' ? 1 : ch.flowUnit
   try {
     await ElMessageBox.confirm(
       '即将启动蠕动泵 ' + pumpId + '（串口 ' + pumpConnectionPort(pumpId) + '）通道 ' + channel + '。\n' +
-      '模式：' + pumpModeLabel(ch.mode) + '；方向：' + directionLabel(ch.direction) + '；软管：' + tubeModelLabel(ch.tubeModel) + '；流量：' + effectiveFlowRate.toFixed(3) + ' mL/min。\n' +
+      '模式：' + pumpModeLabel(ch.mode) + '；方向：' + directionLabel(ch.direction) + '；软管：' + tubeModelLabel(ch.tubeModel) + '；流量：' + effectiveFlowRate.toFixed(3) + ' ' + flowUnitLabel(effectiveFlowUnit) + '。\n' +
       '请确认管路、夹管、入口/出口、废液或收集容器、流向和现场看护都已检查完毕。',
       '蠕动泵 ' + pumpId + ' 通道 ' + channel + ' 启动前检查',
       {
@@ -596,7 +678,8 @@ async function startPumpChannel(pumpId: string, channel: number) {
       return
     }
     const modeLabel = PUMP_MODES.find(m => m.value === ch.mode)?.label || ch.mode
-    ElMessage.success(`通道 ${channel} 已启动 [${modeLabel}]，流量 ${effectiveFlowRate.toFixed(2)} mL/min`)
+    const effectiveFlowUnit = ch.mode === 'TIME_QUANTITY' ? 1 : ch.flowUnit
+    ElMessage.success(`通道 ${channel} 已启动 [${modeLabel}]，流量 ${effectiveFlowRate.toFixed(2)} ${flowUnitLabel(effectiveFlowUnit)}`)
   } catch (e: any) {
     ElMessage.error(`通道 ${channel} 启动失败: ${e.response?.data?.detail || e.message}`)
   } finally {
@@ -626,21 +709,26 @@ async function stopPumpChannel(pumpId: string, channel: number) {
 async function stopPumpAll(pumpId: string) {
   const pump = devices.pumps[pumpId]
   if (!ensureConnected(pump.connected, '蠕动泵 ' + pumpId, pumpConnectionPort(pumpId))) return
-  pump.stoppingAll = true
   try {
     await ElMessageBox.confirm('确定要停止所有通道吗？', '确认', {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
       type: 'warning',
     })
+  } catch {
+    return
+  }
+
+  pump.stoppingAll = true
+  try {
     const res = await devicesApi.stopPump(pumpId)
     if (!res.data.success) {
       ElMessage.error('停止所有通道失败: 泵设备返回失败')
       return
     }
     ElMessage.info('所有通道已停止')
-  } catch {
-    // 用户取消
+  } catch (e: any) {
+    ElMessage.error(`停止所有通道失败: ${e.response?.data?.detail || e.message}`)
   } finally {
     pump.stoppingAll = false
   }
@@ -925,7 +1013,17 @@ function needsDispenseVolume(mode: PumpMode): boolean {
 
 function calcFlowRate(ch: ChannelConfig): number {
   if (ch.mode === 'TIME_QUANTITY' && ch.runTime > 0) {
-    return ch.dispenseVolume / (ch.runTime / 60)
+    const volumeMl = ch.volumeUnit === 0
+      ? ch.dispenseVolume / 1000
+      : ch.volumeUnit === 2
+        ? ch.dispenseVolume * 1000
+        : ch.dispenseVolume
+    const timeMinutes = ch.timeUnit === 0
+      ? ch.runTime / 60
+      : ch.timeUnit === 2
+        ? ch.runTime * 60
+        : ch.runTime
+    return volumeMl / timeMinutes
   }
   return ch.flowRate
 }

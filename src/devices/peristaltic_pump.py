@@ -431,10 +431,11 @@ class LabSmartPumpDevice(BaseDevice):
                 if not self._protocol.write_single_register(
                     self._get_slave_address(), unit_addr, int(unit_val)
                 ):
-                    if unit_known and current_unit[0] != int(unit_val):
-                        logger.error(f"_write_float_with_unit: unit write failed addr={unit_addr} val={unit_val}, current={current_unit[0]}, abort float write")
-                        return False
-                    logger.warning(f"_write_float_with_unit: unit write failed addr={unit_addr} val={unit_val}, unit unknown, trying float anyway")
+                    logger.error(
+                        f"_write_float_with_unit: unit write failed addr={unit_addr} "
+                        f"val={unit_val}, current={current_unit}, abort float write"
+                    )
+                    return False
                 else:
                     time.sleep(0.1)
             float_bytes = struct.pack('>f', float_val)

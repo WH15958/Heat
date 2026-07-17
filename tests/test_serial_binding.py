@@ -132,6 +132,29 @@ def test_resolve_vid_pid_location_unique_match():
     assert result.resolved_port == "COM11"
 
 
+def test_current_microwave_config_resolves_new_usb_rs485_adapter():
+    config = ConfigManager().load()
+    microwave = config.get_microwave_config("microwave1")
+    assert microwave is not None
+    assert microwave.connection.port == "COM17"
+    assert microwave.connection.binding.serial_number == "DU0ENS4UA"
+
+    with patch("src.utils.serial_binding.enumerate_serial_ports", return_value=[
+        SerialPortInfo(
+            port="COM17",
+            serial_number="DU0ENS4UA",
+            vid=0x0403,
+            pid=0x6015,
+            description="USB Serial Port",
+        ),
+    ]):
+        result = resolve_connection(microwave.connection)
+
+    assert result.binding_resolved is True
+    assert result.resolved_port == "COM17"
+    assert result.binding_error is None
+
+
 def test_resolve_no_match():
     conn = _make_connection(
         port="COM7",
@@ -270,6 +293,7 @@ def run_all():
         test_resolve_fixed_port_unique_match,
         test_resolve_fixed_port_missing_is_unresolved,
         test_resolve_vid_pid_location_unique_match,
+        test_current_microwave_config_resolves_new_usb_rs485_adapter,
         test_resolve_no_match,
         test_resolve_multiple_matches,
         test_resolve_fallback_to_port,

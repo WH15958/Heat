@@ -61,14 +61,19 @@
 
 ## 3. steps 结构
 
-每个步骤的标准结构：
+每个步骤的标准结构。以下示例先写入设定温度，再启动加热并等待达到设定值：
 
 ```yaml
-- id: unique_step_id
+- id: set_temp
   type: heater.set_temperature
   params:
     device_id: heater1
     temperature: 80.0
+
+- id: start_and_wait
+  type: heater.start
+  params:
+    device_id: heater1
   wait:
     type: temperature_reached
     device_id: heater1
@@ -77,6 +82,8 @@
   enabled: true
   on_error: stop
 ```
+
+`heater.set_temperature` 只写入设定值，不会自动启动加热器。使用 `temperature_reached` 前必须先执行 `heater.start`，并在流程末尾显式执行 `heater.stop`。
 
 ### 3.1 步骤字段
 
@@ -105,6 +112,7 @@
 
 - 当前代码默认值是 `stop`
 - 只允许 `stop` 和 `skip`；其他值会在实验启动前被拒绝
+- `stop` 会尝试停止本实验曾启动或尝试启动的加热器、泵通道和微波仪；只有全部停机确认成功，用户 stop 才会落到 `stopped`，停机失败会落到 `failed`
 - `wait.type` 同样必须是本文等待表中的已知值，拼写错误不会降级为 `none`
 - 步骤 `id` 必须是非空字符串且在同一 YAML 内唯一；`params`、`wait` 必须是对象，`enabled` 必须是布尔值
 
@@ -115,6 +123,8 @@
 ### 4.1 `heater.set_temperature`
 
 用途：设置加热器目标温度。
+
+该动作不会启动加热输出；需要加热时，后续步骤必须显式使用 `heater.start`。
 
 参数：
 
@@ -162,7 +172,7 @@
 | `flow_rate` | 否 | 流速 |
 | `direction` | 否 | `CW` 或 `CCW`，默认 `CW` |
 | `mode` | 否 | 运行模式，默认 `FLOW_MODE` |
-| `tube_model` | 否 | 软管型号 |
+| `tube_model` | 否 | 软管型号，当前协议编号 `0-13` |
 | `flow_unit` | 否 | 流速单位，常用 `1`(mL/min) |
 
 软管型号不是自由文本。LabSmart 泵头/软管编号表见 [device_materials/多通道蠕动泵MODBUS通信协议.md](device_materials/多通道蠕动泵MODBUS通信协议.md) 的“表 1：泵头 & 软管编号”。当前工程常见泵头型号为 `5`，对应软管型号示例包括 `11 = 1.52×0.86`、`13 = 2.79×0.86`。YAML 中的 `tube_model` 必须与现场实际安装泵管和泵屏幕/读回值一致；如果日志出现 written/readback 不一致，先按实验室确认值修正配置或 YAML，再做定量实验。
@@ -186,8 +196,14 @@
 
 规则：
 
+- `direction` 和 `mode` 必须使用表中精确枚举，拼写错误会拒绝启动，不会降级到默认值
+- `flow_rate` 的协议范围为 `0.01-9999`；单位为 RPM 时上限进一步收紧为 `150`
+- `TIME_QUANTITY` 使用体积/时间推导流量，`flow_rate` 必须与换算结果一致且必须使用体积流量单位；推导值也受通道 `max_flow_rate` 限制
+- `TIME_QUANTITY` 必须同时提供正数 `run_time` 和 `dispense_volume`；`TIME_SPEED` 必须提供正数 `run_time`；`QUANTITY_SPEED` 必须提供正数 `dispense_volume`
 - `repeat_count != 1` 时，`interval_time` 必须大于 0
+- 非流量模式未写 `repeat_count` 时按单次（`1`）执行；重复或无限模式不能搭配 `pump_complete`，无论等待写在同一个 `pump.start` 步骤还是后续独立 `wait` 步骤，都应改用有界 `duration` 后显式 stop
 - 缺失单位时系统会补默认值，但建议显式写出
+- 启动前会先确认通道已停、写入并读回 `tube_model`，再按 `config/system_config.yaml` 的通道 `max_flow_rate` 校验换算后的 mL/min；任一步失败都不会继续发送 start
 
 ### 4.5 `pump.stop`
 
@@ -238,7 +254,7 @@
 | 参数 | 必填 | 说明 |
 |------|------|------|
 | `device_id` | 是 | 微波仪 ID |
-| `segments` | 是 | 段参数列表，段号范围 1-5 |
+| `segments` | 是 | 1-5 个段参数；段号范围 1-5，空列表或超过 5 段会在写入前被拒绝 |
 
 手动功率段字段：
 
@@ -417,6 +433,8 @@
 
 ## 5. 等待类型
 
+等待中的 `seconds`、`timeout`、`tolerance` 以及微波目标温度必须是有限且不小于 0 的数值；布尔值、字符串、`NaN` 和正负无穷会在启动前被拒绝，避免无限容差把未达到目标误报为完成。
+
 ### 5.1 `none`
 
 默认值，不等待。
@@ -523,6 +541,19 @@ steps:
     params:
       device_id: heater1
       temperature: 50.0
+
+  - id: start_short_heat
+    type: heater.start
+    params:
+      device_id: heater1
+    wait:
+      type: duration
+      seconds: 5
+
+  - id: stop_heater
+    type: heater.stop
+    params:
+      device_id: heater1
 ```
 
 ---
@@ -545,11 +576,21 @@ steps:
     params:
       device_id: heater1
       temperature: 140.0
+
+  - id: start_and_wait
+    type: heater.start
+    params:
+      device_id: heater1
     wait:
       type: temperature_reached
       device_id: heater1
       tolerance: 1.0
       timeout: 600
+
+  - id: stop_heater
+    type: heater.stop
+    params:
+      device_id: heater1
 ```
 
 ---

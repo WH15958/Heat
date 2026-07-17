@@ -262,6 +262,7 @@ class ControlMode(IntEnum):
 
 class RunStatus(IntEnum):
     """运行状态枚举"""
+    UNKNOWN = -1
     RUN = 0
     STOP = 1
     HOLD = 2

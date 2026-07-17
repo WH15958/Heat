@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 import logging
+import math
 import threading
 import time
 
@@ -49,7 +50,7 @@ class HeaterData(DeviceData):
     sv: float = 0.0
     mv: int = 0
     alarm_status: int = 0
-    run_status: RunStatus = RunStatus.STOP
+    run_status: RunStatus = RunStatus.UNKNOWN
     control_mode: ControlMode = ControlMode.APID
     is_manual: bool = False
     is_auto_tuning: bool = False
@@ -298,7 +299,7 @@ class AIHeaterDevice(BaseDevice):
                     decimal_places=self._decimal_places
                 )
                 
-                run_status_val = 0
+                run_status_val = None
                 is_manual = False
                 is_auto_tuning = False
                 
@@ -355,12 +356,12 @@ class AIHeaterDevice(BaseDevice):
         return alarms
     
     @staticmethod
-    def _safe_run_status(value: int) -> RunStatus:
-        """安全转换RunStatus枚举，越界返回STOP"""
+    def _safe_run_status(value: Optional[int]) -> RunStatus:
+        """安全转换RunStatus枚举，读取失败或越界返回UNKNOWN"""
         try:
             return RunStatus(value)
-        except (ValueError, KeyError):
-            return RunStatus.STOP
+        except (TypeError, ValueError, KeyError):
+            return RunStatus.UNKNOWN
     
     def write_command(self, command: str, value: Any) -> bool:
         """
@@ -452,6 +453,12 @@ class AIHeaterDevice(BaseDevice):
                 return False
     
     def set_temperature(self, temperature: float) -> bool:
+        if (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature)
+        ):
+            raise ValueError(f"Temperature must be a finite number: {temperature!r}")
         if temperature > self._heater_config.max_temperature:
             raise ValueError(
                 f"Temperature {temperature} exceeds configured maximum "

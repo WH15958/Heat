@@ -219,7 +219,7 @@ async def data_push_loop(app):
             try:
                 from src.web.api.experiments import _engines
                 for filename, engine in list(_engines.items()):
-                    if engine.state.value == "running" and engine.exp_logger and engine.exp_logger.active_run:
+                    if engine.state.value in ("running", "paused") and engine.exp_logger and engine.exp_logger.active_run:
                         engine.exp_logger.record_sensor_data(payload)
             except Exception as e:
                 logger.warning(f"Sensor data recording failed: {e}")

@@ -23,6 +23,7 @@ export interface PumpChannelData {
   volume: number
   direction: string | null
   flow_unit: string
+  read_ok?: boolean
 }
 
 export interface PumpRealtimeData {
@@ -105,6 +106,7 @@ function connect() {
   ws.onmessage = (event) => {
     try {
       const parsed = JSON.parse(event.data)
+      if (parsed?.type !== 'realtime') return
       sharedData.value = {
         ...parsed,
         heaters: parsed.heaters ?? {},

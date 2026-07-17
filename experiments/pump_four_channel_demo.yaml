@@ -37,9 +37,7 @@ steps:
       time_unit: 1
       dispense_volume: 10.0
       volume_unit: 1
-      repeat_count: 3
-      interval_time: 2.0
-      interval_time_unit: 0
+      repeat_count: 1
       tube_model: 13
       flow_unit: 1
     wait:
@@ -51,7 +49,7 @@ steps:
   - id: log_ch2_done
     type: log
     params:
-      message: "CH2 定时定量模式完成：1分钟内分装10mL，重复3次间隔2秒"
+      message: "CH2 定时定量模式完成：1分钟内单次分装10mL"
 
   - id: ch3_time_speed
     type: pump.start
@@ -91,9 +89,7 @@ steps:
       mode: QUANTITY_SPEED
       dispense_volume: 15.0
       volume_unit: 1
-      repeat_count: 0
-      interval_time: 10.0
-      interval_time_unit: 0
+      repeat_count: 1
       tube_model: 13
       flow_unit: 1
     wait:
@@ -105,7 +101,7 @@ steps:
   - id: log_ch4_done
     type: log
     params:
-      message: "CH4 定量定速模式完成：6.0 mL/min 分装15mL，无限重复间隔10秒"
+      message: "CH4 定量定速模式完成：6.0 mL/min 单次分装15mL"
 
   - id: stop_all
     type: pump.stop

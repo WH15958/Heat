@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -97,6 +97,7 @@ def create_device_manager() -> DeviceManager:
                     "pump_head": ch.pump_head,
                     "tube_model": ch.tube_model,
                     "suck_back_angle": ch.suck_back_angle,
+                    "max_flow_rate": ch.max_flow_rate,
                 }
                 for ch in p_cfg.channels
             ]
@@ -110,8 +111,8 @@ def create_device_manager() -> DeviceManager:
             poll_interval=p_cfg.poll_interval,
             retry_count=p_cfg.retry_count,
             retry_delay=p_cfg.retry_delay,
-            stopbits=p_cfg.stopbits,
-            bytesize=p_cfg.bytesize,
+            stopbits=p_cfg.connection.stopbits,
+            bytesize=p_cfg.connection.bytesize,
             channels=channels,
             binding_info=binding_info,
         )
@@ -160,7 +161,8 @@ async def lifespan(app: FastAPI):
         await push_task
     except asyncio.CancelledError:
         pass
-    app.state.device_manager.cleanup()
+    if not app.state.device_manager.cleanup():
+        logger.error("One or more devices failed to stop or disconnect during shutdown")
 
 
 app = FastAPI(
@@ -212,10 +214,19 @@ if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
         Returns:
             FileResponse: index.html文件
         """
-        file_path = STATIC_DIR / path
+        if path == "api" or path.startswith("api/") or path == "ws" or path.startswith("ws/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        static_root = STATIC_DIR.resolve()
+        file_path = (static_root / path).resolve()
+        try:
+            file_path.relative_to(static_root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not Found")
+
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
-        return FileResponse(str(STATIC_DIR / "index.html"))
+        return FileResponse(str(static_root / "index.html"))
 
     @app.get("/")
     async def index():

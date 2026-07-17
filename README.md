@@ -16,6 +16,8 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 - 协议：AIBUS、MODBUS RTU
 - 实验定义：YAML
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
+- Web 页面：`/`、`/control`、`/experiment`、`/campaigns`、`/history`
+- API 前缀：设备 `/api`、实验 `/api/experiments`、Campaign `/api/campaigns`
 
 ## 适用人群
 
@@ -31,16 +33,16 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 推荐使用 Conda：
 
-```bash
+```powershell
 conda env create -f environment.yml
 conda activate heat
 ```
 
 也可以使用 `pip`：
 
-```bash
+```powershell
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
@@ -77,6 +79,8 @@ python run_server.py
 ### 面向使用者
 
 - [docs/user_guide.md](docs/user_guide.md)：系统启动、页面使用、实验执行、行为语义、常见问题
+- [docs/mvp_device_ready_runbook.md](docs/mvp_device_ready_runbook.md)：设备就位后的水/替代液闭环 MVP 运行手册、标定表和记录模板
+- [docs/campaign_workflow.md](docs/campaign_workflow.md)：批次式人工闭环优化、Trial 与离线表征录入流程
 - [docs/system_engineering_design.md](docs/system_engineering_design.md)：前驱体加热、蠕动泵、管路、微波入口、收集与标定的工程连接层设计
 - [docs/device_materials/](docs/device_materials/)：设备说明书、通信协议原始资料和转换版资料
 - [docs/experiment_yaml_spec.md](docs/experiment_yaml_spec.md)：实验 YAML 规范与示例
@@ -92,18 +96,20 @@ python run_server.py
 
 - 加热器连接、温度设定、启动和停止
 - 蠕动泵 1-4 通道控制，支持四种运行模式
+- 微波仪连接、状态读取、参数配置、启动和停止
 - Web 实时仪表盘与控制面板
+- Campaign、Trial、人工 recommendation 与离线表征记录
 - 单实验运行保护、暂停、恢复、停止
 - 实验日志保存开关、历史记录查询与删除
 - metadata 到 `sample_id` 到 `samples.csv` 的样品追踪链路
 
 ## 最小开发 / 测试命令
 
-```bash
+```powershell
 python tests\test_metadata.py
 python tests\test_code_review_fixes.py
 python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"
-cd frontend && npm run build
+npm --prefix frontend run build
 ```
 
 ## 重要约束

@@ -124,6 +124,8 @@ class ExperimentLogger:
             if pid not in self._active_run.sensor_data["pumps"]:
                 self._active_run.sensor_data["pumps"][pid] = {}
             for chid, chdata in pdata["channels"].items():
+                if chdata.get("read_ok") is False:
+                    continue
                 if chid not in self._active_run.sensor_data["pumps"][pid]:
                     self._active_run.sensor_data["pumps"][pid][chid] = {
                         "flow_rate": [],
@@ -363,7 +365,7 @@ def get_experiment_run(run_id: str) -> Optional[dict]:
     if not LOGS_DIR.exists():
         return None
     for filepath in LOGS_DIR.glob("*.json"):
-        if filepath.name.startswith(run_id + "_"):
+        if _run_id_from_log_path(filepath) == run_id:
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
                     return json.load(f)
@@ -376,7 +378,7 @@ def delete_experiment_run(run_id: str) -> bool:
     if not LOGS_DIR.exists():
         return False
     for filepath in LOGS_DIR.glob("*.json"):
-        if filepath.name.startswith(run_id + "_"):
+        if _run_id_from_log_path(filepath) == run_id:
             try:
                 filepath.unlink(missing_ok=True)
                 logger.info(f"Experiment log deleted: {filepath}")

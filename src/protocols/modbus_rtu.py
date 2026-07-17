@@ -294,6 +294,24 @@ class ModbusRTUProtocol:
         calculated_crc = self.calculate_crc(data)
         
         return received_crc == calculated_crc
+
+    @staticmethod
+    def _exception_name(exception_code: int) -> str:
+        """Return a stable label even when a device sends a vendor-specific code."""
+        try:
+            return ModbusException(exception_code).name
+        except ValueError:
+            return f"UNKNOWN_EXCEPTION_0x{exception_code:02X}"
+
+    @staticmethod
+    def _matches_response_header(
+        response: bytes,
+        slave_address: int,
+        function_code: ModbusFunction,
+    ) -> bool:
+        if len(response) < 2 or response[0] != slave_address:
+            return False
+        return response[1] in (int(function_code), int(function_code) | 0x80)
     
     def read_holding_registers(
         self,
@@ -335,19 +353,45 @@ class ModbusRTUProtocol:
             logger.warning(f"MODBUS CRC failed: slave={slave_address}, addr={start_address}")
             return None
 
+        if not self._matches_response_header(
+            response, slave_address, ModbusFunction.READ_HOLDING_REGISTERS
+        ):
+            logger.warning(
+                "MODBUS read response header mismatch: slave=%s function=%s response=%s",
+                slave_address,
+                int(ModbusFunction.READ_HOLDING_REGISTERS),
+                response.hex(),
+            )
+            return None
+
         func_code = response[1]
         if func_code >= 0x80:
+            if len(response) != 5:
+                logger.warning("MODBUS read exception frame has invalid length: %s", len(response))
+                return None
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.warning(f"Read: slave device busy, will need retry")
                 return None
             if exception_code == ModbusException.ILLEGAL_DATA_ADDRESS:
-                logger.info(f"Read: {ModbusException(exception_code).name} (ignored)")
+                logger.info(f"Read: {self._exception_name(exception_code)} (ignored)")
                 return None
-            logger.error(f"Read: {ModbusException(exception_code).name}")
+            logger.error(f"Read: {self._exception_name(exception_code)}")
             return None
 
         byte_count = response[2]
+        if (
+            len(response) != expected_length
+            or byte_count != count * 2
+            or len(response) != byte_count + 5
+        ):
+            logger.warning(
+                "MODBUS read response length mismatch: expected=%s byte_count=%s actual=%s",
+                expected_length,
+                byte_count,
+                len(response),
+            )
+            return None
         data = response[3:3 + byte_count]
 
         values = []
@@ -397,13 +441,31 @@ class ModbusRTUProtocol:
             logger.warning(f"Write: CRC failed")
             return False
 
+        if not self._matches_response_header(
+            response, slave_address, ModbusFunction.WRITE_SINGLE_REGISTER
+        ):
+            logger.warning("WriteSingle: response header mismatch response=%s", response.hex())
+            return False
+
         func_code = response[1]
         if func_code >= 0x80:
+            if len(response) != 5:
+                logger.warning("WriteSingle: exception frame has invalid length: %s", len(response))
+                return False
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.warning(f"Write: slave device busy, write may not have succeeded")
                 return False
-            logger.warning(f"Write: {ModbusException(exception_code).name}")
+            logger.warning(f"Write: {self._exception_name(exception_code)}")
+            return False
+
+
+        if len(response) != 8 or response[:-2] != frame:
+            logger.warning(
+                "WriteSingle: response echo mismatch expected=%s response=%s",
+                frame.hex(),
+                response[:-2].hex(),
+            )
             return False
 
         return True
@@ -453,13 +515,31 @@ class ModbusRTUProtocol:
             logger.warning(f"WriteMultiple: CRC failed")
             return False
 
+        if not self._matches_response_header(
+            response, slave_address, ModbusFunction.WRITE_MULTIPLE_REGISTERS
+        ):
+            logger.warning("WriteMultiple: response header mismatch response=%s", response.hex())
+            return False
+
         func_code = response[1]
         if func_code >= 0x80:
+            if len(response) != 5:
+                logger.warning("WriteMultiple: exception frame has invalid length: %s", len(response))
+                return False
             exception_code = response[2]
             if exception_code == ModbusException.SLAVE_DEVICE_BUSY:
                 logger.warning(f"WriteMultiple: slave device busy, write may not have succeeded")
                 return False
-            logger.warning(f"WriteMultiple: {ModbusException(exception_code).name} addr={start_address} count={count} values={values}")
+            logger.warning(f"WriteMultiple: {self._exception_name(exception_code)} addr={start_address} count={count} values={values}")
+            return False
+
+        expected_echo = frame[:6]
+        if len(response) != 8 or response[:-2] != expected_echo:
+            logger.warning(
+                "WriteMultiple: response echo mismatch expected=%s response=%s",
+                expected_echo.hex(),
+                response[:-2].hex(),
+            )
             return False
 
         return True

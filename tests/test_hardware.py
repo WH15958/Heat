@@ -7,6 +7,8 @@
 2. 串口参数（波特率、地址等）配置正确
 """
 
+__test__ = False
+
 import sys
 import os
 
@@ -59,26 +61,36 @@ def test_serial_connection(port: str, baudrate: int = 9600, address: int = 0):
             print(f"[!] 无法读取型号: {e}")
         
         print("\n正在读取温度数据...")
+        reads_ok = True
         for i in range(5):
             try:
                 pv, sv, mv, alarm = protocol.read_pv_sv()
-                print(f"  [{i+1}] PV={pv/10:.1f}C, SV={sv/10:.1f}C, MV={mv}%, Alarm={alarm:02X}")
+                print(f"  [{i+1}] PV={pv:.1f}C, SV={sv:.1f}C, MV={mv}%, Alarm={alarm:02X}")
             except Exception as e:
+                reads_ok = False
                 print(f"  [{i+1}] 读取失败: {e}")
             time.sleep(0.5)
+
+        if not reads_ok:
+            print("\n[X] 状态读取不稳定，跳过真实写入")
+            return False
         
         print("\n测试温度设定...")
         try:
             test_sv = 50.0
             print(f"  设定温度为 {test_sv}C...")
-            protocol.write_parameter(ParameterCode.SV, int(test_sv * 10), decimal_places=0)
+            protocol.write_parameter(ParameterCode.SV, test_sv, decimal_places=1)
             print(f"  [OK] 设定成功")
             
             time.sleep(0.5)
             _, sv, _, _ = protocol.read_pv_sv()
-            print(f"  当前SV: {sv/10:.1f}C")
+            print(f"  当前SV: {sv:.1f}C")
+            if abs(sv - test_sv) > 0.1:
+                print(f"  [X] 设定值回读不一致: expected={test_sv:.1f}C, actual={sv:.1f}C")
+                return False
         except Exception as e:
             print(f"  [X] 设定失败: {e}")
+            return False
         
         print("\n[OK] 硬件连接测试完成")
         return True
@@ -126,10 +138,13 @@ def test_heater_device(port: str, baudrate: int = 9600, address: int = 0):
     )
     
     heater = AIHeaterDevice(config, info)
+    started = False
+    stopped = False
     
     try:
         print("正在连接设备...")
-        heater.connect()
+        if not heater.connect():
+            raise RuntimeError("设备连接返回 False")
         print(f"[OK] 设备已连接: {heater.model_name}\n")
         
         print("读取设备数据...")
@@ -140,7 +155,8 @@ def test_heater_device(port: str, baudrate: int = 9600, address: int = 0):
         print(f"  报警: {data.alarms if data.alarms else '无'}")
         
         print("\n测试温度设定...")
-        heater.set_temperature(60.0)
+        if not heater.set_temperature(60.0):
+            raise RuntimeError("温度设定返回 False")
         print("  [OK] 温度设定为60C")
         
         time.sleep(0.5)
@@ -148,12 +164,16 @@ def test_heater_device(port: str, baudrate: int = 9600, address: int = 0):
         print(f"  当前: PV={pv:.1f}C, SV={sv:.1f}C")
         
         print("\n测试运行控制...")
-        heater.start()
+        if not heater.start():
+            raise RuntimeError("设备启动返回 False")
+        started = True
         print("  [OK] 设备已启动")
         
         time.sleep(1)
         
-        heater.stop()
+        if not heater.stop():
+            raise RuntimeError("设备停止返回 False")
+        stopped = True
         print("  [OK] 设备已停止")
         
         print("\n[OK] 设备驱动测试完成")
@@ -166,6 +186,16 @@ def test_heater_device(port: str, baudrate: int = 9600, address: int = 0):
         return False
         
     finally:
+        if started and not stopped:
+            try:
+                stopped = bool(heater.stop())
+            except Exception as stop_error:
+                print(f"\n[X] 加热器停止重试异常: {stop_error}")
+            if not stopped:
+                print(
+                    "\n[CRITICAL] 无法确认加热器已停止：请立即执行物理急停或切断"
+                    "加热输出，并由现场人员确认设备已安全停止，禁止无人值守。"
+                )
         heater.disconnect()
 
 
@@ -187,12 +217,13 @@ def interactive_test():
     choice = input("请选择 (默认3): ").strip() or "3"
     
     if choice == "1":
-        test_serial_connection(port, baudrate, address)
+        return test_serial_connection(port, baudrate, address)
     elif choice == "2":
-        test_heater_device(port, baudrate, address)
+        return test_heater_device(port, baudrate, address)
     else:
-        test_serial_connection(port, baudrate, address)
-        test_heater_device(port, baudrate, address)
+        serial_ok = test_serial_connection(port, baudrate, address)
+        heater_ok = test_heater_device(port, baudrate, address)
+        return serial_ok and heater_ok
 
 
 if __name__ == "__main__":
@@ -203,11 +234,22 @@ if __name__ == "__main__":
     parser.add_argument("--baudrate", type=int, default=9600, help="波特率")
     parser.add_argument("--address", type=int, default=0, help="仪表地址")
     parser.add_argument("-i", "--interactive", action="store_true", help="交互模式")
+    parser.add_argument(
+        "--confirm-hardware-write",
+        action="store_true",
+        help="确认允许脚本写入设定值并执行真实加热器启动/停止",
+    )
     
     args = parser.parse_args()
+
+    if not args.confirm_hardware_write:
+        parser.error("真实硬件测试必须显式传入 --confirm-hardware-write")
     
     if args.interactive:
-        interactive_test()
+        success = interactive_test()
     else:
-        test_serial_connection(args.port, args.baudrate, args.address)
-        test_heater_device(args.port, args.baudrate, args.address)
+        serial_ok = test_serial_connection(args.port, args.baudrate, args.address)
+        heater_ok = test_heater_device(args.port, args.baudrate, args.address)
+        success = serial_ok and heater_ok
+
+    raise SystemExit(0 if success else 1)

@@ -1,0 +1,279 @@
+name: mvp_water_loop_baseline
+description: >
+  Device-ready MVP water/substitute-liquid loop baseline. This is not a
+  chemistry recipe. It verifies low-risk heater, pump, microwave, log, history,
+  and sample-tracking flow after lab safety checks and liquid-line calibration.
+
+metadata:
+  material_system: mvp_water_loop
+  batch_id: MVP_WATER_LOOP_20260709_B01
+  condition_id: water_loop_low_risk_v1
+  sample_index: 1
+  operator: lab
+  recipe_version: "2026-07-09"
+  safety_notes: >
+    Run only after confirming device identity, liquid lines, waste path,
+    microwave non-empty load, probe immersion, ventilation, grounding, and
+    on-site supervision. Any skipped, timeout, or read_failed event means this
+    MVP run is not accepted until reviewed.
+
+steps:
+  - id: mvp_precheck_notice
+    type: log
+    params:
+      message: "MVP water loop start: confirm COM ports, water/substitute liquid, waste path, microwave non-empty load, and on-site supervision."
+    on_error: stop
+
+  - id: operator_cancel_window
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 10
+    on_error: stop
+
+  - id: heater1_set_low_temperature
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 30.0
+    on_error: stop
+
+  - id: heater1_temperature_read_sanity
+    type: wait
+    params: {}
+    wait:
+      type: temperature_reached
+      device_id: heater1
+      tolerance: 20.0
+      timeout: 10
+    on_error: stop
+
+  - id: heater1_start_short
+    type: heater.start
+    params:
+      device_id: heater1
+    wait:
+      type: duration
+      seconds: 5
+    on_error: stop
+
+  - id: heater1_stop_after_short_run
+    type: heater.stop
+    params:
+      device_id: heater1
+    on_error: skip
+
+  - id: heater2_set_low_temperature
+    type: heater.set_temperature
+    params:
+      device_id: heater2
+      temperature: 30.0
+    on_error: stop
+
+  - id: heater2_temperature_read_sanity
+    type: wait
+    params: {}
+    wait:
+      type: temperature_reached
+      device_id: heater2
+      tolerance: 20.0
+      timeout: 10
+    on_error: stop
+
+  - id: heater2_start_short
+    type: heater.start
+    params:
+      device_id: heater2
+    wait:
+      type: duration
+      seconds: 5
+    on_error: stop
+
+  - id: heater2_stop_after_short_run
+    type: heater.stop
+    params:
+      device_id: heater2
+    on_error: skip
+
+  - id: line_a_prime_to_waste
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 1
+      flow_rate: 0.5
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 15
+    on_error: stop
+
+  - id: line_a_stop_after_prime
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 1
+    on_error: skip
+
+  - id: line_b_prime_to_waste
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 2
+      flow_rate: 0.5
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 15
+    on_error: stop
+
+  - id: line_b_stop_after_prime
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 2
+    on_error: skip
+
+  - id: clean_line_prime_to_waste
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 3
+      flow_rate: 0.5
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 15
+    on_error: stop
+
+  - id: clean_line_stop_after_prime
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 3
+    on_error: skip
+
+  - id: spare_line_short_check
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 4
+      flow_rate: 0.5
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    wait:
+      type: duration
+      seconds: 10
+    on_error: stop
+
+  - id: spare_line_stop_after_check
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 4
+    on_error: skip
+
+  - id: operator_confirm_microwave_ready
+    type: log
+    params:
+      message: "Before microwave start: confirm non-empty approved load, closed door, immersed probe, zero fault code, and attended operation."
+    on_error: stop
+
+  - id: microwave_config_auto_power_low_temperature
+    type: microwave.configure_auto_power
+    params:
+      device_id: microwave1
+      segments:
+        - segment: 1
+          target_temperature: 30
+          holding_temperature: 30
+          hours: 0
+          minutes: 0
+          seconds: 10
+    on_error: stop
+
+  - id: microwave_start_auto_power_short
+    type: microwave.start
+    params:
+      device_id: microwave1
+      mode: auto_power
+    on_error: skip
+
+  - id: microwave_wait_low_temperature
+    type: wait
+    params: {}
+    wait:
+      type: microwave_temperature_reached
+      device_id: microwave1
+      target_temperature: 30
+      tolerance: 10
+      timeout: 30
+    on_error: skip
+
+  - id: microwave_hold_short
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 5
+    on_error: skip
+
+  - id: microwave_stop_after_short_run
+    type: microwave.stop
+    params:
+      device_id: microwave1
+    on_error: skip
+
+  - id: pump_stop_all
+    type: pump.stop
+    params:
+      device_id: pump1
+    on_error: skip
+
+  - id: heater1_stop
+    type: heater.stop
+    params:
+      device_id: heater1
+    on_error: skip
+
+  - id: heater2_stop
+    type: heater.stop
+    params:
+      device_id: heater2
+    on_error: skip
+
+  - id: leave_heater1_safe_setpoint
+    type: heater.set_temperature
+    params:
+      device_id: heater1
+      temperature: 25.0
+    on_error: skip
+
+  - id: leave_heater2_safe_setpoint
+    type: heater.set_temperature
+    params:
+      device_id: heater2
+      temperature: 25.0
+    on_error: skip
+
+  - id: final_emergency_stop_all
+    type: emergency_stop
+    params: {}
+    on_error: stop
+
+  - id: mvp_water_loop_done
+    type: log
+    params:
+      message: "MVP water loop ended. Review history, samples.csv, skipped steps, device state, and lab run record before accepting this run."
+    on_error: stop

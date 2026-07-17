@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 
 from src.experiment.actions import (
@@ -12,6 +13,15 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _is_nonnegative_finite_number(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 class StepExecutor:
     """步骤执行器 - 执行单个实验步骤并等待条件满足"""
 
@@ -19,6 +29,10 @@ class StepExecutor:
         self._dm = device_manager
         self._should_stop = lambda: False
         self._is_paused = lambda: False
+        self._active_heaters = set()
+        self._active_pumps = set()
+        self._pump_repeat_counts = {}
+        self._active_microwaves = set()
 
     def set_stop_checker(self, checker):
         self._should_stop = checker
@@ -37,7 +51,10 @@ class StepExecutor:
         return time.monotonic() - paused_at
 
     async def _pause_aware_sleep(self, seconds):
-        remaining = max(float(seconds), 0.0)
+        if not _is_nonnegative_finite_number(seconds):
+            logger.error(f"Invalid sleep duration: {seconds}")
+            return None
+        remaining = float(seconds)
         paused_total = 0.0
         while remaining > 0:
             paused_duration = await self._wait_for_resume()
@@ -73,6 +90,7 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.HEATER_START:
+                self._active_heaters.add(step.params["device_id"])
                 result = await loop.run_in_executor(None, self._dm.start_heater, step.params["device_id"])
                 if not result:
                     logger.error(f"Step {step.id}: start_heater returned False")
@@ -83,6 +101,7 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: stop_heater returned False")
                     return False
+                self._active_heaters.discard(step.params["device_id"])
 
             elif step.type == ActionType.MICROWAVE_CONFIGURE_MANUAL:
                 segments = self._microwave_segments(step.params.get("segments", []))
@@ -121,6 +140,7 @@ class StepExecutor:
                     return False
 
             elif step.type == ActionType.MICROWAVE_START:
+                self._active_microwaves.add(step.params["device_id"])
                 result = await loop.run_in_executor(
                     None,
                     self._dm.start_microwave,
@@ -138,23 +158,38 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: stop_microwave returned False")
                     return False
+                self._active_microwaves.discard(step.params["device_id"])
 
             elif step.type == ActionType.PUMP_START:
                 from src.protocols.pump_params import PumpRunMode, PumpDirection
 
                 ch = step.params["channel"]
-                direction = PumpDirection.CLOCKWISE
-                if step.params.get("direction") == "CCW":
-                    direction = PumpDirection.COUNTER_CLOCKWISE
+                direction_map = {
+                    "CW": PumpDirection.CLOCKWISE,
+                    "CCW": PumpDirection.COUNTER_CLOCKWISE,
+                }
+                direction_name = step.params.get("direction", "CW")
+                if direction_name not in direction_map:
+                    logger.error(
+                        f"Step {step.id}: invalid pump direction={direction_name!r}; "
+                        "expected CW or CCW"
+                    )
+                    return False
+                direction = direction_map[direction_name]
                 mode_map = {
                     "FLOW_MODE": PumpRunMode.FLOW_MODE,
                     "TIME_QUANTITY": PumpRunMode.TIME_QUANTITY,
                     "TIME_SPEED": PumpRunMode.TIME_SPEED,
                     "QUANTITY_SPEED": PumpRunMode.QUANTITY_SPEED,
                 }
-                mode = mode_map.get(
-                    step.params.get("mode", "FLOW_MODE"), PumpRunMode.FLOW_MODE
-                )
+                mode_name = step.params.get("mode", "FLOW_MODE")
+                if mode_name not in mode_map:
+                    logger.error(
+                        f"Step {step.id}: invalid pump mode={mode_name!r}; "
+                        f"expected one of {', '.join(mode_map)}"
+                    )
+                    return False
+                mode = mode_map[mode_name]
                 run_time = step.params.get("run_time") if mode in (
                     PumpRunMode.TIME_QUANTITY,
                     PumpRunMode.TIME_SPEED,
@@ -182,6 +217,11 @@ class StepExecutor:
                 if repeat_count is not None and repeat_count != 1 and (not interval_time or interval_time <= 0):
                     logger.error(f"Step {step.id}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
                     return False
+                pump_key = (step.params["device_id"], ch)
+                self._active_pumps.add(pump_key)
+                self._pump_repeat_counts[pump_key] = (
+                    1 if repeat_count is None else repeat_count
+                )
                 result = await loop.run_in_executor(
                     None, self._dm.start_pump_channel, step.params["device_id"],
                     ch, step.params.get("flow_rate", 10.0), direction, mode,
@@ -197,6 +237,15 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: stop_pump_channel returned False")
                     return False
+                device_id = step.params["device_id"]
+                self._active_pumps = {
+                    item for item in self._active_pumps if item[0] != device_id
+                }
+                self._pump_repeat_counts = {
+                    key: repeat_count
+                    for key, repeat_count in self._pump_repeat_counts.items()
+                    if key[0] != device_id
+                }
 
             elif step.type == ActionType.PUMP_STOP_CHANNEL:
                 result = await loop.run_in_executor(
@@ -205,6 +254,12 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: stop_pump_channel returned False")
                     return False
+                self._active_pumps.discard(
+                    (step.params["device_id"], step.params["channel"])
+                )
+                self._pump_repeat_counts.pop(
+                    (step.params["device_id"], step.params["channel"]), None
+                )
 
             elif step.type == ActionType.WAIT:
                 pass
@@ -214,6 +269,10 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: emergency_stop_all returned False")
                     return False
+                self._active_heaters.clear()
+                self._active_pumps.clear()
+                self._pump_repeat_counts.clear()
+                self._active_microwaves.clear()
 
             elif step.type == ActionType.LOG:
                 logger.info(f"[Experiment] {step.params.get('message', '')}")
@@ -232,6 +291,55 @@ class StepExecutor:
         except Exception as e:
             logger.error(f"Step {step.id} failed: {e}")
             return False
+
+    async def stop_active_devices(self) -> bool:
+        """Stop devices that this executor attempted to start."""
+        loop = asyncio.get_running_loop()
+        success = True
+
+        for device_id, channel in list(self._active_pumps):
+            try:
+                stopped = await loop.run_in_executor(
+                    None, self._dm.stop_pump_channel, device_id, channel
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to stop active pump {device_id} channel {channel}: {e}"
+                )
+                stopped = False
+            if stopped:
+                self._active_pumps.discard((device_id, channel))
+                self._pump_repeat_counts.pop((device_id, channel), None)
+            else:
+                success = False
+
+        for device_id in list(self._active_heaters):
+            try:
+                stopped = await loop.run_in_executor(
+                    None, self._dm.stop_heater, device_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to stop active heater {device_id}: {e}")
+                stopped = False
+            if stopped:
+                self._active_heaters.discard(device_id)
+            else:
+                success = False
+
+        for device_id in list(self._active_microwaves):
+            try:
+                stopped = await loop.run_in_executor(
+                    None, self._dm.stop_microwave, device_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to stop active microwave {device_id}: {e}")
+                stopped = False
+            if stopped:
+                self._active_microwaves.discard(device_id)
+            else:
+                success = False
+
+        return success
 
     def _microwave_segments(self, raw_segments):
         segments = []
@@ -316,6 +424,35 @@ class StepExecutor:
         start_time = time.time()
 
         if condition.type == WaitType.DURATION:
+            if not _is_nonnegative_finite_number(condition.seconds):
+                logger.error(f"Invalid duration wait seconds: {condition.seconds}")
+                return False
+        elif condition.type in {
+            WaitType.TEMPERATURE_REACHED,
+            WaitType.MICROWAVE_TEMPERATURE_REACHED,
+            WaitType.MICROWAVE_COMPLETE,
+            WaitType.PUMP_COMPLETE,
+        }:
+            if not _is_nonnegative_finite_number(condition.timeout):
+                logger.error(f"Invalid wait timeout: {condition.timeout}")
+                return False
+
+        if condition.type in {
+            WaitType.TEMPERATURE_REACHED,
+            WaitType.MICROWAVE_TEMPERATURE_REACHED,
+        } and not _is_nonnegative_finite_number(condition.tolerance):
+            logger.error(f"Invalid wait tolerance: {condition.tolerance}")
+            return False
+        if (
+            condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED
+            and not _is_nonnegative_finite_number(condition.target_temperature)
+        ):
+            logger.error(
+                f"Invalid microwave target temperature: {condition.target_temperature}"
+            )
+            return False
+
+        if condition.type == WaitType.DURATION:
             logger.info(f"Waiting {condition.seconds}s...")
             remaining = max(condition.seconds, 0)
             while remaining > 0:
@@ -365,9 +502,6 @@ class StepExecutor:
 
         elif condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED:
             target_temperature = condition.target_temperature
-            if target_temperature is None:
-                logger.error("Microwave temperature wait requires target_temperature")
-                return False
             logger.info(
                 f"Waiting for microwave {condition.device_id} to reach "
                 f"{target_temperature}C (tolerance={condition.tolerance}C, "
@@ -452,6 +586,16 @@ class StepExecutor:
                 start_time += paused_duration
 
         elif condition.type == WaitType.PUMP_COMPLETE:
+            pump_key = (condition.device_id, condition.channel)
+            if pump_key in self._pump_repeat_counts:
+                repeat_count = self._pump_repeat_counts[pump_key]
+                if isinstance(repeat_count, bool) or repeat_count != 1:
+                    logger.error(
+                        f"Pump {condition.device_id} CH{condition.channel}: "
+                        f"pump_complete cannot track repeat_count={repeat_count}; "
+                        "use a bounded duration and explicit stop"
+                    )
+                    return False
             logger.info(
                 f"Waiting for pump {condition.device_id} CH{condition.channel} to complete"
             )

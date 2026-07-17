@@ -6,6 +6,7 @@
 """
 
 import json
+import math
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -15,6 +16,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound='BaseConfig')
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return whether a safety limit or timing value is a finite number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _is_strict_int(value: Any) -> bool:
+    """Return whether a configuration value is an integer, excluding booleans."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_strict_bool(value: Any) -> bool:
+    """Return whether a configuration value is a real boolean."""
+    return isinstance(value, bool)
 
 
 @dataclass
@@ -63,6 +84,8 @@ class DeviceConnectionConfig(BaseConfig):
     baudrate: int = 9600
     address: int = 0
     parity: str = "N"
+    stopbits: int = 1
+    bytesize: int = 8
     timeout: float = 1.0
     binding: SerialBindingConfig = field(default_factory=SerialBindingConfig)
     
@@ -73,16 +96,20 @@ class DeviceConnectionConfig(BaseConfig):
         if self.binding.mode == "fixed_port" and not self.port:
             errors.append("端口不能为空")
         
-        if self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
+        if not _is_strict_int(self.baudrate) or self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
             errors.append(f"波特率无效: {self.baudrate}，支持: 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200")
         
-        if not (0 <= self.address <= 255):
+        if not _is_strict_int(self.address) or not (0 <= self.address <= 255):
             errors.append(f"地址无效: {self.address}，范围: 0-255")
         
         if self.parity not in ["N", "E", "O", "M", "S"]:
             errors.append(f"校验位无效: {self.parity}，支持: N, E, O, M, S")
-        
-        if self.timeout <= 0:
+        if not _is_strict_int(self.stopbits) or self.stopbits not in [1, 2]:
+            errors.append(f"停止位无效: {self.stopbits}，支持: 1, 2")
+        if not _is_strict_int(self.bytesize) or self.bytesize not in [5, 6, 7, 8]:
+            errors.append(f"数据位无效: {self.bytesize}，支持: 5, 6, 7, 8")
+
+        if not _is_finite_number(self.timeout) or self.timeout <= 0:
             errors.append(f"超时时间无效: {self.timeout}，必须大于0")
         
         return errors
@@ -90,6 +117,14 @@ class DeviceConnectionConfig(BaseConfig):
 
 def _serial_binding_validate(self: SerialBindingConfig) -> List[str]:
     errors = []
+    if not _is_strict_bool(self.fallback_to_port):
+        errors.append(
+            f"fallback_to_port 无效: {self.fallback_to_port}，必须是布尔值"
+        )
+    if self.vid is not None and not _is_strict_int(self.vid):
+        errors.append(f"USB VID 无效: {self.vid}，必须是整数")
+    if self.pid is not None and not _is_strict_int(self.pid):
+        errors.append(f"USB PID 无效: {self.pid}，必须是整数")
     if self.mode not in ["fixed_port", "fingerprint"]:
         errors.append(f"绑定模式无效: {self.mode}，支持 fixed_port, fingerprint")
     if self.mode == "fingerprint":
@@ -108,15 +143,19 @@ def _device_connection_validate(self: DeviceConnectionConfig) -> List[str]:
     errors = []
     if self.binding.mode == "fixed_port" and not self.port:
         errors.append("fixed_port 模式下端口不能为空")
-    if self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
+    if not _is_strict_int(self.baudrate) or self.baudrate not in [1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200]:
         errors.append(
             f"波特率无效: {self.baudrate}，支持 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200"
         )
-    if not (0 <= self.address <= 255):
+    if not _is_strict_int(self.address) or not (0 <= self.address <= 255):
         errors.append(f"地址无效: {self.address}，范围 0-255")
     if self.parity not in ["N", "E", "O", "M", "S"]:
         errors.append(f"校验位无效: {self.parity}，支持 N, E, O, M, S")
-    if self.timeout <= 0:
+    if not _is_strict_int(self.stopbits) or self.stopbits not in [1, 2]:
+        errors.append(f"停止位无效: {self.stopbits}，支持 1, 2")
+    if not _is_strict_int(self.bytesize) or self.bytesize not in [5, 6, 7, 8]:
+        errors.append(f"数据位无效: {self.bytesize}，支持 5, 6, 7, 8")
+    if not _is_finite_number(self.timeout) or self.timeout <= 0:
         errors.append(f"超时时间无效: {self.timeout}，必须大于 0")
     errors.extend(self.binding.validate())
     return errors
@@ -152,25 +191,41 @@ class HeaterDeviceConfig(BaseConfig):
         if not self.name:
             errors.append("设备名称不能为空")
         
-        if self.decimal_places not in [0, 1, 2]:
+        if not _is_strict_bool(self.enabled):
+            errors.append(f"enabled 无效: {self.enabled}，必须是布尔值")
+
+        if not _is_strict_int(self.decimal_places) or self.decimal_places not in [0, 1, 2]:
             errors.append(f"小数位数无效: {self.decimal_places}，支持: 0, 1, 2")
         
         if self.temperature_unit not in ["C", "F"]:
             errors.append(f"温度单位无效: {self.temperature_unit}，支持: C, F")
         
-        if self.min_temperature >= self.max_temperature:
+        min_temperature_valid = _is_finite_number(self.min_temperature)
+        max_temperature_valid = _is_finite_number(self.max_temperature)
+        safety_limit_valid = _is_finite_number(self.safety_limit)
+
+        if not min_temperature_valid:
+            errors.append(f"最低温度无效: {self.min_temperature}，必须是有限数值")
+
+        if not max_temperature_valid:
+            errors.append(f"最高温度无效: {self.max_temperature}，必须是有限数值")
+
+        if not safety_limit_valid:
+            errors.append(f"安全限制无效: {self.safety_limit}，必须是有限数值")
+
+        if min_temperature_valid and max_temperature_valid and self.min_temperature >= self.max_temperature:
             errors.append(f"最低温度必须小于最高温度: {self.min_temperature} >= {self.max_temperature}")
         
-        if self.safety_limit <= self.max_temperature:
+        if safety_limit_valid and max_temperature_valid and self.safety_limit <= self.max_temperature:
             errors.append(f"安全限制必须大于最高温度: {self.safety_limit} <= {self.max_temperature}")
         
-        if self.poll_interval <= 0:
+        if not _is_finite_number(self.poll_interval) or self.poll_interval <= 0:
             errors.append(f"轮询间隔无效: {self.poll_interval}，必须大于0")
         
-        if self.retry_count < 0:
+        if not _is_strict_int(self.retry_count) or self.retry_count < 0:
             errors.append(f"重试次数无效: {self.retry_count}，必须大于等于0")
         
-        if self.retry_delay < 0:
+        if not _is_finite_number(self.retry_delay) or self.retry_delay < 0:
             errors.append(f"重试延迟无效: {self.retry_delay}，必须大于等于0")
         
         errors.extend(self.connection.validate())
@@ -191,19 +246,22 @@ class PumpChannelConfigYaml(BaseConfig):
         """验证配置"""
         errors = []
         
-        if not (1 <= self.channel <= 4):
+        if not _is_strict_bool(self.enabled):
+            errors.append(f"enabled 无效: {self.enabled}，必须是布尔值")
+
+        if not _is_strict_int(self.channel) or not (1 <= self.channel <= 4):
             errors.append(f"通道号无效: {self.channel}，范围: 1-4")
         
-        if not (0 <= self.pump_head <= 20):
+        if not _is_strict_int(self.pump_head) or not (0 <= self.pump_head <= 20):
             errors.append(f"泵头型号无效: {self.pump_head}，范围: 0-20")
         
-        if not (0 <= self.tube_model <= 20):
-            errors.append(f"管型号无效: {self.tube_model}，范围: 0-20")
+        if not _is_strict_int(self.tube_model) or not (0 <= self.tube_model <= 13):
+            errors.append(f"管型号无效: {self.tube_model}，范围: 0-13")
         
-        if not (0 <= self.suck_back_angle <= 360):
+        if not _is_strict_int(self.suck_back_angle) or not (0 <= self.suck_back_angle <= 360):
             errors.append(f"回吸角度无效: {self.suck_back_angle}，范围: 0-360")
         
-        if self.max_flow_rate <= 0:
+        if not _is_finite_number(self.max_flow_rate) or self.max_flow_rate <= 0:
             errors.append(f"最大流速无效: {self.max_flow_rate}，必须大于0")
         
         return errors
@@ -236,28 +294,31 @@ class PumpDeviceConfig(BaseConfig):
         if not self.name:
             errors.append("设备名称不能为空")
         
-        if not (1 <= self.slave_address <= 247):
+        if not _is_strict_bool(self.enabled):
+            errors.append(f"enabled 无效: {self.enabled}，必须是布尔值")
+
+        if not _is_strict_int(self.slave_address) or not (1 <= self.slave_address <= 247):
             errors.append(f"从站地址无效: {self.slave_address}，范围: 1-247")
         
         if self.parity not in ["N", "E", "O", "M", "S"]:
             errors.append(f"校验位无效: {self.parity}，支持: N, E, O, M, S")
         
-        if self.stopbits not in [1, 2]:
+        if not _is_strict_int(self.stopbits) or self.stopbits not in [1, 2]:
             errors.append(f"停止位无效: {self.stopbits}，支持: 1, 2")
         
-        if self.bytesize not in [5, 6, 7, 8]:
+        if not _is_strict_int(self.bytesize) or self.bytesize not in [5, 6, 7, 8]:
             errors.append(f"数据位无效: {self.bytesize}，支持: 5, 6, 7, 8")
         
-        if self.timeout <= 0:
+        if not _is_finite_number(self.timeout) or self.timeout <= 0:
             errors.append(f"超时时间无效: {self.timeout}，必须大于0")
         
-        if self.poll_interval <= 0:
+        if not _is_finite_number(self.poll_interval) or self.poll_interval <= 0:
             errors.append(f"轮询间隔无效: {self.poll_interval}，必须大于0")
         
-        if self.retry_count < 0:
+        if not _is_strict_int(self.retry_count) or self.retry_count < 0:
             errors.append(f"重试次数无效: {self.retry_count}，必须大于等于0")
         
-        if self.retry_delay < 0:
+        if not _is_finite_number(self.retry_delay) or self.retry_delay < 0:
             errors.append(f"重试延迟无效: {self.retry_delay}，必须大于等于0")
         
         seen_channels = set()
@@ -302,28 +363,38 @@ class MicrowaveDeviceConfig(BaseConfig):
         """验证配置"""
         errors = []
 
+        for field_name in (
+            "enabled",
+            "allow_experiment_control",
+            "allow_real_hardware_writes",
+            "enable_control_writes",
+        ):
+            value = getattr(self, field_name)
+            if not _is_strict_bool(value):
+                errors.append(f"{field_name} 无效: {value}，必须是布尔值")
+
         if not self.device_id:
             errors.append("设备ID不能为空")
 
         if not self.name:
             errors.append("设备名称不能为空")
 
-        if not (1 <= self.slave_address <= 247):
+        if not _is_strict_int(self.slave_address) or not (1 <= self.slave_address <= 247):
             errors.append(f"从站地址无效: {self.slave_address}，范围: 1-247")
 
-        if self.max_temperature <= 0:
+        if not _is_finite_number(self.max_temperature) or self.max_temperature <= 0:
             errors.append(f"最高温度无效: {self.max_temperature}，必须大于0")
 
-        if not (0 < self.max_power_percent <= 100):
+        if not _is_strict_int(self.max_power_percent) or not (0 < self.max_power_percent <= 100):
             errors.append(f"最大功率百分比无效: {self.max_power_percent}，范围: 1-100")
 
-        if self.poll_interval <= 0:
+        if not _is_finite_number(self.poll_interval) or self.poll_interval <= 0:
             errors.append(f"轮询间隔无效: {self.poll_interval}，必须大于0")
 
-        if self.retry_count < 0:
+        if not _is_strict_int(self.retry_count) or self.retry_count < 0:
             errors.append(f"重试次数无效: {self.retry_count}，必须大于等于0")
 
-        if self.retry_delay < 0:
+        if not _is_finite_number(self.retry_delay) or self.retry_delay < 0:
             errors.append(f"重试延迟无效: {self.retry_delay}，必须大于等于0")
 
         errors.extend(self.connection.validate())
@@ -345,13 +416,18 @@ class MonitorConfig(BaseConfig):
         """验证配置"""
         errors = []
         
-        if self.log_interval <= 0:
+        for field_name in ("enabled", "enable_csv_logging", "enable_database"):
+            value = getattr(self, field_name)
+            if not _is_strict_bool(value):
+                errors.append(f"{field_name} 无效: {value}，必须是布尔值")
+
+        if not _is_finite_number(self.log_interval) or self.log_interval <= 0:
             errors.append(f"日志间隔无效: {self.log_interval}，必须大于0")
         
-        if self.data_retention_hours < 0:
+        if not _is_strict_int(self.data_retention_hours) or self.data_retention_hours < 0:
             errors.append(f"数据保留时间无效: {self.data_retention_hours}，必须大于等于0")
         
-        if self.alarm_check_interval <= 0:
+        if not _is_finite_number(self.alarm_check_interval) or self.alarm_check_interval <= 0:
             errors.append(f"报警检查间隔无效: {self.alarm_check_interval}，必须大于0")
         
         return errors
@@ -371,6 +447,11 @@ class ReportConfig(BaseConfig):
         """验证配置"""
         errors = []
         
+        for field_name in ("include_charts", "include_statistics", "auto_generate"):
+            value = getattr(self, field_name)
+            if not _is_strict_bool(value):
+                errors.append(f"{field_name} 无效: {value}，必须是布尔值")
+
         if not self.output_dir:
             errors.append("输出目录不能为空")
         
@@ -395,16 +476,21 @@ class LoggingConfig(BaseConfig):
         """验证配置"""
         errors = []
         
+        for field_name in ("console_output", "file_output"):
+            value = getattr(self, field_name)
+            if not _is_strict_bool(value):
+                errors.append(f"{field_name} 无效: {value}，必须是布尔值")
+
         if self.level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
             errors.append(f"日志级别无效: {self.level}，支持: DEBUG, INFO, WARNING, ERROR, CRITICAL")
         
         if not self.log_dir:
             errors.append("日志目录不能为空")
         
-        if self.max_file_size_mb <= 0:
+        if not _is_strict_int(self.max_file_size_mb) or self.max_file_size_mb <= 0:
             errors.append(f"最大文件大小无效: {self.max_file_size_mb}，必须大于0")
         
-        if self.backup_count < 0:
+        if not _is_strict_int(self.backup_count) or self.backup_count < 0:
             errors.append(f"备份数量无效: {self.backup_count}，必须大于等于0")
         
         return errors
@@ -547,8 +633,13 @@ class ConfigManager:
             for ch_data in pump_data.get("channels", []):
                 channels.append(PumpChannelConfigYaml(**ch_data))
             
+            pump_values = {
+                k: v for k, v in pump_data.items() if k not in ["connection", "channels"]
+            }
+            pump_values.setdefault("stopbits", connection.stopbits)
+            pump_values.setdefault("bytesize", connection.bytesize)
             pump = PumpDeviceConfig(
-                **{k: v for k, v in pump_data.items() if k not in ["connection", "channels"]},
+                **pump_values,
                 connection=connection,
                 channels=channels
             )
@@ -583,6 +674,8 @@ class ConfigManager:
             "baudrate",
             "address",
             "parity",
+            "stopbits",
+            "bytesize",
             "timeout",
         }
         return DeviceConnectionConfig(
@@ -626,13 +719,15 @@ class ConfigManager:
             errors = self._config.validate()
             if errors:
                 error_msg = "\n".join([f"  - {e}" for e in errors])
-                self._logger.warning(f"配置验证警告:\n{error_msg}")
+                raise ValueError(f"配置验证失败:\n{error_msg}")
             
             self._logger.info(f"Config loaded from: {self.config_path}")
             return self._config
             
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON format: {e}")
+        except ValueError:
+            raise
         except Exception as e:
             raise ValueError(f"Failed to load config: {e}")
     

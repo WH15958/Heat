@@ -9,7 +9,7 @@
   - `docs/device_materials/MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc`
   - `docs/device_materials/微波反应仪通信协议.md`（由 `26.6.10-单模modbus地址.xlsx` 转换并校验一致）
   - 当前代码：`src/devices/`、`src/protocols/`、`src/web/`、`src/experiment/`、`frontend/src/`
-- 全局状态：目标文档已拆分，真实开发尚未开始。
+- 全局状态：01-06 的软件接入、前端控制和 YAML 自动化已完成；真实硬件 smoke test 尚待实验室完整确认。
 
 ## 全局安全规则
 
@@ -68,3 +68,4 @@
 ## 完成记录
 
 - 2026-06-15：创建微波仪接入拆分目标文档。实际开发未开始。
+- 2026-07-17：复核当前代码和 01-06 完成记录，软件接入已完成；实机确认继续按 [微波仪实机 Smoke Test](../../microwave_smoke_test.md) 执行。

@@ -143,6 +143,7 @@ class AutomationController:
                     pump_head=ch_cfg.pump_head,
                     tube_model=ch_cfg.tube_model,
                     suck_back_angle=ch_cfg.suck_back_angle,
+                    max_flow_rate=ch_cfg.max_flow_rate,
                 ))
 
             device_config = PeristalticPumpConfig(
@@ -155,7 +156,7 @@ class AutomationController:
                     'bytesize': pump_cfg.connection.bytesize,
                 },
                 slave_address=pump_cfg.slave_address,
-                timeout=pump_cfg.connection.timeout,
+                timeout=pump_cfg.timeout,
                 channels=channels,
             )
 
@@ -235,7 +236,29 @@ class AutomationController:
         if heater is None:
             self._logger.error(f"Device not found: {device_id}")
             return False
-        result = heater.disconnect()
+        try:
+            connected = heater.is_connected()
+        except Exception as e:
+            self._logger.error(f"Failed to check device connection {device_id}: {e}")
+            return False
+        if connected:
+            try:
+                stopped = bool(heater.stop())
+            except Exception as e:
+                self._logger.critical(
+                    f"Device stop failed; connection retained for retry: {device_id}: {e}"
+                )
+                return False
+            if not stopped:
+                self._logger.critical(
+                    f"Device stop returned false; connection retained for retry: {device_id}"
+                )
+                return False
+        try:
+            result = heater.disconnect()
+        except Exception as e:
+            self._logger.error(f"Failed to disconnect device {device_id}: {e}")
+            return False
         if result:
             self._logger.info(f"Device disconnected: {device_id}")
         else:
@@ -365,7 +388,29 @@ class AutomationController:
         if pump is None:
             self._logger.error(f"Pump not found: {device_id}")
             return False
-        result = pump.disconnect()
+        try:
+            connected = pump.is_connected()
+        except Exception as e:
+            self._logger.error(f"Failed to check pump connection {device_id}: {e}")
+            return False
+        if connected:
+            try:
+                stopped = bool(pump.stop_all())
+            except Exception as e:
+                self._logger.critical(
+                    f"Pump stop failed; connection retained for retry: {device_id}: {e}"
+                )
+                return False
+            if not stopped:
+                self._logger.critical(
+                    f"Pump stop returned false; connection retained for retry: {device_id}"
+                )
+                return False
+        try:
+            result = pump.disconnect()
+        except Exception as e:
+            self._logger.error(f"Failed to disconnect pump {device_id}: {e}")
+            return False
         if result:
             self._logger.info(f"Pump disconnected: {device_id}")
         else:
@@ -596,7 +641,7 @@ class AutomationController:
         
         return True
     
-    def shutdown(self):
+    def shutdown(self) -> bool:
         """关闭系统"""
         self._logger.info("Shutting down system...")
         
@@ -604,15 +649,25 @@ class AutomationController:
         
         self.stop_recording()
         
+        success = True
         for device_id in list(self._heaters.keys()):
-            self.disconnect_device(device_id)
+            device_success = self.disconnect_device(device_id)
+            success = device_success and success
         
         for device_id in list(self._pumps.keys()):
-            self.disconnect_pump(device_id)
-        
-        self._logger.info("System shutdown complete")
+            device_success = self.disconnect_pump(device_id)
+            success = device_success and success
+
+        if success:
+            self._logger.info("System shutdown complete")
+        else:
+            self._logger.critical(
+                "System shutdown could not confirm all device stops; "
+                "one or more connections were retained for retry"
+            )
+        return success
     
-    def interactive_mode(self):
+    def interactive_mode(self) -> bool:
         """交互模式"""
         print("\n" + "="*50)
         print("自动化控制系统 - 交互模式")
@@ -677,10 +732,10 @@ class AutomationController:
             except Exception as e:
                 print(f"Error: {e}")
         
-        self.shutdown()
+        return self.shutdown()
 
 
-def main():
+def main() -> int:
     """主函数"""
     parser = argparse.ArgumentParser(description="自动化控制系统")
     parser.add_argument(
@@ -716,17 +771,19 @@ def main():
     
     def signal_handler(sig, frame):
         print("\nReceived interrupt signal, shutting down...")
-        controller.shutdown()
-        sys.exit(0)
+        shutdown_success = controller.shutdown()
+        sys.exit(0 if shutdown_success else 1)
     
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     if not controller.initialize():
         print("Failed to initialize system")
-        sys.exit(1)
+        return 1
     
     if args.interactive:
-        controller.interactive_mode()
+        if not controller.interactive_mode():
+            return 1
     else:
         print(f"Running experiment on {args.device}")
         print(f"Temperature: {args.temperature}°C")
@@ -742,9 +799,13 @@ def main():
             report_path = controller.generate_report(args.device)
             if report_path:
                 print(f"Report generated: {report_path}")
-        
-        controller.shutdown()
+
+        shutdown_success = controller.shutdown()
+        if not success or not shutdown_success:
+            return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

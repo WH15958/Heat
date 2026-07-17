@@ -41,9 +41,11 @@
   - `/`
   - `/control`
   - `/experiment`
+  - `/campaigns`
   - `/history`
 - 设备接口前缀：`/api`
 - 实验接口前缀：`/api/experiments`
+- Campaign 接口前缀：`/api/campaigns`
 - WebSocket：`/ws`
 
 ### 1.4 当前实验动作与等待类型
@@ -230,7 +232,7 @@ AI 不应做的是：
 
 - `python tests\test_metadata.py`
 - `python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"`
-- `cd frontend && npm run build`
+- `npm --prefix frontend run build`
 
 如果改动触及以下区域，必须特别关注：
 
