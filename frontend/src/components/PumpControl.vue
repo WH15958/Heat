@@ -145,6 +145,75 @@
           停止
         </el-button>
       </div>
+      <el-collapse class="priming-collapse">
+        <el-collapse-item name="priming">
+          <template #title>
+            <span class="priming-title">预灌估算</span>
+          </template>
+          <div class="segment-list">
+            <div
+              v-for="(_lengthCm, segmentIndex) in pump.channels[ch].tubeSegmentLengthsCm"
+              :key="segmentIndex"
+              class="segment-row"
+            >
+              <span class="segment-label">管段 {{ segmentIndex + 1 }}</span>
+              <el-input-number
+                v-model="pump.channels[ch].tubeSegmentLengthsCm[segmentIndex]"
+                :min="0.1"
+                :step="1"
+                :precision="1"
+                size="small"
+                controls-position="right"
+                placeholder="长度"
+                class="segment-length-input"
+              />
+              <span class="unit-label">cm</span>
+              <el-button
+                type="danger"
+                link
+                size="small"
+                :disabled="pump.channels[ch].tubeSegmentLengthsCm.length === 1"
+                @click="removeTubeSegment(pump.channels[ch], segmentIndex)"
+              >
+                删除
+              </el-button>
+            </div>
+            <el-button type="primary" link size="small" @click="addTubeSegment(pump.channels[ch])">
+              添加管段
+            </el-button>
+          </div>
+
+          <div class="priming-results">
+            <div class="result-item">
+              <span class="result-label">软管内径</span>
+              <strong>{{ tubeInnerDiameter(pump.channels[ch]).toFixed(2) }} mm</strong>
+            </div>
+            <div class="result-item">
+              <span class="result-label">总长度</span>
+              <strong>{{ totalTubeLengthCm(pump.channels[ch]).toFixed(1) }} cm</strong>
+            </div>
+            <div class="result-item">
+              <span class="result-label">理论死体积</span>
+              <strong>{{ deadVolumeMl(pump.channels[ch]).toFixed(4) }} mL</strong>
+            </div>
+            <div class="result-item">
+              <span class="result-label">有效流量</span>
+              <strong>{{ effectiveFlowLabel(pump.channels[ch]) }}</strong>
+            </div>
+            <div class="result-item result-item-wide">
+              <span class="result-label">理论预灌时间</span>
+              <strong>{{ primingTimeLabel(pump.channels[ch]) }}</strong>
+            </div>
+          </div>
+          <el-alert
+            title="理论估算不包含接头、反应器、气泡、管路弹性、背压和安全余量，实际操作请以标定结果为准。"
+            type="info"
+            :closable="false"
+            show-icon
+            class="priming-note"
+          />
+        </el-collapse-item>
+      </el-collapse>
     </div>
 
     <div style="margin-top: 12px; text-align: center">
@@ -158,6 +227,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { PUMP_MODES, TUBE_MODELS, FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, type PumpMode } from '../api/devices'
+import { calculateDeadVolumeMl, calculatePrimingTimeSeconds, convertFlowToMlMin } from '../utils/pumpCalculations'
 
 interface ChannelConfig {
   flowRate: number
@@ -173,6 +243,7 @@ interface ChannelConfig {
   tubeModel: number
   maxFlowRate: number
   flowUnit: number
+  tubeSegmentLengthsCm: Array<number | null>
   starting: boolean
   stopping: boolean
 }
@@ -238,6 +309,47 @@ function calcFlowRate(ch: ChannelConfig): number {
     return volumeMl / timeMinutes
   }
   return ch.flowRate
+}
+
+function addTubeSegment(ch: ChannelConfig) {
+  ch.tubeSegmentLengthsCm.push(null)
+}
+
+function removeTubeSegment(ch: ChannelConfig, segmentIndex: number) {
+  if (ch.tubeSegmentLengthsCm.length === 1) return
+  ch.tubeSegmentLengthsCm.splice(segmentIndex, 1)
+}
+
+function tubeInnerDiameter(ch: ChannelConfig): number {
+  return TUBE_MODELS.find(tube => tube.value === ch.tubeModel)?.innerDiameterMm ?? 0
+}
+
+function totalTubeLengthCm(ch: ChannelConfig): number {
+  return ch.tubeSegmentLengthsCm.reduce<number>((total, lengthCm) => {
+    return total + (typeof lengthCm === 'number' && Number.isFinite(lengthCm) && lengthCm > 0 ? lengthCm : 0)
+  }, 0)
+}
+
+function deadVolumeMl(ch: ChannelConfig): number {
+  return calculateDeadVolumeMl(tubeInnerDiameter(ch), ch.tubeSegmentLengthsCm)
+}
+
+function effectiveFlowMlMin(ch: ChannelConfig): number | null {
+  if (ch.mode === 'TIME_QUANTITY') return convertFlowToMlMin(calcFlowRate(ch), 1)
+  return convertFlowToMlMin(ch.flowRate, ch.flowUnit)
+}
+
+function effectiveFlowLabel(ch: ChannelConfig): string {
+  const flowMlMin = effectiveFlowMlMin(ch)
+  return flowMlMin === null ? 'RPM 无法换算' : `${flowMlMin.toFixed(4)} mL/min`
+}
+
+function primingTimeLabel(ch: ChannelConfig): string {
+  if (ch.flowUnit === 3 && ch.mode !== 'TIME_QUANTITY') return 'RPM 模式不可计算'
+  if (deadVolumeMl(ch) <= 0) return '请输入管段长度'
+  const seconds = calculatePrimingTimeSeconds(deadVolumeMl(ch), effectiveFlowMlMin(ch))
+  if (seconds === null) return '不可计算'
+  return `${(seconds / 60).toFixed(2)} 分钟（${seconds.toFixed(1)} 秒）`
 }
 
 function statusFlowUnitLabel(unit: unknown): string {
@@ -323,5 +435,67 @@ function onTubeModelChange(ch: ChannelConfig) {
   font-size: 12px;
   white-space: nowrap;
   margin-right: 2px;
+}
+.priming-collapse {
+  margin-top: 8px;
+  border-bottom: none;
+}
+.priming-title {
+  color: #409eff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.segment-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.segment-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.segment-label {
+  color: #606266;
+  font-size: 12px;
+  min-width: 48px;
+}
+.segment-length-input {
+  width: 130px;
+}
+.priming-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding: 10px 0;
+  border-top: 1px solid #ebeef5;
+}
+.result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+}
+.result-item strong {
+  color: #303133;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.result-label {
+  color: #909399;
+}
+.priming-note {
+  margin-top: 2px;
+}
+:deep(.priming-collapse .el-collapse-item__header) {
+  height: 34px;
+  line-height: 34px;
+}
+:deep(.priming-collapse .el-collapse-item__content) {
+  padding-bottom: 8px;
 }
 </style>

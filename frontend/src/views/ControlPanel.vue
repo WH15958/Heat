@@ -62,6 +62,7 @@ import { useWebSocket, type MicrowaveRealtimeData } from '../composables/useWebS
 import HeaterControl from '../components/HeaterControl.vue'
 import PumpControl from '../components/PumpControl.vue'
 import MicrowaveControl from '../components/MicrowaveControl.vue'
+import { normalizeTubeSegmentLengths } from '../utils/pumpCalculations'
 
 const STORAGE_KEY = 'heat_control_params'
 
@@ -81,6 +82,7 @@ interface ChannelConfig {
   tubeModel: number
   maxFlowRate: number
   flowUnit: number
+  tubeSegmentLengthsCm: Array<number | null>
   starting: boolean
   stopping: boolean
 }
@@ -160,7 +162,7 @@ function channelStatus(pumpId: string, ch: number) {
 function createPumpChannels(): Record<number, ChannelConfig> {
   const channels: Record<number, ChannelConfig> = {}
   for (let i = 1; i <= 4; i++) {
-    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, timeUnit: 0, dispenseVolume: 10.0, volumeUnit: 1, repeatCount: 1, intervalTime: 0, intervalTimeUnit: 0, tubeModel: 11, maxFlowRate: 22.0, flowUnit: 1, starting: false, stopping: false }
+    channels[i] = { flowRate: 10.0, direction: 'CW', mode: 'FLOW_MODE', runTime: 60, timeUnit: 0, dispenseVolume: 10.0, volumeUnit: 1, repeatCount: 1, intervalTime: 0, intervalTimeUnit: 0, tubeModel: 11, maxFlowRate: 22.0, flowUnit: 1, tubeSegmentLengthsCm: [null], starting: false, stopping: false }
   }
   return channels
 }
@@ -255,6 +257,7 @@ function saveParams() {
         intervalTimeUnit: cfg.intervalTimeUnit,
         tubeModel: cfg.tubeModel,
         flowUnit: cfg.flowUnit,
+        tubeSegmentLengthsCm: cfg.tubeSegmentLengthsCm,
       }
     }
   }
@@ -296,6 +299,9 @@ function restoreParams() {
           channel.tubeModel = cfg.tubeModel
         }
         if (isFlowUnit(cfg.flowUnit)) channel.flowUnit = cfg.flowUnit
+        if (cfg.tubeSegmentLengthsCm !== undefined) {
+          channel.tubeSegmentLengthsCm = normalizeTubeSegmentLengths(cfg.tubeSegmentLengthsCm)
+        }
         normalizeChannelFlow(channel)
       }
     }
