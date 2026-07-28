@@ -61,6 +61,8 @@ pumps:
         mode: "fingerprint"
         serial_number: "CNDIB148313"
     slave_address: 1
+    tube_model_readback_overrides:
+      11: 13
     timeout: 2.0
     poll_interval: 1.0
     retry_count: 3

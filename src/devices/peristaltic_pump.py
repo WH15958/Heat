@@ -78,6 +78,7 @@ class PeristalticPumpConfig(DeviceConfig):
     default_run_mode: PumpRunMode = PumpRunMode.FLOW_MODE
     timeout: float = 2.0
     poll_interval: float = 1.0
+    tube_model_readback_overrides: Dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -889,6 +890,17 @@ class LabSmartPumpDevice(BaseDevice):
         if values is not None and len(values) > 0:
             return values[0]
         return None
+
+    def tube_model_readback_matches(
+        self,
+        requested: int,
+        readback: Optional[int],
+    ) -> bool:
+        """Validate n004 against this device's configured firmware behavior."""
+        expected = self.config.tube_model_readback_overrides.get(
+            requested, requested
+        )
+        return readback == expected
 
     def get_channel_config(self, channel: int) -> Optional["PumpChannelConfig"]:
         """获取通道配置

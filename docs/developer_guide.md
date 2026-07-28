@@ -123,10 +123,10 @@ FastAPI 是异步的，但设备是同步的。
 泵控制的防错边界：
 
 - `POST /api/pump/{device_id}/start` 对通道、方向、模式、单位、有限数、协议流速范围（一般 `0.01-9999`，RPM 上限 `150`）、模式必填参数和重复间隔做请求校验；布尔值不能冒充数值，非法请求返回 `422`，不会调用设备管理器。
-- `DeviceManager` 在任何配置写入前检查通道启用状态和 `max_flow_rate`，并在 `/api/devices` 的泵通道元数据中暴露配置的 `tube_model`、`max_flow_rate` 和启用状态供前端约束输入；启动事务先 stop，再写入并读回软管型号。stop/disconnect/cleanup 会与同一泵的启动事务协调，主动断开和 cleanup 只有在 stop 确认成功后才释放串口。
+- `DeviceManager` 在任何配置写入前检查通道启用状态和 `max_flow_rate`，并在 `/api/devices` 的泵通道元数据中暴露配置的 `tube_model`、`max_flow_rate` 和启用状态供前端约束输入；启动事务先 stop，再写入并读回软管型号。默认要求写入值与读回值相同；经 HMI 规格确认的固件差异只能通过具体泵的 `tube_model_readback_overrides` 配置，不能硬编码为所有泵的全局协议规则。stop/disconnect/cleanup 会与同一泵的启动事务协调，主动断开和 cleanup 只有在 stop 确认成功后才释放串口。
 - 泵 stop 使用请求代次取消更早进入但尚未拿到事务锁的 start，避免 stop 已返回成功后旧 start 再启动；`TIME_QUANTITY` 同时校验声明流量与体积/时间推导流量。
 - Modbus 读写除 CRC 外还必须匹配 slave、function、长度、byte count 和写响应 echo；CRC 正确但属于其他请求或设备的帧不能算成功。
-- `ConfigManager.load()` 对硬件配置验证失败时直接抛错；有限数、整数和布尔配置按声明类型严格校验，`connection.stopbits`、`connection.bytesize` 和泵通道 `max_flow_rate` 会透传到 Web/CLI 设备配置，不再静默忽略。
+- `ConfigManager.load()` 对硬件配置验证失败时直接抛错；有限数、整数和布尔配置按声明类型严格校验，`connection.stopbits`、`connection.bytesize`、泵通道 `max_flow_rate` 和设备级 `tube_model_readback_overrides` 会透传到 Web/CLI 设备配置，不再静默忽略。读回覆盖的键和值必须是 `0-13` 的整数。
 - 加热器 OUTPUT_STATUS 读取失败或枚举未知时使用 `RunStatus.UNKNOWN`，不能用默认 RUN/STOP 伪装确定状态。
 
 Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `404`，解析后的静态文件路径必须仍位于 `src/web/static` 内。

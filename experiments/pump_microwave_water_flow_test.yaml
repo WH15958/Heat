@@ -1,0 +1,176 @@
+name: 双泵通道微波热水测试
+description: >
+  使用 pump1 通道4向 10 mL 微波反应容器进水约 6.67 mL，
+  加热到 60 C 并保温 5 分钟，再使用通道3反向抽出热水。
+  入口和出口管路均按内径 1.52 mm、长度 2000 mm、单侧体积约 3.63 mL 计算。
+
+metadata:
+  material_system: deionized_water
+  batch_id: pump-microwave-water-flow-test
+  condition_id: ch4-in-60c-5min-ch3-out
+  operator: lab
+  recipe_version: "2026-07-28"
+  safety_notes: >
+    仅用于水路实机分级测试。执行前必须确认 pump1/COM10 和 microwave1/COM17 身份正确，
+    通道4的 CW 为进水方向、通道3的 CCW 为出水方向，出口连接耐热开放收集容器，
+    且通道3停止时流路经实测仍保持常压连通；否则禁止运行，必须提供独立常开排气或泄压路径。
+    同时确认炉门、探头浸没、接地、通风、非空载和现场看护。
+    出现泄漏、明显蒸汽、异常气泡、液位不足、探头暴露、fault_code 非零或温度超过 65 C 时立即停止。
+
+steps:
+  - id: operator_precheck_notice
+    type: log
+    params:
+      message: >
+        开始前确认 pump1/COM10、microwave1/COM17；通道4 CW 进水、通道3 CCW 出水；
+        出口接耐热开放收集容器；通道3停泵时流路经实测保持常压连通；
+        炉门、探头、接地、通风、非空载和现场看护均符合实验室 SOP。
+        任一项不满足，请在取消窗口内停止实验。
+    on_error: stop
+
+  - id: operator_cancel_window
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 10
+    on_error: stop
+
+  - id: inlet_ch4_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 4
+      flow_rate: 2.0
+      direction: CW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: inlet_ch4_run_315_seconds
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 315
+    on_error: stop
+
+  - id: inlet_ch4_stop
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 4
+    on_error: stop
+
+  - id: operator_verify_reactor_before_heating
+    type: log
+    params:
+      message: >
+        加热前检查：反应容器液位约为 2/3（约 6.67 mL）、温度探头可靠浸没、
+        出口通畅且保持常压。任一项不满足，请在 30 秒复核窗口内停止实验。
+    on_error: stop
+
+  - id: operator_reactor_check_window
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 30
+    on_error: stop
+
+  - id: microwave_configure_60c_auto_power
+    type: microwave.configure_auto_power
+    params:
+      device_id: microwave1
+      segments:
+        - segment: 1
+          target_temperature: 60
+          holding_temperature: 60
+          hours: 0
+          minutes: 5
+          seconds: 0
+    on_error: stop
+
+  - id: microwave_start_auto_power
+    type: microwave.start
+    params:
+      device_id: microwave1
+      mode: auto_power
+    on_error: stop
+
+  - id: microwave_wait_for_60c
+    type: wait
+    params: {}
+    wait:
+      type: microwave_temperature_reached
+      device_id: microwave1
+      target_temperature: 60
+      tolerance: 3
+      timeout: 600
+    on_error: stop
+
+  - id: microwave_hold_60c_for_5_minutes
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 300
+    on_error: stop
+
+  - id: microwave_stop_after_hold
+    type: microwave.stop
+    params:
+      device_id: microwave1
+    on_error: stop
+
+  - id: operator_verify_microwave_stopped
+    type: log
+    params:
+      message: >
+        微波 stop 已返回成功。请在 10 秒窗口内确认设备功率和电流均为零；
+        若输出未归零或 fault_code 非零，立即停止实验，不得启动出口泵。
+    on_error: stop
+
+  - id: microwave_stop_verification_window
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 10
+    on_error: stop
+
+  - id: outlet_ch3_start
+    type: pump.start
+    params:
+      device_id: pump1
+      channel: 3
+      flow_rate: 2.0
+      direction: CCW
+      mode: FLOW_MODE
+      tube_model: 11
+      flow_unit: 1
+    on_error: stop
+
+  - id: outlet_ch3_run_315_seconds
+    type: wait
+    params: {}
+    wait:
+      type: duration
+      seconds: 315
+    on_error: stop
+
+  - id: outlet_ch3_stop
+    type: pump.stop_channel
+    params:
+      device_id: pump1
+      channel: 3
+    on_error: stop
+
+  - id: water_flow_test_done
+    type: log
+    params:
+      message: >
+        双泵通道微波热水测试流程结束。确认微波功率和电流为零、泵通道已停止，
+        并记录实际进水体积、出水体积、最高温度、泄漏、气泡和异常情况。
+    on_error: stop

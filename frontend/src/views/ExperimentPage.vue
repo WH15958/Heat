@@ -3,7 +3,14 @@
     <el-row :gutter="20">
       <el-col :span="8">
         <el-card shadow="hover">
-          <template #header><span>可用实验</span></template>
+          <template #header>
+            <div class="card-header">
+              <span>可用实验</span>
+              <el-button size="small" :loading="experimentsLoading" @click="loadExperiments">
+                刷新
+              </el-button>
+            </div>
+          </template>
           <div v-if="experiments.length === 0" style="color: #909399; text-align: center; padding: 20px">
             暂无实验，请在 experiments/ 目录下添加 YAML 文件
           </div>
@@ -177,6 +184,7 @@ interface LogEntry {
 const experiments = ref<ExperimentSummary[]>([])
 const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
+const experimentsLoading = ref(false)
 const progress = ref<ExperimentProgress | null>(null)
 const starting = ref(false)
 const pausing = ref(false)
@@ -411,11 +419,15 @@ function connectWs() {
 }
 
 async function loadExperiments() {
+  experimentsLoading.value = true
   try {
     const res = await axios.get('/api/experiments/')
     experiments.value = res.data
-  } catch (e) {
+  } catch (e: any) {
     console.error('Failed to load experiments:', e)
+    ElMessage.error(`实验列表刷新失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    experimentsLoading.value = false
   }
 }
 

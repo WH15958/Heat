@@ -158,6 +158,9 @@ class AutomationController:
                 slave_address=pump_cfg.slave_address,
                 timeout=pump_cfg.timeout,
                 channels=channels,
+                tube_model_readback_overrides=dict(
+                    pump_cfg.tube_model_readback_overrides
+                ),
             )
 
             pump = LabSmartPumpDevice(device_config)

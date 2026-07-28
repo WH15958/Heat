@@ -114,6 +114,7 @@ def create_device_manager() -> DeviceManager:
             stopbits=p_cfg.connection.stopbits,
             bytesize=p_cfg.connection.bytesize,
             channels=channels,
+            tube_model_readback_overrides=p_cfg.tube_model_readback_overrides,
             binding_info=binding_info,
         )
         logger.info(f"Registered pump: {p_cfg.device_id}")

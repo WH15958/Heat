@@ -108,6 +108,7 @@ class DeviceManager:
         stopbits: int = 1,
         bytesize: int = 8,
         channels: Optional[list] = None,
+        tube_model_readback_overrides: Optional[Dict[int, int]] = None,
         binding_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         """添加蠕动泵配置
@@ -163,6 +164,9 @@ class DeviceManager:
             stopbits=stopbits,
             bytesize=bytesize,
             channels=channel_configs,
+            tube_model_readback_overrides=dict(
+                tube_model_readback_overrides or {}
+            ),
         )
         self._pumps[device_id] = LabSmartPumpDevice(config)
         self._pump_locks[device_id] = threading.Lock()
@@ -1059,9 +1063,17 @@ class DeviceManager:
             time.sleep(0.3)
             readback = pump.get_tube_model(channel)
             logger.info(f"Pump {device_id} CH{channel}: tube_model={effective_tube_model} written, readback={readback}")
-            if readback != effective_tube_model:
+            if not pump.tube_model_readback_matches(
+                effective_tube_model, readback
+            ):
                 logger.warning(f"Pump {device_id} CH{channel}: tube_model mismatch! written={effective_tube_model} readback={readback}")
                 return False
+            if readback != effective_tube_model:
+                logger.info(
+                    f"Pump {device_id} CH{channel}: accepted configured "
+                    f"firmware override for tube_model readback "
+                    f"{effective_tube_model}->{readback}"
+                )
         else:
             logger.warning(f"Pump {device_id} CH{channel} tube_model not set, flow rate range may be limited")
 

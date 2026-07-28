@@ -282,6 +282,7 @@ class PumpDeviceConfig(BaseConfig):
     retry_count: int = 3
     retry_delay: float = 0.5
     enabled: bool = True
+    tube_model_readback_overrides: Dict[int, int] = field(default_factory=dict)
     channels: List[PumpChannelConfigYaml] = field(default_factory=list)
     
     def validate(self) -> List[str]:
@@ -320,6 +321,21 @@ class PumpDeviceConfig(BaseConfig):
         
         if not _is_finite_number(self.retry_delay) or self.retry_delay < 0:
             errors.append(f"重试延迟无效: {self.retry_delay}，必须大于等于0")
+
+        if not isinstance(self.tube_model_readback_overrides, dict):
+            errors.append("tube_model_readback_overrides 必须是字典")
+        else:
+            for requested, readback in self.tube_model_readback_overrides.items():
+                if (
+                    not _is_strict_int(requested)
+                    or not (0 <= requested <= 13)
+                    or not _is_strict_int(readback)
+                    or not (0 <= readback <= 13)
+                ):
+                    errors.append(
+                        "tube_model_readback_overrides 的写入值和读回值"
+                        "必须是 0-13 的整数"
+                    )
         
         seen_channels = set()
         for i, channel in enumerate(self.channels):

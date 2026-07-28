@@ -9,9 +9,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from src.devices.peristaltic_pump import (
+    LabSmartPumpDevice,
+    PeristalticPumpConfig,
+)
 from src.protocols.modbus_rtu import ModbusRTUProtocol
 from src.protocols.pump_params import FlowUnit, PumpDirection, PumpRunMode
-from src.utils.config import ConfigManager
+from src.utils.config import ConfigManager, PumpDeviceConfig
 from src.web.api.devices import StartPumpRequest, router as devices_router
 from src.web.device_manager import DeviceManager
 
@@ -112,9 +116,17 @@ def test_pump_request_rejects_non_finite_values(value):
         StartPumpRequest(flow_rate=value)
 
 
-def _fake_pump(*, max_flow_rate=5.0, tube_model=1, enabled=True):
+def _fake_pump(
+    *,
+    max_flow_rate=5.0,
+    tube_model=1,
+    enabled=True,
+    tube_model_readback_overrides=None,
+):
+    readback_overrides = dict(tube_model_readback_overrides or {})
     pump = Mock()
     pump.is_connected.return_value = True
+    pump.config.tube_model_readback_overrides = readback_overrides
     pump.get_channel_config.return_value = SimpleNamespace(
         channel=1,
         enabled=enabled,
@@ -125,6 +137,10 @@ def _fake_pump(*, max_flow_rate=5.0, tube_model=1, enabled=True):
     pump.enable_channel.return_value = True
     pump.set_tube_model.return_value = True
     pump.get_tube_model.return_value = tube_model
+    pump.tube_model_readback_matches.side_effect = (
+        lambda requested, readback: readback
+        == readback_overrides.get(requested, requested)
+    )
     pump.set_direction.return_value = True
     pump.set_run_mode.return_value = True
     pump.set_flow_rate.return_value = True
@@ -240,6 +256,65 @@ def test_pump_start_stops_first_writes_tube_zero_and_checks_readback():
     pump.stop_channel.assert_called_once_with(1)
     pump.set_tube_model.assert_called_once_with(1, 0)
     pump.start_channel.assert_called_once_with(1)
+
+
+def _real_pump_with_readback_overrides(overrides=None):
+    return LabSmartPumpDevice(PeristalticPumpConfig(
+        device_id="pump1",
+        connection_params={"port": "TEST"},
+        tube_model_readback_overrides=dict(overrides or {}),
+    ))
+
+
+def test_tube_model_readback_is_exact_without_device_override():
+    pump = _real_pump_with_readback_overrides()
+
+    assert pump.tube_model_readback_matches(11, 11) is True
+    assert pump.tube_model_readback_matches(11, 13) is False
+    assert pump.tube_model_readback_matches(11, None) is False
+
+
+def test_tube_model_readback_uses_only_configured_device_override():
+    pump = _real_pump_with_readback_overrides({11: 13})
+
+    assert pump.tube_model_readback_matches(11, 13) is True
+    assert pump.tube_model_readback_matches(11, 11) is False
+    assert pump.tube_model_readback_matches(11, 3) is False
+    assert pump.tube_model_readback_matches(3, 4) is False
+    assert pump.tube_model_readback_matches(4, 12) is False
+    assert pump.tube_model_readback_matches(12, 11) is False
+    assert pump.tube_model_readback_matches(13, 3) is False
+    assert pump.tube_model_readback_matches(11, None) is False
+
+
+def test_pump_start_accepts_configured_tube_model_firmware_override():
+    pump = _fake_pump(
+        tube_model=11,
+        tube_model_readback_overrides={11: 13},
+    )
+    pump.get_tube_model.return_value = 13
+    manager = _manager_with_pump(pump)
+
+    assert manager.start_pump_channel(
+        "pump1", 1, 1.0, PumpDirection.CLOCKWISE, PumpRunMode.FLOW_MODE
+    ) is True
+    pump.set_tube_model.assert_called_once_with(1, 11)
+    pump.start_channel.assert_called_once_with(1)
+
+
+@pytest.mark.parametrize("readback", [11, 3, None])
+def test_pump_start_rejects_wrong_readback_for_configured_override(readback):
+    pump = _fake_pump(
+        tube_model=11,
+        tube_model_readback_overrides={11: 13},
+    )
+    pump.get_tube_model.return_value = readback
+    manager = _manager_with_pump(pump)
+
+    assert manager.start_pump_channel(
+        "pump1", 1, 1.0, PumpDirection.CLOCKWISE, PumpRunMode.FLOW_MODE
+    ) is False
+    pump.start_channel.assert_not_called()
 
 
 def test_pump_start_aborts_on_stop_failure_or_tube_mismatch():
@@ -454,6 +529,40 @@ def test_config_load_fails_fast_and_preserves_nested_serial_settings(tmp_path):
     assert pump.channels[0].max_flow_rate == 5.0
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        [],
+        {True: 13},
+        {11: True},
+        {"11": 13},
+        {11: "13"},
+        {-1: 13},
+        {11: 14},
+    ],
+)
+def test_pump_readback_override_config_rejects_invalid_values(overrides):
+    pump = PumpDeviceConfig(
+        device_id="pump1",
+        name="Pump 1",
+        tube_model_readback_overrides=overrides,
+    )
+
+    assert any(
+        "tube_model_readback_overrides" in error
+        for error in pump.validate()
+    )
+
+
+def test_system_config_loads_pump_specific_readback_override():
+    system_config = ConfigManager().load()
+    pump = next(
+        item for item in system_config.pumps if item.device_id == "pump1"
+    )
+
+    assert pump.tube_model_readback_overrides == {11: 13}
+
+
 def test_web_and_cli_propagate_pump_serial_timeout_and_flow_limit(tmp_path, monkeypatch):
     config_path = tmp_path / "system.json"
     config_path.write_text(json.dumps({
@@ -478,6 +587,7 @@ def test_web_and_cli_propagate_pump_serial_timeout_and_flow_limit(tmp_path, monk
         }],
     }), encoding="utf-8")
     system_config = ConfigManager(str(config_path)).load()
+    system_config.pumps[0].tube_model_readback_overrides = {11: 13}
 
     monkeypatch.setattr(ConfigManager, "load", lambda self: system_config)
     from src.web.app import create_device_manager
@@ -488,6 +598,7 @@ def test_web_and_cli_propagate_pump_serial_timeout_and_flow_limit(tmp_path, monk
     assert web_config.bytesize == 7
     assert web_config.timeout == 1.5
     assert web_config.channels[0].max_flow_rate == 5.0
+    assert web_config.tube_model_readback_overrides == {11: 13}
 
     from src.main import AutomationController
 
@@ -501,3 +612,4 @@ def test_web_and_cli_propagate_pump_serial_timeout_and_flow_limit(tmp_path, monk
     assert cli_config.connection_params["bytesize"] == 7
     assert cli_config.timeout == 1.5
     assert cli_config.channels[0].max_flow_rate == 5.0
+    assert cli_config.tube_model_readback_overrides == {11: 13}

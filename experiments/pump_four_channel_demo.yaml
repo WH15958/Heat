@@ -9,7 +9,7 @@ steps:
       channel: 1
       flow_rate: 5.0
       mode: FLOW_MODE
-      tube_model: 13
+      tube_model: 11
       flow_unit: 1
     wait:
       type: duration
@@ -38,7 +38,7 @@ steps:
       dispense_volume: 10.0
       volume_unit: 1
       repeat_count: 1
-      tube_model: 13
+      tube_model: 11
       flow_unit: 1
     wait:
       type: pump_complete
@@ -63,7 +63,7 @@ steps:
       repeat_count: 2
       interval_time: 5.0
       interval_time_unit: 0
-      tube_model: 13
+      tube_model: 11
       flow_unit: 1
     wait:
       type: duration
@@ -90,7 +90,7 @@ steps:
       dispense_volume: 15.0
       volume_unit: 1
       repeat_count: 1
-      tube_model: 13
+      tube_model: 11
       flow_unit: 1
     wait:
       type: pump_complete
