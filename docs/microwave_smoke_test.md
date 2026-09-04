@@ -74,7 +74,8 @@ enable_control_writes: true
 
 - [ ] 未发生微波启动。
 - [ ] 状态可读，或失败原因明确。
-- [ ] payload 包含 `device_id`、`connection_port`、`running`、`material_temperature`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code`、`allow_experiment_control`、`allow_real_hardware_writes`、`enable_control_writes`。
+- [ ] payload 包含 `device_id`、`connection_port`、`running`、`control_word`、`control_active`、`output_active`、`stop_confirmed`、`status_confirmed`、`material_temperature`、`power_percent`、`current`、`runtime_seconds`、`fault_code` 和 `current_mode_code`。
+- [ ] `control_active` 只解释协议声明可读的 40151 启动位；状态不可读时 `status_confirmed` 不得显示为已确认停止。
 - [ ] `fault_code` 只按原始值记录，不解释未确认 bit。
 
 ## 2. 地址基准确认
@@ -108,7 +109,8 @@ enable_control_writes: true
 验收：
 
 - [ ] stop 写入未导致异常启动。
-- [ ] 设备停机或保持停止状态。
+- [ ] 40151 启动位清除，功率和电流在有界等待内归零，`stop_confirmed=true`。
+- [ ] HMI 和物理输出确认设备停机或保持停止状态。
 - [ ] 失败时 API/日志没有伪装成成功。
 - [ ] 实验室确认 stop 写 `0` 是否可作为正式语义；如不能，记录厂家建议值。
 

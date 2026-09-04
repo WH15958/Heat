@@ -98,9 +98,8 @@ python tests\test_hardware.py --port COMx --confirm-hardware-write
 
 ### 4.2 前端构建产物
 
-- `src/web/static/` 是前端构建目录
-- 构建时会被覆盖
-- 提交前要确认是否真的需要提交该目录内容
+- `src/web/static/` 是被 Git 忽略的前端构建目录
+- 构建时会被覆盖，不进入提交
 
 ### 4.3 提交前检查
 
@@ -159,13 +158,6 @@ git commit -m "fix: your message"
 ```bash
 git push origin <branch>
 git push github <branch>
-```
-
-如果当前分支是 `develop-web`：
-
-```bash
-git push origin develop-web
-git push github develop-web
 ```
 
 ---
@@ -249,10 +241,6 @@ git push github --delete feature/<topic>
 - 工作区干净
 - 两个远程的 `master` 已同步
 - 该分支不再承担长期集成职责
-
-当前仓库中的 `develop-web` 就属于这种情况：它是已完成并已合入主线的阶段性开发分支，不应继续承载下一轮硬件集成开发。
-
----
 
 ## 10. Codex `/git` 判断式流程
 

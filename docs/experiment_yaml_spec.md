@@ -535,8 +535,8 @@
 ## 6. 最小示例
 
 ```yaml
-name: simple_heat_test
-description: 简单加热测试
+name: documentation_heat_example
+description: 仅用于说明 YAML 结构，不代表已批准实验
 steps:
   - id: set_temp
     type: heater.set_temperature
@@ -563,12 +563,12 @@ steps:
 ## 7. 带 metadata 的完整示例
 
 ```yaml
-name: cspbbr3_baseline
+name: documentation_metadata_example
 description: metadata demo
 metadata:
-  material_system: CsPbBr3
-  batch_id: CsPbBr3_20260528_B01
-  condition_id: T140_t180_R2
+  material_system: example_material
+  batch_id: EXAMPLE_B01
+  condition_id: example_condition
   sample_index: 3
   operator: WH
   recipe_version: v0.1
@@ -577,7 +577,7 @@ steps:
     type: heater.set_temperature
     params:
       device_id: heater1
-      temperature: 140.0
+      temperature: 50.0
 
   - id: start_and_wait
     type: heater.start

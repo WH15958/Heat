@@ -37,13 +37,24 @@ def test_engine_start_failure_does_not_leave_running_state():
 
 def test_start_experiment_cleans_engine_when_start_run_fails():
     from fastapi import HTTPException
+    from src.experiment import parser
     from src.web.api import experiments as exp_api
 
     class Request:
         app = SimpleNamespace(state=SimpleNamespace(device_manager=Mock()))
 
     original_start_run = exp_api.ExperimentLogger.start_run
+    original_experiments_dir = parser.EXPERIMENTS_DIR
     exp_api._engines.clear()
+    tmp_dir = Path(tempfile.mkdtemp())
+    experiments_dir = tmp_dir / "experiments"
+    experiments_dir.mkdir()
+    filename = "start_failure_fixture.yaml"
+    (experiments_dir / filename).write_text(
+        "name: start_failure_fixture\ndescription: isolated fixture\nsteps: []\n",
+        encoding="utf-8",
+    )
+    parser.EXPERIMENTS_DIR = experiments_dir
 
     def fail_start_run(self, *args, **kwargs):
         raise OSError("samples.csv unreadable")
@@ -53,17 +64,19 @@ def test_start_experiment_cleans_engine_when_start_run_fails():
         try:
             try:
                 await exp_api.start_experiment(
-                    "simple_heat_test.yaml",
+                    filename,
                     exp_api.StartExperimentRequest(save_log=False),
                     Request(),
                 )
                 raise AssertionError("start_experiment should raise HTTPException")
             except HTTPException as e:
                 assert e.status_code == 500
-            assert "simple_heat_test.yaml" not in exp_api._engines
+            assert filename not in exp_api._engines
         finally:
             exp_api.ExperimentLogger.start_run = original_start_run
+            parser.EXPERIMENTS_DIR = original_experiments_dir
             exp_api._engines.clear()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     asyncio.run(scenario())
 

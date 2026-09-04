@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from pathlib import Path
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,6 +30,31 @@ def test_experiment_list_includes_yaml_and_yml(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert [item["filename"] for item in response.json()] == ["alpha.yaml", "beta.yml"]
+
+
+def test_production_experiment_assets_are_reviewed_and_strict():
+    from src.experiment.parser import list_experiments, parse_experiment
+
+    expected = {
+        "low_risk_all_devices_smoke_test.yaml",
+        "mvp_water_loop_baseline.yaml",
+        "pump_microwave_water_flow_test.yaml",
+    }
+    assert {item["filename"] for item in list_experiments()} == expected
+
+    for filename in expected:
+        parsed = parse_experiment(filename)
+        assert parsed["metadata"].get("safety_notes")
+        raw = yaml.safe_load((Path("experiments") / filename).read_text(encoding="utf-8"))
+        assert all(step.get("on_error", "stop") != "skip" for step in raw["steps"])
+
+    archived = Path("docs/archive/experiments")
+    assert {
+        "chemical_synthesis_A.yaml",
+        "cspbbr3_baseline.yaml",
+        "pump_four_channel_demo.yaml",
+        "simple_heat_test.yaml",
+    }.issubset({path.name for path in archived.glob("*.yaml")})
 
 
 def test_main_returns_nonzero_when_experiment_fails(monkeypatch):

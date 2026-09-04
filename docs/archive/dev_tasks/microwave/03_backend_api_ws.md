@@ -1,5 +1,7 @@
 # 03 后端 API 与 WebSocket
 
+> 归档提示：本文件是已完成任务记录，不代表当前实现或实机验收结论。
+
 ## 目标
 
 在 `02_backend_driver.md` 完成后，把微波仪驱动暴露到 Web 层：REST API、WebSocket 实时 payload、全局急停。此任务不做前端页面和 YAML 自动化。

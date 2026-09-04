@@ -528,11 +528,25 @@ def test_list_experiments_includes_metadata_yaml():
 
     from src.experiment.parser import list_experiments
 
-    exps = list_experiments()
-    names = [e["name"] for e in exps]
-    assert "cspbbr3_baseline" in names or any("CsPbBr3" in e.get("description", "") for e in exps)
-    print(f"  当前实验列表: {names}")
-    print("[OK] list_experiments 正常工作")
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        (tmp_dir / "metadata_test.yaml").write_text(
+            "name: metadata_test\n"
+            "description: isolated fixture\n"
+            "metadata:\n  material_system: test\n"
+            "steps: []\n",
+            encoding="utf-8",
+        )
+        exps = list_experiments(str(tmp_dir))
+        assert exps == [{
+            "filename": "metadata_test.yaml",
+            "name": "metadata_test",
+            "description": "isolated fixture",
+            "steps_count": 0,
+        }]
+        print("[OK] list_experiments 使用独立 fixture 正常工作")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def test_sample_record_utf8_encoding():

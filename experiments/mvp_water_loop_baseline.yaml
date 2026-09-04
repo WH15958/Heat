@@ -15,7 +15,9 @@ metadata:
     Run only after confirming device identity, liquid lines, waste path,
     microwave non-empty load, probe immersion, ventilation, grounding, and
     on-site supervision. Any skipped, timeout, or read_failed event means this
-    MVP run is not accepted until reviewed.
+    MVP run is not accepted until reviewed. Flow rates, durations and temperature
+    values are provisional and must not be released before Gate calibration and
+    laboratory approval.
 
 steps:
   - id: mvp_precheck_notice
@@ -62,7 +64,7 @@ steps:
     type: heater.stop
     params:
       device_id: heater1
-    on_error: skip
+    on_error: stop
 
   - id: heater2_set_low_temperature
     type: heater.set_temperature
@@ -94,7 +96,7 @@ steps:
     type: heater.stop
     params:
       device_id: heater2
-    on_error: skip
+    on_error: stop
 
   - id: line_a_prime_to_waste
     type: pump.start
@@ -116,7 +118,7 @@ steps:
     params:
       device_id: pump1
       channel: 1
-    on_error: skip
+    on_error: stop
 
   - id: line_b_prime_to_waste
     type: pump.start
@@ -138,7 +140,7 @@ steps:
     params:
       device_id: pump1
       channel: 2
-    on_error: skip
+    on_error: stop
 
   - id: clean_line_prime_to_waste
     type: pump.start
@@ -160,7 +162,7 @@ steps:
     params:
       device_id: pump1
       channel: 3
-    on_error: skip
+    on_error: stop
 
   - id: spare_line_short_check
     type: pump.start
@@ -182,7 +184,7 @@ steps:
     params:
       device_id: pump1
       channel: 4
-    on_error: skip
+    on_error: stop
 
   - id: operator_confirm_microwave_ready
     type: log
@@ -208,7 +210,7 @@ steps:
     params:
       device_id: microwave1
       mode: auto_power
-    on_error: skip
+    on_error: stop
 
   - id: microwave_wait_low_temperature
     type: wait
@@ -219,7 +221,7 @@ steps:
       target_temperature: 30
       tolerance: 10
       timeout: 30
-    on_error: skip
+    on_error: stop
 
   - id: microwave_hold_short
     type: wait
@@ -227,45 +229,45 @@ steps:
     wait:
       type: duration
       seconds: 5
-    on_error: skip
+    on_error: stop
 
   - id: microwave_stop_after_short_run
     type: microwave.stop
     params:
       device_id: microwave1
-    on_error: skip
+    on_error: stop
 
   - id: pump_stop_all
     type: pump.stop
     params:
       device_id: pump1
-    on_error: skip
+    on_error: stop
 
   - id: heater1_stop
     type: heater.stop
     params:
       device_id: heater1
-    on_error: skip
+    on_error: stop
 
   - id: heater2_stop
     type: heater.stop
     params:
       device_id: heater2
-    on_error: skip
+    on_error: stop
 
   - id: leave_heater1_safe_setpoint
     type: heater.set_temperature
     params:
       device_id: heater1
       temperature: 25.0
-    on_error: skip
+    on_error: stop
 
   - id: leave_heater2_safe_setpoint
     type: heater.set_temperature
     params:
       device_id: heater2
       temperature: 25.0
-    on_error: skip
+    on_error: stop
 
   - id: final_emergency_stop_all
     type: emergency_stop

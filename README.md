@@ -12,7 +12,7 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 - 后端：Python + FastAPI
 - 前端：Vue 3 + Vite + Element Plus
-- 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵
+- 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵、MKM-AH1E 微波反应仪
 - 协议：AIBUS、MODBUS RTU
 - 实验定义：YAML
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
@@ -79,9 +79,11 @@ python run_server.py
 ### 面向使用者
 
 - [docs/user_guide.md](docs/user_guide.md)：系统启动、页面使用、实验执行、行为语义、常见问题
-- [docs/mvp_device_ready_runbook.md](docs/mvp_device_ready_runbook.md)：设备就位后的水/替代液闭环 MVP 运行手册、标定表和记录模板
+- [docs/mvp_device_ready_runbook.md](docs/mvp_device_ready_runbook.md)：设备就位后的水/替代液闭环 MVP 操作顺序和材料入口
+- [docs/mvp_system_acceptance_checklist.md](docs/mvp_system_acceptance_checklist.md)：MVP Gate 验收、证据和签字的唯一记录
+- [docs/microwave_smoke_test.md](docs/microwave_smoke_test.md)：微波仪分级实机 smoke test
 - [docs/campaign_workflow.md](docs/campaign_workflow.md)：批次式人工闭环优化、Trial 与离线表征录入流程
-- [docs/system_engineering_design.md](docs/system_engineering_design.md)：前驱体加热、蠕动泵、管路、微波入口、收集与标定的工程连接层设计
+- [docs/system_engineering_design.md](docs/system_engineering_design.md)：当前水测试液路、死体积、预灌和三层标定的长期工程参考
 - [docs/device_materials/](docs/device_materials/)：设备说明书、通信协议原始资料和转换版资料
 - [docs/experiment_yaml_spec.md](docs/experiment_yaml_spec.md)：实验 YAML 规范与示例
 - [docs/troubleshooting.md](docs/troubleshooting.md)：常见故障排查
@@ -102,6 +104,8 @@ python run_server.py
 - 单实验运行保护、暂停、恢复、停止
 - 实验日志保存开关、历史记录查询与删除
 - metadata 到 `sample_id` 到 `samples.csv` 的样品追踪链路
+
+实验页面只列出 `experiments/` 中经过当前审查的可执行 YAML。归档示例不会出现在实验列表中，也不代表已经通过当前硬件与安全验收；活动流程仍须按 Gate 清单完成实机放行。
 
 ## 最小开发 / 测试命令
 

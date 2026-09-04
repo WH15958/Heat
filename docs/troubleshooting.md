@@ -207,13 +207,34 @@ python scripts/cleanup_locks.py --force
 ### 建议处理
 
 1. 在 `frontend/` 执行 `npm run build`
-2. 确认构建产物已写入 `src/web/static/`
+2. 确认构建产物已写入 `src/web/static/`；该目录是忽略的构建产物，不应提交
 3. 重启后端服务
 4. 浏览器执行强制刷新
 
 ---
 
-## 9. 需要继续看哪里
+## 9. 写后读回不一致或状态未知
+
+### 现象
+
+- 命令帧写入成功，但启动/停止仍返回失败
+- 日志出现 `readback mismatch`、`read_failed` 或页面显示“状态未知”
+- 泵软管写入 `11`，读回 `13`
+
+### 建议处理
+
+1. 不要通过增加串口速度、放宽所有读回或重试启动来绕过。写入成功只表示设备响应了写命令，不代表参数和最终状态已经确认。
+2. 核对 COM 口、站号、波特率、校验位、寄存器地址和 HMI；读取失败时保留“状态未知”，不能用缓存状态判定已经停止。
+3. `pump1` 当前只允许经 HMI 确认的设备级软管映射 `11 -> 13`。其他映射或其他泵仍必须严格同值，先记录实机证据再修改配置。
+4. 查看后端日志中的具体寄存器、请求值、读回值和 `last_command_error`，按 [mvp_system_acceptance_checklist.md](mvp_system_acceptance_checklist.md) 留证。
+
+## 10. 前端构建出现 `auto-imports.d.ts EPERM`
+
+这是文件占用或权限问题，不是 TypeScript 类型错误。先停止正在运行并占用前端生成文件的 Vite/npm 进程，确认当前账号可写 `frontend/auto-imports.d.ts`，再重新构建。不要删除或覆盖生成声明文件来掩盖占用问题；构建后先检查内容 diff 和换行变化。
+
+---
+
+## 11. 需要继续看哪里
 
 - 使用方式： [user_guide.md](user_guide.md)
 - YAML 规范： [experiment_yaml_spec.md](experiment_yaml_spec.md)

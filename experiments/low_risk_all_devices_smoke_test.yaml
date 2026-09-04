@@ -12,6 +12,7 @@ metadata:
   safety_notes: >
     运行前确认：泵所有通道接入去离子水/废液或允许短时空转的安全回路；
     加热器可安全短时启动到 30 C；微波仪禁止空载，需放置符合 SOP 的安全低风险负载。
+    本文件中的流量、温度和时间仅用于分级验机，完成 Gate 标定与实验室批准前不得作为放行参数。
 
 steps:
   - id: operator_precheck_notice
@@ -43,7 +44,7 @@ steps:
       device_id: heater1
       tolerance: 15.0
       timeout: 10
-    on_error: skip
+    on_error: stop
 
   - id: heater1_start_short
     type: heater.start
@@ -82,7 +83,7 @@ steps:
       device_id: heater2
       tolerance: 15.0
       timeout: 10
-    on_error: skip
+    on_error: stop
 
   - id: heater2_start_short
     type: heater.start
@@ -158,7 +159,7 @@ steps:
       device_id: pump1
       channel: 2
       timeout: 30
-    on_error: skip
+    on_error: stop
 
   - id: pump_ch2_stop_channel
     type: pump.stop_channel
@@ -190,7 +191,7 @@ steps:
       device_id: pump1
       channel: 3
       timeout: 30
-    on_error: skip
+    on_error: stop
 
   - id: pump_ch3_stop_channel
     type: pump.stop_channel
@@ -222,7 +223,7 @@ steps:
       device_id: pump1
       channel: 4
       timeout: 30
-    on_error: skip
+    on_error: stop
 
   - id: pump_ch4_stop_channel
     type: pump.stop_channel
@@ -291,14 +292,14 @@ steps:
       target_temperature: 25
       tolerance: 20
       timeout: 5
-    on_error: skip
+    on_error: stop
 
   - id: microwave_start_auto_power_short
     type: microwave.start
     params:
       device_id: microwave1
       mode: auto_power
-    on_error: skip
+    on_error: stop
 
   - id: microwave_wait_auto_power_target_short
     type: wait
@@ -309,7 +310,7 @@ steps:
       target_temperature: 30
       tolerance: 10
       timeout: 20
-    on_error: skip
+    on_error: stop
 
   - id: microwave_hold_auto_power_short
     type: wait
@@ -317,7 +318,7 @@ steps:
     wait:
       type: duration
       seconds: 5
-    on_error: skip
+    on_error: stop
 
   - id: microwave_stop
     type: microwave.stop

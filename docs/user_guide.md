@@ -46,7 +46,7 @@ npm run build
 
 ### 2.1 页面入口
 
-系统包含 4 个主要页面：
+系统包含 5 个主要页面：
 
 | 页面 | 路径 | 作用 |
 |------|------|------|
@@ -65,7 +65,7 @@ npm run build
 1. 找到目标设备
 2. 点击“连接”
 3. 连接成功后状态会更新
-4. 控制卡片会显示注册串口，例如加热器 `COM7`/`COM9`、蠕动泵 `COM10`；微波仪以当前 `system_config.yaml` 为准（本地当前为 `COM17`）。
+4. 控制卡片会显示注册串口，例如加热器 `COM7`/`COM8`、蠕动泵 `COM10`；微波仪以当前 `system_config.yaml` 为准（本地当前为 `COM17`）。
 
 设备参数可以在连接前预填。写入、启动或停止按钮不再仅靠前端置灰来拦截；点击后会先做连接/状态检查，必要时弹出设备检查确认。未连接、后端返回 `False`、超时或状态异常都会显示为失败。
 
@@ -109,7 +109,7 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 
 启动泵通道前，页面会提示确认串口、通道、模式、软管、流向、入口/出口、收集或废液容器和现场看护。停止操作仍应优先用于安全停机；如果泵设备返回失败，页面会明确显示失败。
 
-页面按实际单位显示泵流量；`TIME_QUANTITY` 会先把体积和时间换算为 `mL/min`。输入上限取所选管型额定上限与通道配置 `max_flow_rate` 的较小值；若换算后某单位没有满足协议最小值 `0.01` 的合法区间，该单位会被禁用。流量曲线统一换算为 `mL/min` 后绘制，RPM 或未知单位不会与体积流量混在同一坐标轴。某通道状态读取失败时会明确显示“读取失败”，该次缓存值不会继续画入曲线或写入实验传感器日志。
+页面按实际单位显示泵流量；`TIME_QUANTITY` 会先把体积和时间换算为 `mL/min`。输入上限取所选管型额定上限与通道配置 `max_flow_rate` 的较小值；若换算后某单位没有满足协议最小值 `0.01` 的合法区间，该单位会被禁用。实时和历史数据中的 `running` 表示启停寄存器读回，`read_ok` 表示本次读取有效。`flow_rate` 是设备设定/报告流速，不是独立流量计实测值；只有 `running=true` 且 `read_ok=true` 的区间才表示软件确认的输运区间。RPM 或未知单位不会与体积流量混在同一坐标轴。
 
 每个泵通道的“预灌估算”可以录入多段软管长度。页面使用当前软管型号规格中的内径汇总理论死体积，并按当前页面设定的有效流量计算理论预灌时间；`TIME_QUANTITY` 使用体积与时间换算后的流量，RPM 模式因缺少体积流量而不计算时间。管段长度保存在当前浏览器中，但估算结果不会写入泵运行参数或实验 YAML。该结果不包含接头、反应器、气泡、管路弹性、背压和安全余量，真实操作仍须完成排气、真实流量标定和实验室确认。
 
@@ -139,6 +139,10 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 | 当前段 | 当前段号，来自设备状态 |
 | 当前模式 | 当前后端可识别模式；未知枚举会显示为未知 |
 | 故障码 | 原始故障码；协议未确认 bit 含义前不解释成具体故障 |
+| `control_active` | 40151 中协议声明可读的启动位；`null` 表示未确认 |
+| `output_active` | 功率或电流是否表明存在输出 |
+| `stop_confirmed` | 启动位清除且功率、电流归零 |
+| `status_confirmed` | 本次控制状态读取是否有效 |
 
 `allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 仍可能出现在配置或状态 payload 中，用于兼容旧版本和现场记录；当前软件不再把它们作为前端手动或 YAML 自动控制的阻断门。真实硬件安全仍由实验室 SOP、现场看护、设备面板和设备自身门控联锁确认。
 
@@ -282,28 +286,17 @@ Heat 在软件层按 Modbus RTU 控制蠕动泵；现场物理接线可能是 RS
 - 每个步骤至少要有 `id` 和 `type`
 - 微波仪 `configure`、`start` 和 `stop` 动作会直接调用已注册设备；失败时实验步骤失败，不会静默继续
 
-最小示例：
-
-```yaml
-name: simple_heat_test
-description: 简单加热测试
-steps:
-  - id: set_temp
-    type: heater.set_temperature
-    params:
-      device_id: heater1
-      temperature: 50.0
-```
-
 需要完整字段、动作表、等待表、metadata 说明时，请看：
 
 - [experiment_yaml_spec.md](experiment_yaml_spec.md)
 
-设备就位后的低风险 MVP 基线文件是：
+当前实验页面只列出以下经过仓库审查的流程：
 
+- `experiments/low_risk_all_devices_smoke_test.yaml`
 - `experiments/mvp_water_loop_baseline.yaml`
+- `experiments/pump_microwave_water_flow_test.yaml`
 
-运行它之前必须完成 [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md) 中的设备确认、液路标定和微波人工确认。该 YAML 是水/替代液闭环验证，不是化学配方；任何 skipped、timeout 或 read_failed 都不算 MVP 通过。
+运行前必须按 [mvp_device_ready_runbook.md](mvp_device_ready_runbook.md) 进入对应 Gate，并在 [mvp_system_acceptance_checklist.md](mvp_system_acceptance_checklist.md) 留证。文件出现在页面中不等于已经通过实验室放行。
 
 ---
 
@@ -335,24 +328,26 @@ steps:
 
 如果你只是偶尔需要通过脚本触发系统，以下示例足够：
 
+把 `{approved_filename}` 替换为当次已经通过相应 Gate、且由实验室批准的活动 YAML 文件名。不要直接把示例命令当作硬件启动授权。
+
 ### 7.1 启动实验
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/start' -ContentType 'application/json' -Body '{"save_log": true}'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/{approved_filename}/start' -ContentType 'application/json' -Body '{"save_log": true}'
 ```
 
 ### 7.2 暂停 / 恢复 / 停止实验
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/pause'
-Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/resume'
-Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/stop'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/{approved_filename}/pause'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/{approved_filename}/resume'
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/experiments/{approved_filename}/stop'
 ```
 
 ### 7.3 查询实验进度
 
 ```powershell
-Invoke-RestMethod -Method Get -Uri 'http://localhost:8000/api/experiments/simple_heat_test.yaml/progress'
+Invoke-RestMethod -Method Get -Uri 'http://localhost:8000/api/experiments/{approved_filename}/progress'
 ```
 
 ---
