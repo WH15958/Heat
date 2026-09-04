@@ -152,6 +152,11 @@ interface TimePoint {
   v: number | null
 }
 
+interface StatusPoint {
+  t: number
+  v: boolean | null
+}
+
 interface HeaterSensorData {
   pv: TimePoint[]
   sv: TimePoint[]
@@ -160,6 +165,8 @@ interface HeaterSensorData {
 interface ChannelSensorData {
   flow_rate: TimePoint[]
   volume: TimePoint[]
+  running?: StatusPoint[]
+  read_ok?: StatusPoint[]
   flow_unit?: string
 }
 
@@ -245,9 +252,20 @@ function flowYAxisName(sd: SensorData): string {
     }
   }
   if (units.size === 1) {
-    return `流量(${flowUnitLabel([...units][0])})`
+    return `确认运行流量(${flowUnitLabel([...units][0])})`
   }
-  return '流量'
+  return '确认运行流量'
+}
+
+function effectivePumpFlow(chdata: ChannelSensorData): TimePoint[] {
+  return (chdata.flow_rate || []).map((point, index) => {
+    const readOk = chdata.read_ok?.[index]?.v
+    const running = chdata.running?.[index]?.v
+    if (readOk === false || running === false || running === null) {
+      return { t: point.t, v: 0 }
+    }
+    return point
+  })
 }
 
 function volumeYAxisName(sd: SensorData): string {
@@ -457,7 +475,7 @@ function renderReportCharts() {
             series.push({
               name,
               type: 'line',
-              data: chdata.flow_rate.map((p: TimePoint) => [p.t, p.v]),
+              data: effectivePumpFlow(chdata).map((p: TimePoint) => [p.t, p.v]),
               smooth: true,
               showSymbol: false,
               lineStyle: { color: colors[colorIdx] },
@@ -500,12 +518,13 @@ function renderReportCharts() {
             channelVolumeUnits[name] = volumeUnitLabel(chdata.flow_unit)
             const cumulative: [number, number][] = []
             let vol = 0.0
-            for (let i = 0; i < chdata.flow_rate.length; i++) {
-              const cur = chdata.flow_rate[i]
+            const flowPoints = effectivePumpFlow(chdata)
+            for (let i = 0; i < flowPoints.length; i++) {
+              const cur = flowPoints[i]
               if (i > 0) {
-                const prev = chdata.flow_rate[i - 1]
+                const prev = flowPoints[i - 1]
                 const dt = (cur.t - prev.t) / 60.0
-                const avgRate = ((prev.v ?? 0) + (cur.v ?? 0)) / 2.0
+                const avgRate = (Number(prev.v ?? 0) + Number(cur.v ?? 0)) / 2.0
                 vol += avgRate * dt
               }
               cumulative.push([cur.t, parseFloat(vol.toFixed(4))])

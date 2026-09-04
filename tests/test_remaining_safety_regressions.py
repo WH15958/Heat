@@ -51,7 +51,7 @@ def test_spa_fallback_does_not_hide_unknown_backend_routes(path):
     assert response.status_code == 404
 
 
-def test_experiment_logger_skips_pump_channels_with_failed_reads():
+def test_experiment_logger_records_pump_read_quality_without_false_flow():
     from src.experiment.experiment_logger import ExperimentLogger, ExperimentRun
 
     experiment_logger = ExperimentLogger(save_log=False)
@@ -86,7 +86,9 @@ def test_experiment_logger_skips_pump_channels_with_failed_reads():
     )
 
     pump_data = experiment_logger.active_run.sensor_data["pumps"]["pump1"]
-    assert "1" not in pump_data
+    assert pump_data["1"]["read_ok"][0]["v"] is False
+    assert pump_data["1"]["running"][0]["v"] is None
+    assert pump_data["1"]["flow_rate"][0]["v"] is None
     assert pump_data["2"]["flow_rate"][0]["v"] == 1.5
     assert pump_data["2"]["volume"][0]["v"] == 2.5
 

@@ -19,6 +19,7 @@ import copy
 import atexit
 import weakref
 import struct
+import math
 
 from src.devices.base_device import (
     BaseDevice, DeviceConfig, DeviceData, DeviceInfo, 
@@ -54,6 +55,7 @@ class PumpChannelData:
     enabled: bool = False
     running: bool = False
     paused: bool = False
+    run_status: PumpRunStatus = PumpRunStatus.STOP
     direction: PumpDirection = PumpDirection.CLOCKWISE
     run_mode: PumpRunMode = PumpRunMode.FLOW_MODE
     flow_rate: float = 0.0
@@ -135,6 +137,8 @@ class LabSmartPumpDevice(BaseDevice):
     ]
     
     MAX_CHANNELS = 4
+    READBACK_ATTEMPTS = 3
+    READBACK_DELAY = 0.25
     _atexit_refs: List[weakref.ref] = []
     _atexit_registered = False
     _atexit_lock = threading.Lock()
@@ -162,6 +166,7 @@ class LabSmartPumpDevice(BaseDevice):
                 description="多通道独立控制蠕动泵",
             )
         super().__init__(config, info)
+        self.last_command_error: Optional[str] = None
         
         for ch_config in config.channels:
             self._channel_data[ch_config.channel] = PumpChannelData(channel=ch_config.channel)
@@ -567,11 +572,19 @@ class LabSmartPumpDevice(BaseDevice):
         if not self._validate_channel(channel):
             return False
 
+        self.last_command_error = None
         address = get_channel_address(1, channel)
         result = self._write_register(address, PumpRunStatus.START)
+        if not result:
+            self.last_command_error = f"pump CH{channel} start write failed"
+        if result:
+            result = self.wait_for_register_value(
+                address, int(PumpRunStatus.START), label=f"CH{channel} start"
+            )
         logger.info(f"CH{channel} start addr={address} val={PumpRunStatus.START} result={result}")
 
         if result and channel in self._channel_data:
+            self._channel_data[channel].run_status = PumpRunStatus.START
             self._channel_data[channel].running = True
             self._channel_data[channel].paused = False
 
@@ -590,10 +603,18 @@ class LabSmartPumpDevice(BaseDevice):
         if not self._validate_channel(channel):
             return False
 
+        self.last_command_error = None
         address = get_channel_address(1, channel)
         result = self._write_register(address, PumpRunStatus.STOP)
+        if not result:
+            self.last_command_error = f"pump CH{channel} stop write failed"
+        if result:
+            result = self.wait_for_register_value(
+                address, int(PumpRunStatus.STOP), label=f"CH{channel} stop"
+            )
 
         if result and channel in self._channel_data:
+            self._channel_data[channel].run_status = PumpRunStatus.STOP
             self._channel_data[channel].running = False
             self._channel_data[channel].paused = False
 
@@ -658,7 +679,86 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 成功返回True
         """
-        return self._write_register(10, 0)
+        self.last_command_error = None
+        if not self._write_register(10, 0):
+            self.last_command_error = "pump stop_all write failed"
+            return False
+        success = True
+        for channel in range(1, self.MAX_CHANNELS + 1):
+            address = get_channel_address(1, channel)
+            if not self.wait_for_register_value(
+                address, int(PumpRunStatus.STOP), label=f"CH{channel} stop_all"
+            ):
+                success = False
+            elif channel in self._channel_data:
+                self._channel_data[channel].run_status = PumpRunStatus.STOP
+                self._channel_data[channel].running = False
+                self._channel_data[channel].paused = False
+        return success
+
+    def read_register_value(self, address: int) -> Optional[int]:
+        """Read one uint16 register without using cached channel state."""
+        values = self._read_registers(address, 1)
+        if values is None or len(values) != 1:
+            return None
+        return int(values[0])
+
+    def wait_for_register_value(
+        self,
+        address: int,
+        expected: int,
+        *,
+        label: str,
+        attempts: Optional[int] = None,
+    ) -> bool:
+        """Boundedly verify a readable register after a write."""
+        attempts = attempts or self.READBACK_ATTEMPTS
+        last_value = None
+        for attempt in range(attempts):
+            last_value = self.read_register_value(address)
+            if last_value == int(expected):
+                return True
+            if attempt + 1 < attempts:
+                time.sleep(self.READBACK_DELAY)
+        self.last_command_error = (
+            f"{label} readback mismatch: expected={int(expected)} "
+            f"readback={last_value}"
+        )
+        self._logger.error(self.last_command_error)
+        return False
+
+    def read_float_value(self, address: int) -> Optional[float]:
+        """Read one protocol float without using cached channel state."""
+        value = self._read_float(address)
+        if value is None or not math.isfinite(value):
+            return None
+        return float(value)
+
+    def wait_for_float_value(
+        self,
+        address: int,
+        expected: float,
+        *,
+        label: str,
+        attempts: Optional[int] = None,
+    ) -> bool:
+        """Boundedly verify a floating-point register after a write."""
+        attempts = attempts or self.READBACK_ATTEMPTS
+        last_value = None
+        for attempt in range(attempts):
+            last_value = self.read_float_value(address)
+            if last_value is not None and math.isclose(
+                last_value, float(expected), rel_tol=1e-5, abs_tol=1e-4
+            ):
+                return True
+            if attempt + 1 < attempts:
+                time.sleep(self.READBACK_DELAY)
+        self.last_command_error = (
+            f"{label} readback mismatch: expected={float(expected)} "
+            f"readback={last_value}"
+        )
+        self._logger.error(self.last_command_error)
+        return False
     
     def set_direction(self, channel: int, direction: PumpDirection) -> bool:
         """
@@ -902,6 +1002,27 @@ class LabSmartPumpDevice(BaseDevice):
         )
         return readback == expected
 
+    def wait_for_tube_model(self, channel: int, requested: int) -> bool:
+        """Boundedly verify n004 using this device's firmware override."""
+        last_value = None
+        for attempt in range(self.READBACK_ATTEMPTS):
+            last_value = self.get_tube_model(channel)
+            if self.tube_model_readback_matches(requested, last_value):
+                if last_value != requested:
+                    self._logger.info(
+                        f"CH{channel} tube_model accepted configured firmware "
+                        f"override: requested={requested} readback={last_value}"
+                    )
+                return True
+            if attempt + 1 < self.READBACK_ATTEMPTS:
+                time.sleep(self.READBACK_DELAY)
+        self.last_command_error = (
+            f"pump CH{channel} tube_model readback mismatch: "
+            f"requested={requested} readback={last_value}"
+        )
+        self._logger.error(self.last_command_error)
+        return False
+
     def get_channel_config(self, channel: int) -> Optional["PumpChannelConfig"]:
         """获取通道配置
 
@@ -1038,12 +1159,20 @@ class LabSmartPumpDevice(BaseDevice):
 
         if all(v is not None for v in control_values):
             logger.debug(f"CH{channel} control regs: {control_values}")
-            data.enabled = bool(control_values[0])
-            run_status = control_values[1]
-            data.running = run_status in (PumpRunStatus.START, PumpRunStatus.FULL_SPEED)
-            data.paused = run_status == PumpRunStatus.PAUSE
-            data.direction = self._safe_enum(PumpDirection, control_values[2], PumpDirection.CLOCKWISE)
-            data.run_mode = self._safe_enum(PumpRunMode, control_values[6], PumpRunMode.FLOW_MODE)
+            try:
+                if control_values[0] not in (0, 1):
+                    raise ValueError(f"invalid enable={control_values[0]}")
+                data.enabled = bool(control_values[0])
+                data.run_status = PumpRunStatus(control_values[1])
+                data.direction = PumpDirection(control_values[2])
+                data.run_mode = PumpRunMode(control_values[6])
+            except (TypeError, ValueError) as exc:
+                logger.warning(f"CH{channel} invalid control register value: {exc}")
+                return None
+            data.running = data.run_status in (
+                PumpRunStatus.START, PumpRunStatus.FULL_SPEED
+            )
+            data.paused = data.run_status == PumpRunStatus.PAUSE
         else:
             logger.debug(f"CH{channel} control read failed: {control_values}")
             return None
@@ -1054,12 +1183,16 @@ class LabSmartPumpDevice(BaseDevice):
             data.remaining_volume = self._parse_float_from_registers(param_values[4], param_values[5])
             data.flow_rate = self._parse_float_from_registers(param_values[10], param_values[11])
             data.remaining_time = self._parse_float_from_registers(param_values[7], param_values[8])
+            try:
+                data.flow_unit = FlowUnit(param_values[12])
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"CH{channel} invalid flow unit readback: {param_values[12]}"
+                )
+                return None
         else:
-            logger.debug(f"CH{channel} param read failed, trying key fields only")
-            flow_addr = get_channel_address(110, channel)
-            _flow_rate = self._read_float(flow_addr)
-            if _flow_rate is not None:
-                data.flow_rate = _flow_rate
+            logger.warning(f"CH{channel} parameter block read failed")
+            return None
 
         self._channel_data[channel] = data
         return data

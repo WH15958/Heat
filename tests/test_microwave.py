@@ -227,6 +227,41 @@ def test_read_data_uses_float_temperature_and_runtime_seconds():
     assert status.runtime_seconds == 3723
     assert data.data["fault_code"] == 4
     assert data.data["current_mode_code"] == 6
+    assert data.data["control_active"] is False
+    assert data.data["output_active"] is True
+    assert data.data["stop_confirmed"] is False
+
+
+def test_start_rejects_fault_status_after_control_write():
+    device, protocol = make_device()
+    protocol.registers[STATUS_FAULT_CODE] = 7
+    device.READBACK_ATTEMPTS = 1
+
+    assert device.start(MicrowaveMode.AUTO_POWER) is False
+
+
+def test_stop_requires_control_clear_and_zero_output():
+    device, protocol = make_device()
+    protocol.registers[STATUS_CURRENT] = 1
+    device.STOP_READBACK_ATTEMPTS = 1
+
+    assert device.stop() is False
+
+
+def test_configuration_rejects_readback_mismatch():
+    device, protocol = make_device()
+    original_read = protocol.read_holding_registers
+
+    def mismatched_read(slave_address, start_address, count):
+        values = original_read(slave_address, start_address, count)
+        if start_address == 0:
+            values[0] += 1
+        return values
+
+    protocol.read_holding_registers = mismatched_read
+    device.READBACK_ATTEMPTS = 1
+
+    assert device.configure_manual([MicrowaveSegment(segment=1)]) is False
 
 
 def test_read_data_falls_back_to_raw_temperature():

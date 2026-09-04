@@ -130,7 +130,7 @@ def test_delete_history_removes_matching_sample_records_only():
 def test_device_manager_payload_and_control_fixes():
     from src.web.device_manager import DeviceManager
     from src.protocols.microwave_params import CONTROL_MANUAL_POWER
-    from src.protocols.pump_params import PumpRunMode
+    from src.protocols.pump_params import PumpDirection, PumpRunMode
 
     dm = DeviceManager()
     assert dm.emergency_stop_all() is False
@@ -215,7 +215,7 @@ def test_device_manager_payload_and_control_fixes():
         "pump1",
         1,
         1.0,
-        "CW",
+        PumpDirection.CLOCKWISE,
         PumpRunMode.FLOW_MODE,
         None,
         None,

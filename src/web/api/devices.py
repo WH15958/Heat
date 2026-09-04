@@ -638,7 +638,11 @@ async def emergency_stop(request: Request):
     dm = get_dm(request)
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, dm.emergency_stop_all)
-    return {"success": bool(result)}
+    get_report = getattr(dm, "get_last_emergency_stop_report", None)
+    return {
+        "success": bool(result),
+        "devices": get_report() if callable(get_report) else [],
+    }
 
 
 @router.get("/pump/{device_id}/diagnose")

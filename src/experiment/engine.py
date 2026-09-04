@@ -171,7 +171,8 @@ class ExperimentEngine:
             if not success:
                 if step.on_error == "stop":
                     cleanup_ok = await self._cleanup_active_devices()
-                    error = "Execution failed"
+                    detail = getattr(self._executor, "last_error", None)
+                    error = f"Execution failed: {detail}" if detail else "Execution failed"
                     if not cleanup_ok:
                         error += "; failed to stop one or more experiment devices"
                     self._exp_logger.finish_step(

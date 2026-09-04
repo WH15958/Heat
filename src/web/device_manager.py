@@ -11,6 +11,7 @@ from src.devices.peristaltic_pump import (
     PumpChannelConfig,
 )
 from src.protocols.microwave_params import MODE_CONTROL_MASKS
+from src.protocols.pump_params import get_channel_address
 from src.utils.logger import get_logger
 from src.utils.serial_binding import resolve_connection
 
@@ -38,6 +39,7 @@ class DeviceManager:
         self._pump_channel_index: Dict[str, int] = {}
         self._pump_channel_cache: Dict[str, Dict[str, dict]] = {}
         self._global_stop_depth = 0
+        self._last_emergency_stop_report: list[dict] = []
 
     def add_heater(
         self,
@@ -92,6 +94,12 @@ class DeviceManager:
         self._heater_stop_generations[device_id] = 0
         self._heater_bindings[device_id] = self._normalize_binding_info(binding_info, port)
         logger.info(f"Registered heater: {device_id} on {port}")
+        if safety_limit > max_temperature:
+            logger.warning(
+                f"Heater {device_id}: safety_limit={safety_limit} C is above "
+                f"max_temperature={max_temperature} C and does not further "
+                "reduce the software command ceiling"
+            )
         return device_id
 
     def add_pump(
@@ -511,6 +519,10 @@ class DeviceManager:
                 if ch_data is not None:
                     self._pump_channel_cache[device_id][str(ch)] = {
                         "running": ch_data.running,
+                        "run_status": getattr(
+                            getattr(ch_data, "run_status", None), "name",
+                            "START" if ch_data.running else "STOP",
+                        ),
                         "flow_rate": ch_data.flow_rate,
                         "volume": ch_data.dispensed_volume,
                         "direction": ch_data.direction.name
@@ -627,55 +639,77 @@ class DeviceManager:
         logger.warning("EMERGENCY STOP ALL DEVICES")
         success = True
         attempted = False
+        report = []
+        registered = bool(self._heaters or self._pumps or self._microwaves)
         for device_id, heater in self._heaters.items():
-            attempted = True
             self._request_heater_stop(device_id)
             with self._heater_control_lock(device_id):
+                device_attempted = False
                 try:
                     if not heater.is_connected():
                         success = False
                         logger.warning(f"Emergency stop heater skipped, not connected: {heater.config.device_id}")
+                        report.append(self._stop_report("heater", device_id, False, None, "not_connected"))
                         continue
+                    attempted = True
+                    device_attempted = True
                     result = heater.emergency_stop()
+                    report.append(self._stop_report("heater", device_id, True, result))
                     if result is False:
                         success = False
                         logger.error(f"Emergency stop heater returned false: {heater.config.device_id}")
                 except Exception as e:
                     success = False
+                    report.append(self._stop_report(
+                        "heater", device_id, device_attempted,
+                        False if device_attempted else None, str(e),
+                    ))
                     logger.error(f"Emergency stop heater failed: {e}")
         for device_id, pump in self._pumps.items():
-            attempted = True
             self._request_pump_abort(device_id)
             pump_lock = self._pump_locks.get(device_id)
             if pump_lock:
                 pump_lock.acquire()
+            device_attempted = False
             try:
                 if not pump.is_connected():
                     success = False
                     logger.warning(f"Emergency stop pump skipped, not connected: {pump.config.device_id}")
+                    report.append(self._stop_report("pump", device_id, False, None, "not_connected"))
                     continue
+                attempted = True
+                device_attempted = True
                 result = pump.emergency_stop()
+                report.append(self._stop_report("pump", device_id, True, result))
                 if result is False:
                     success = False
                     logger.error(f"Emergency stop pump returned false: {pump.config.device_id}")
             except Exception as e:
                 success = False
+                report.append(self._stop_report(
+                    "pump", device_id, device_attempted,
+                    False if device_attempted else None, str(e),
+                ))
                 logger.error(f"Emergency stop pump failed: {e}")
             finally:
                 if pump_lock:
                     pump_lock.release()
         for device_id, microwave in self._microwaves.items():
-            attempted = True
             self._request_microwave_stop(device_id)
             with self._microwave_control_lock(device_id):
+                device_attempted = False
                 try:
                     if not microwave.is_connected():
                         success = False
                         logger.warning(
                             f"Emergency stop microwave skipped, not connected: {microwave.config.device_id}"
                         )
+                        report.append(self._stop_report("microwave", device_id, False, None, "not_connected"))
                         continue
+                    attempted = True
+                    device_attempted = True
                     result = microwave.emergency_stop()
+                    report.append(self._stop_report("microwave", device_id, True, result))
                     if result is False:
                         success = False
                         logger.error(
@@ -683,10 +717,49 @@ class DeviceManager:
                         )
                 except Exception as e:
                     success = False
+                    report.append(self._stop_report(
+                        "microwave", device_id, device_attempted,
+                        False if device_attempted else None, str(e),
+                    ))
                     logger.error(f"Emergency stop microwave failed: {e}")
-        if not attempted:
+        if not registered:
             logger.error("Emergency stop requested with no registered devices")
+        self._last_emergency_stop_report = report
         return success and attempted
+
+    @staticmethod
+    def _stop_report(
+        kind: str,
+        device_id: str,
+        attempted: bool,
+        result: Optional[bool],
+        reason: Optional[str] = None,
+    ) -> dict:
+        confirmed = result is True
+        return {
+            "device_type": kind,
+            "device_id": device_id,
+            "connected": attempted,
+            "attempted": attempted,
+            "command_result": result,
+            "final_state": "confirmed_stopped" if confirmed else "unconfirmed",
+            "success": confirmed,
+            "reason": reason or (None if confirmed else "stop_not_confirmed"),
+        }
+
+    def get_last_emergency_stop_report(self) -> list[dict]:
+        """Return a copy of the latest global-stop device results."""
+        return [dict(item) for item in self._last_emergency_stop_report]
+
+    def get_last_command_error(self, device_id: str) -> Optional[str]:
+        """Return the latest driver verification detail for one device."""
+        device = (
+            self._heaters.get(device_id)
+            or self._pumps.get(device_id)
+            or self._microwaves.get(device_id)
+        )
+        detail = getattr(device, "last_command_error", None)
+        return detail if isinstance(detail, str) and detail else None
 
     def get_all_status(self) -> dict:
         """获取所有设备状态摘要
@@ -739,6 +812,11 @@ class DeviceManager:
         return self._binding_enriched_payload({
             "device_id": device_id,
             "running": self._microwave_is_running(power_percent, current),
+            "control_word": data.get("control_word"),
+            "control_active": data.get("control_active"),
+            "output_active": bool(data.get("output_active", False)),
+            "stop_confirmed": bool(data.get("stop_confirmed", False)),
+            "status_confirmed": data.get("control_active") is not None,
             "mode": self._microwave_mode_from_code(current_mode_code),
             "current_segment": data.get("current_segment", 0),
             "material_temperature": data.get("material_temperature"),
@@ -1042,6 +1120,11 @@ class DeviceManager:
         if not pump.enable_channel(channel, True):
             logger.warning(f"Pump {device_id} CH{channel} enable failed")
             return False
+        if not pump.wait_for_register_value(
+            get_channel_address(0, channel), 1,
+            label=f"Pump {device_id} CH{channel} enable",
+        ):
+            return False
         logger.info(f"Pump {device_id} CH{channel}: enable OK")
 
         effective_tube_model = tube_model
@@ -1060,20 +1143,8 @@ class DeviceManager:
             if not pump.set_tube_model(channel, effective_tube_model):
                 logger.warning(f"Pump {device_id} CH{channel} set_tube_model({effective_tube_model}) failed")
                 return False
-            time.sleep(0.3)
-            readback = pump.get_tube_model(channel)
-            logger.info(f"Pump {device_id} CH{channel}: tube_model={effective_tube_model} written, readback={readback}")
-            if not pump.tube_model_readback_matches(
-                effective_tube_model, readback
-            ):
-                logger.warning(f"Pump {device_id} CH{channel}: tube_model mismatch! written={effective_tube_model} readback={readback}")
+            if not pump.wait_for_tube_model(channel, effective_tube_model):
                 return False
-            if readback != effective_tube_model:
-                logger.info(
-                    f"Pump {device_id} CH{channel}: accepted configured "
-                    f"firmware override for tube_model readback "
-                    f"{effective_tube_model}->{readback}"
-                )
         else:
             logger.warning(f"Pump {device_id} CH{channel} tube_model not set, flow rate range may be limited")
 
@@ -1084,7 +1155,11 @@ class DeviceManager:
         if not pump.set_direction(channel, direction):
             logger.warning(f"Pump {device_id} CH{channel} set_direction failed")
             return False
-        time.sleep(0.05)
+        if not pump.wait_for_register_value(
+            get_channel_address(2, channel), int(direction),
+            label=f"Pump {device_id} CH{channel} direction",
+        ):
+            return False
 
         effective_flow_unit = FlowUnit(flow_unit) if flow_unit is not None else FlowUnit.ML_MIN
 
@@ -1111,13 +1186,26 @@ class DeviceManager:
             if not pump.set_repeat_count(channel, repeat_count):
                 logger.warning(f"Pump {device_id} CH{channel} set_repeat_count({repeat_count}) failed")
                 return False
-            time.sleep(0.05)
+            if not pump.wait_for_register_value(
+                get_channel_address(100, channel), int(repeat_count),
+                label=f"Pump {device_id} CH{channel} repeat_count",
+            ):
+                return False
 
         if interval_time is not None:
             if not pump.set_interval_time(channel, interval_time, effective_interval_time_unit):
                 logger.warning(f"Pump {device_id} CH{channel} set_interval_time({interval_time} {effective_interval_time_unit}) failed")
                 return False
-            time.sleep(0.05)
+            if not pump.wait_for_float_value(
+                get_channel_address(101, channel), interval_time,
+                label=f"Pump {device_id} CH{channel} interval_time",
+            ):
+                return False
+            if not pump.wait_for_register_value(
+                get_channel_address(103, channel), int(effective_interval_time_unit),
+                label=f"Pump {device_id} CH{channel} interval_time_unit",
+            ):
+                return False
 
         if abort_event and abort_event.is_set():
             logger.warning(f"Pump {device_id} CH{channel}: start cancelled before start command")
@@ -1349,18 +1437,35 @@ class DeviceManager:
         if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
             logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) for flow_rate failed")
             return False
-        time.sleep(0.1)
+        if not pump.wait_for_register_value(
+            get_channel_address(6, channel), int(PumpRunMode.FLOW_MODE),
+            label=f"Pump {device_id} CH{channel} flow setup mode",
+        ):
+            return False
 
         if not pump.set_flow_rate(channel, flow_rate, flow_unit):
             logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {flow_unit}) failed")
             return False
-        time.sleep(0.05)
+        if not pump.wait_for_float_value(
+            get_channel_address(110, channel), flow_rate,
+            label=f"Pump {device_id} CH{channel} flow_rate",
+        ):
+            return False
+        if not pump.wait_for_register_value(
+            get_channel_address(112, channel), int(flow_unit),
+            label=f"Pump {device_id} CH{channel} flow_unit",
+        ):
+            return False
 
         if mode != PumpRunMode.FLOW_MODE:
             if not pump.set_run_mode(channel, mode):
                 logger.warning(f"Pump {device_id} CH{channel} set_run_mode({mode}) failed")
                 return False
-            time.sleep(0.1)
+            if not pump.wait_for_register_value(
+                get_channel_address(6, channel), int(mode),
+                label=f"Pump {device_id} CH{channel} run_mode",
+            ):
+                return False
 
         return True
 
@@ -1376,14 +1481,32 @@ class DeviceManager:
                 if not pump.set_run_time(channel, run_time, time_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
                     return False
-                time.sleep(0.05)
+                if not pump.wait_for_float_value(
+                    get_channel_address(107, channel), run_time,
+                    label=f"Pump {device_id} CH{channel} run_time",
+                ):
+                    return False
+                if not pump.wait_for_register_value(
+                    get_channel_address(109, channel), int(time_unit),
+                    label=f"Pump {device_id} CH{channel} run_time_unit",
+                ):
+                    return False
 
         if mode in (PumpRunMode.TIME_QUANTITY, PumpRunMode.QUANTITY_SPEED):
             if dispense_volume is not None:
                 if not pump.set_dispense_volume(channel, dispense_volume, volume_unit):
                     logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
                     return False
-                time.sleep(0.05)
+                if not pump.wait_for_float_value(
+                    get_channel_address(104, channel), dispense_volume,
+                    label=f"Pump {device_id} CH{channel} dispense_volume",
+                ):
+                    return False
+                if not pump.wait_for_register_value(
+                    get_channel_address(106, channel), int(volume_unit),
+                    label=f"Pump {device_id} CH{channel} volume_unit",
+                ):
+                    return False
 
         return True
 

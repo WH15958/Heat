@@ -926,6 +926,10 @@ async function startMicrowave(id: string) {
     ElMessage.error('微波仪状态读取失败，请先刷新状态并确认设备正常')
     return
   }
+  if (!status?.status_confirmed || status?.control_active === null) {
+    ElMessage.error('微波仪控制位状态未知，禁止启动；请检查 40151 读回')
+    return
+  }
   if (Number(status?.fault_code || 0)) {
     ElMessage.error('微波仪存在故障码 ' + status?.fault_code + '，禁止启动')
     return
@@ -950,7 +954,7 @@ async function startMicrowave(id: string) {
       ElMessage.error('微波仪启动失败: 设备返回失败')
       return
     }
-    ElMessage.success(`微波仪 ${id} 启动请求已发送`)
+    ElMessage.success(`微波仪 ${id} 启动控制位已确认`)
     await readMicrowaveData(id)
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
@@ -979,7 +983,7 @@ async function stopMicrowave(id: string) {
       ElMessage.error('停止失败: 微波仪设备返回失败')
       return
     }
-    ElMessage.info('微波仪 ' + id + ' 已发送停止请求')
+    ElMessage.success('微波仪 ' + id + ' 已确认停止')
     await readMicrowaveData(id)
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
@@ -999,10 +1003,14 @@ async function emergencyStop() {
     const res = await devicesApi.emergencyStop()
     await refreshDevices()
     if (!res.data.success) {
-      ElMessage.error('紧急停止未完全成功：至少一个设备返回失败')
+      const unresolved = (res.data.devices || [])
+        .filter((item: any) => !item.success)
+        .map((item: any) => `${item.device_type}/${item.device_id}: ${item.reason || '停止未确认'}`)
+        .join('; ')
+      ElMessage.error(`紧急停止未完全成功：${unresolved || '至少一个设备停止未确认'}`)
       return
     }
-    ElMessage.error('紧急停止已执行！')
+    ElMessage.success('所有已注册设备已确认停止')
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
     ElMessage.error(`紧急停止失败: ${e.response?.data?.detail || e.message || e}`)

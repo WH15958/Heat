@@ -200,3 +200,5 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/devices/refresh_b
 | 是否进入 Campaign/表征反馈闭环 |  |  |
 
 只有当实验室确认风险可接受，且记录链路可追溯时，才把本轮 MVP 视为通过。
+
+逐项实机签字、证据和 Gate 放行使用 [mvp_system_acceptance_checklist.md](mvp_system_acceptance_checklist.md)。该清单是本手册的验收记录，不替代实验室 SOP。

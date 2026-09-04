@@ -124,20 +124,31 @@ class ExperimentLogger:
             if pid not in self._active_run.sensor_data["pumps"]:
                 self._active_run.sensor_data["pumps"][pid] = {}
             for chid, chdata in pdata["channels"].items():
-                if chdata.get("read_ok") is False:
-                    continue
                 if chid not in self._active_run.sensor_data["pumps"][pid]:
                     self._active_run.sensor_data["pumps"][pid][chid] = {
                         "flow_rate": [],
                         "volume": [],
+                        "running": [],
+                        "read_ok": [],
                         "flow_unit": chdata.get("flow_unit", "ML_MIN"),
                     }
-                self._active_run.sensor_data["pumps"][pid][chid]["flow_rate"].append(
-                    {"t": point["t"], "v": chdata.get("flow_rate", 0)}
-                )
-                self._active_run.sensor_data["pumps"][pid][chid]["volume"].append(
-                    {"t": point["t"], "v": chdata.get("volume", 0)}
-                )
+                channel_series = self._active_run.sensor_data["pumps"][pid][chid]
+                read_ok = chdata.get("read_ok") is not False
+                channel_series.setdefault("running", []).append({
+                    "t": point["t"],
+                    "v": bool(chdata.get("running")) if read_ok else None,
+                })
+                channel_series.setdefault("read_ok", []).append({
+                    "t": point["t"], "v": read_ok,
+                })
+                channel_series["flow_rate"].append({
+                    "t": point["t"],
+                    "v": chdata.get("flow_rate", 0) if read_ok else None,
+                })
+                channel_series["volume"].append({
+                    "t": point["t"],
+                    "v": chdata.get("volume", 0) if read_ok else None,
+                })
                 pumps_recorded += 1
         for mid, mdata in (realtime_payload.get("microwaves") or {}).items():
             if mdata.get("error"):

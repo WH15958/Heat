@@ -185,7 +185,7 @@ import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import { devicesApi } from '../api/devices'
 import { useWebSocket, type MicrowaveRealtimeData, type RealtimeData } from '../composables/useWebSocket'
 
-type TagType = 'success' | 'info' | 'danger'
+type TagType = 'success' | 'warning' | 'info' | 'danger'
 
 const { data: realtimeData, connected: wsConnected } = useWebSocket()
 const heaterTempChartRef = ref<HTMLElement>()
@@ -312,7 +312,8 @@ function microwaveStatusType(microwave: DashboardMicrowaveData): TagType {
   if (!microwave.connected) return 'info'
   if (microwave.error) return 'danger'
   if (Number(microwave.fault_code || 0)) return 'danger'
-  if (microwave.running) return 'success'
+  if (microwave.control_active || microwave.output_active) return 'success'
+  if (!microwave.status_confirmed) return 'warning'
   return 'info'
 }
 
@@ -320,8 +321,9 @@ function microwaveStatusText(microwave: DashboardMicrowaveData): string {
   if (!microwave.connected) return '离线'
   if (microwave.error) return '读取失败'
   if (Number(microwave.fault_code || 0)) return '异常'
-  if (microwave.running) return '运行中'
-  return '停止'
+  if (microwave.control_active || microwave.output_active) return '运行中'
+  if (microwave.stop_confirmed) return '已确认停止'
+  return '状态未知'
 }
 
 async function refreshRegisteredDevices() {

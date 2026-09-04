@@ -14,7 +14,9 @@ from src.devices.peristaltic_pump import (
     PeristalticPumpConfig,
 )
 from src.protocols.modbus_rtu import ModbusRTUProtocol
-from src.protocols.pump_params import FlowUnit, PumpDirection, PumpRunMode
+from src.protocols.pump_params import (
+    FlowUnit, PumpDirection, PumpRunMode, get_channel_address,
+)
 from src.utils.config import ConfigManager, PumpDeviceConfig
 from src.web.api.devices import StartPumpRequest, router as devices_router
 from src.web.device_manager import DeviceManager
@@ -141,6 +143,12 @@ def _fake_pump(
         lambda requested, readback: readback
         == readback_overrides.get(requested, requested)
     )
+    pump.wait_for_tube_model.side_effect = lambda channel, requested: (
+        pump.get_tube_model(channel)
+        == readback_overrides.get(requested, requested)
+    )
+    pump.wait_for_register_value.return_value = True
+    pump.wait_for_float_value.return_value = True
     pump.set_direction.return_value = True
     pump.set_run_mode.return_value = True
     pump.set_flow_rate.return_value = True
@@ -258,6 +266,17 @@ def test_pump_start_stops_first_writes_tube_zero_and_checks_readback():
     pump.start_channel.assert_called_once_with(1)
 
 
+def test_pump_parameter_readback_failure_blocks_start():
+    pump = _fake_pump()
+    pump.wait_for_float_value.return_value = False
+    manager = _manager_with_pump(pump)
+
+    assert manager.start_pump_channel(
+        "pump1", 1, 1.0, PumpDirection.CLOCKWISE, PumpRunMode.FLOW_MODE
+    ) is False
+    pump.start_channel.assert_not_called()
+
+
 def _real_pump_with_readback_overrides(overrides=None):
     return LabSmartPumpDevice(PeristalticPumpConfig(
         device_id="pump1",
@@ -285,6 +304,44 @@ def test_tube_model_readback_uses_only_configured_device_override():
     assert pump.tube_model_readback_matches(12, 11) is False
     assert pump.tube_model_readback_matches(13, 3) is False
     assert pump.tube_model_readback_matches(11, None) is False
+
+
+def test_pump_start_and_stop_require_run_register_readback(monkeypatch):
+    pump = _real_pump_with_readback_overrides()
+    pump._channel_data[1] = SimpleNamespace(running=False, paused=False)
+    monkeypatch.setattr(pump, "_write_register", lambda *_args: True)
+    monkeypatch.setattr(pump, "read_register_value", lambda _address: 1)
+
+    assert pump.start_channel(1) is True
+    assert pump.stop_channel(1) is False
+
+
+def test_pump_stop_all_checks_every_channel(monkeypatch):
+    pump = _real_pump_with_readback_overrides()
+    monkeypatch.setattr(pump, "_write_register", lambda *_args: True)
+    monkeypatch.setattr(
+        pump,
+        "read_register_value",
+        lambda address: 1 if address == get_channel_address(1, 3) else 0,
+    )
+    pump.READBACK_ATTEMPTS = 1
+
+    assert pump.stop_all() is False
+
+
+def test_pump_status_rejects_invalid_control_enum(monkeypatch):
+    pump = _real_pump_with_readback_overrides()
+
+    def read_registers(address, count):
+        if count == 1:
+            offset = address - get_channel_address(0, 1)
+            values = [1, 9, 0, 5, 11, 0, 0]
+            return [values[offset]]
+        return [0] * 12 + [int(FlowUnit.ML_MIN)]
+
+    monkeypatch.setattr(pump, "_read_registers", read_registers)
+
+    assert pump.read_channel_status(1) is None
 
 
 def test_pump_start_accepts_configured_tube_model_firmware_override():

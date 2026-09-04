@@ -100,6 +100,8 @@ class AIHeaterDevice(BaseDevice):
         "read_parameter",
         "write_parameter",
     ]
+    READBACK_ATTEMPTS = 3
+    READBACK_DELAY = 0.1
     
     def __init__(self, config: HeaterConfig, info: Optional[DeviceInfo] = None):
         """
@@ -122,6 +124,7 @@ class AIHeaterDevice(BaseDevice):
         self._protocol: Optional[AIBUSProtocol] = None
         self._model_code: Optional[int] = None
         self._decimal_places: int = config.decimal_places
+        self.last_command_error: Optional[str] = None
         
     @property
     def protocol(self) -> Optional[AIBUSProtocol]:
@@ -428,6 +431,7 @@ class AIHeaterDevice(BaseDevice):
             bool: 成功返回True
         """
         self._logger.warning("Emergency stop triggered!")
+        self.last_command_error = None
         
         with self._lock:
             if self._protocol is None:
@@ -446,13 +450,19 @@ class AIHeaterDevice(BaseDevice):
                     decimal_places=0
                 )
                 
-                self._logger.info("Emergency stop completed")
+                if not self._verify_run_state(
+                    RunStatus.STOP, require_zero_output=True
+                ):
+                    self._logger.error("Emergency stop could not confirm safe output state")
+                    return False
+                self._logger.info("Emergency stop completed and verified")
                 return True
             except Exception as e:
                 self._logger.error(f"Emergency stop failed: {e}")
                 return False
     
     def set_temperature(self, temperature: float) -> bool:
+        self.last_command_error = None
         if (
             isinstance(temperature, bool)
             or not isinstance(temperature, (int, float))
@@ -483,8 +493,25 @@ class AIHeaterDevice(BaseDevice):
                     temperature,
                     decimal_places=self._decimal_places
                 )
-                self._logger.info(f"Temperature set to {temperature}°{self._heater_config.temperature_unit}")
-                return True
+                for attempt in range(self.READBACK_ATTEMPTS):
+                    data = self.read_data()
+                    if not data.alarms and math.isclose(
+                        data.sv, temperature, rel_tol=0.0,
+                        abs_tol=(0.5 * 10 ** (-self._decimal_places)) + 1e-9,
+                    ):
+                        self._logger.info(
+                            f"Temperature set and verified at {temperature}°"
+                            f"{self._heater_config.temperature_unit}"
+                        )
+                        return True
+                    if attempt + 1 < self.READBACK_ATTEMPTS:
+                        time.sleep(self.READBACK_DELAY)
+                self.last_command_error = (
+                    f"heater temperature readback mismatch or alarm: "
+                    f"requested={temperature} readback={data.sv} alarms={data.alarms}"
+                )
+                self._logger.error(self.last_command_error)
+                return False
             
             return self.execute_with_retry(_set, "set_temperature")
     
@@ -500,6 +527,7 @@ class AIHeaterDevice(BaseDevice):
     
     def start(self) -> bool:
         """启动加热器（运行状态设为RUN）"""
+        self.last_command_error = None
         with self._lock:
             def _start():
                 self._protocol.write_parameter(
@@ -507,13 +535,16 @@ class AIHeaterDevice(BaseDevice):
                     RunStatus.RUN,
                     decimal_places=0
                 )
-                self._logger.info("Heater started")
+                if not self._verify_run_state(RunStatus.RUN):
+                    return False
+                self._logger.info("Heater started and verified")
                 return True
             
             return self.execute_with_retry(_start, "start")
     
     def stop(self) -> bool:
         """停止加热器（运行状态设为STOP）"""
+        self.last_command_error = None
         with self._lock:
             def _stop():
                 self._protocol.write_parameter(
@@ -521,10 +552,41 @@ class AIHeaterDevice(BaseDevice):
                     RunStatus.STOP,
                     decimal_places=0
                 )
-                self._logger.info("Heater stopped")
+                if not self._verify_run_state(RunStatus.STOP):
+                    return False
+                self._logger.info("Heater stopped and verified")
                 return True
             
             return self.execute_with_retry(_stop, "stop")
+
+    def _verify_run_state(
+        self, expected: RunStatus, *, require_zero_output: bool = False
+    ) -> bool:
+        """Boundedly confirm the readable output status after a command."""
+        last_data = None
+        for attempt in range(self.READBACK_ATTEMPTS):
+            try:
+                last_data = self.read_data()
+            except Exception as exc:
+                self._logger.warning(f"Heater state readback failed: {exc}")
+                last_data = None
+            if (
+                last_data is not None
+                and last_data.run_status == expected
+                and not last_data.alarms
+                and (not require_zero_output or last_data.mv == 0)
+            ):
+                return True
+            if attempt + 1 < self.READBACK_ATTEMPTS:
+                time.sleep(self.READBACK_DELAY)
+        self.last_command_error = (
+            f"heater state readback mismatch: expected={expected.name} "
+            f"actual={getattr(getattr(last_data, 'run_status', None), 'name', 'UNKNOWN')} "
+            f"mv={getattr(last_data, 'mv', None)} "
+            f"alarms={getattr(last_data, 'alarms', None)}"
+        )
+        self._logger.error(self.last_command_error)
+        return False
     
     def hold(self) -> bool:
         """保持加热器当前输出（运行状态设为HOLD）"""

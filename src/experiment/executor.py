@@ -33,6 +33,19 @@ class StepExecutor:
         self._active_pumps = set()
         self._pump_repeat_counts = {}
         self._active_microwaves = set()
+        self._last_error = None
+        self._current_step = None
+
+    @property
+    def last_error(self):
+        if self._current_step is not None:
+            get_detail = getattr(self._dm, "get_last_command_error", None)
+            device_id = self._current_step.params.get("device_id")
+            if callable(get_detail) and device_id:
+                detail = get_detail(device_id)
+                if detail:
+                    return detail
+        return self._last_error
 
     def set_stop_checker(self, checker):
         self._should_stop = checker
@@ -62,9 +75,16 @@ class StepExecutor:
                 return None
             paused_total += paused_duration
             sleep_time = min(remaining, 0.05)
+            started_at = time.monotonic()
             await asyncio.sleep(sleep_time)
-            if not self._is_paused():
-                remaining -= sleep_time
+            elapsed = time.monotonic() - started_at
+            if self._is_paused():
+                paused_duration = await self._wait_for_resume()
+                if paused_duration is None or self._should_stop():
+                    return None
+                paused_total += paused_duration
+                elapsed = max(0.0, elapsed - paused_duration)
+            remaining -= elapsed
         return paused_total
 
     async def execute(self, step: ExperimentStep) -> bool:
@@ -77,6 +97,14 @@ class StepExecutor:
             bool: 执行成功返回True
         """
         logger.info(f"Executing step: {step.id} ({step.type.value})")
+        self._current_step = step
+        target = step.params.get("device_id", "system")
+        channel = step.params.get("channel")
+        channel_text = f" CH{channel}" if channel is not None else ""
+        self._last_error = (
+            f"{step.type.value} failed for {target}{channel_text}; "
+            "see device log for command/readback details"
+        )
 
         try:
             loop = asyncio.get_event_loop()
@@ -286,9 +314,12 @@ class StepExecutor:
                     return False
 
             logger.info(f"Step completed: {step.id}")
+            self._last_error = None
+            self._current_step = None
             return True
 
         except Exception as e:
+            self._last_error = f"{step.type.value} failed: {e}"
             logger.error(f"Step {step.id} failed: {e}")
             return False
 

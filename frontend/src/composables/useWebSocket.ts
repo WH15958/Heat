@@ -19,6 +19,7 @@ export interface HeaterRealtimeData {
 
 export interface PumpChannelData {
   running: boolean
+  run_status?: string
   flow_rate: number
   volume: number
   direction: string | null
@@ -49,6 +50,11 @@ export interface MicrowaveRealtimeData {
   binding_error?: string | null
   binding_candidates?: string[]
   running?: boolean
+  control_word?: number | null
+  control_active?: boolean | null
+  output_active?: boolean
+  stop_confirmed?: boolean
+  status_confirmed?: boolean
   mode?: string
   current_segment?: number
   material_temperature?: number | null

@@ -92,7 +92,7 @@ def test_heater_api_rejects_non_finite_temperature(temperature):
 
 
 def _fake_heater():
-    return SimpleNamespace(
+    heater = SimpleNamespace(
         _heater_config=SimpleNamespace(
             max_temperature=400.0,
             safety_limit=450.0,
@@ -104,7 +104,13 @@ def _fake_heater():
         _decimal_places=1,
         _logger=Mock(),
         execute_with_retry=lambda operation, _name: operation(),
+        READBACK_ATTEMPTS=1,
     )
+    heater.read_data = lambda: SimpleNamespace(
+        sv=25.0,
+        alarms=[],
+    )
+    return heater
 
 
 @pytest.mark.parametrize("temperature", [math.nan, math.inf, -math.inf])

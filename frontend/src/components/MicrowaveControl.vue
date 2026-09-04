@@ -47,8 +47,7 @@
           <el-tag v-if="realtime?.binding_match_count !== undefined" type="info" size="small">
             匹配数 {{ realtime.binding_match_count }}
           </el-tag>
-          <el-tag v-if="realtime?.error" type="danger" size="small">读取失败</el-tag>
-          <el-tag v-else :type="statusTagType" size="small">{{ statusText }}</el-tag>
+          <el-tag :type="statusTagType" size="small">{{ statusText }}</el-tag>
         </div>
       </el-form-item>
 
@@ -237,14 +236,17 @@ const showBindingLabel = computed(() => bindingMode.value === 'fingerprint' && B
 const statusTagType = computed<TagType>(() => {
   if (props.realtime?.error) return 'danger'
   if (faultCode.value) return 'danger'
-  if (props.realtime?.running) return 'success'
+  if (props.realtime?.control_active || props.realtime?.output_active) return 'success'
+  if (!props.realtime?.status_confirmed) return 'warning'
   return 'info'
 })
 
 const statusText = computed(() => {
   if (faultCode.value) return '异常'
-  if (props.realtime?.running) return '运行中'
-  return '停止'
+  if (props.realtime?.error) return '状态未知'
+  if (props.realtime?.control_active || props.realtime?.output_active) return '运行中'
+  if (props.realtime?.stop_confirmed) return '已确认停止'
+  return '状态未知'
 })
 
 function modeLabel(mode: string | undefined): string {

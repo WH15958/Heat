@@ -95,11 +95,10 @@ class ParameterCode(IntEnum):
     L5 = 72
     SUB_PV = 73
     PV = 74
-    PV_HIGH = 75
-    SV_READ = 76
-    MV_ALARM = 77
-    OUTPUT_STATUS = 78
-    ROOM_TEMP = 79
+    SV_READ = 75
+    MV_ALARM = 76
+    OUTPUT_STATUS = 77
+    ROOM_TEMP = 78
     MODEL_CODE = 21
 
     SP1 = 80

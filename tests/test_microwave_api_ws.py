@@ -301,6 +301,16 @@ def test_emergency_stop_all_calls_microwave_stop_and_reports_failure():
 
     assert result is False
     assert microwave.emergency_stop.call_count == 1
+    assert dm.get_last_emergency_stop_report() == [{
+        "device_type": "microwave",
+        "device_id": "mw1",
+        "connected": True,
+        "attempted": True,
+        "command_result": False,
+        "final_state": "unconfirmed",
+        "success": False,
+        "reason": "stop_not_confirmed",
+    }]
 
 
 def test_emergency_stop_endpoint_reports_device_failure():
@@ -310,7 +320,7 @@ def test_emergency_stop_endpoint_reports_device_failure():
 
     response = run(emergency_stop(request))
 
-    assert response == {"success": False}
+    assert response == {"success": False, "devices": []}
     assert dm.calls == [("emergency_stop_all",)]
 
 

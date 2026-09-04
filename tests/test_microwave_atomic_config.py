@@ -12,6 +12,7 @@ class RecordingProtocol:
         self.multi_writes = []
         self.single_writes = []
         self.calls = []
+        self.registers = {}
 
     @property
     def is_connected(self):
@@ -20,12 +21,21 @@ class RecordingProtocol:
     def write_multiple_registers(self, slave_address, start_address, values):
         self.multi_writes.append((slave_address, start_address, list(values)))
         self.calls.append(("config", start_address))
+        for offset, value in enumerate(values):
+            self.registers[start_address + offset] = value
         return True
 
     def write_single_register(self, slave_address, address, value):
         self.single_writes.append((slave_address, address, value))
         self.calls.append(("start", address))
+        self.registers[address] = value
         return True
+
+    def read_holding_registers(self, slave_address, start_address, count):
+        return [self.registers.get(start_address + offset, 0) for offset in range(count)]
+
+    def read_float_register(self, slave_address, start_address):
+        return None
 
 
 class PauseAfterFirstConfigWriteDevice(MicrowaveDevice):
