@@ -400,15 +400,11 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 只有在大型集成项目里，才允许临时保留阶段性集成分支；但必须提前说明用途、生命周期和删除条件。
 
-当前下一阶段硬件集成建议使用独立分支：
+`feature/automation-valve-microwave` 和 `codex/fix-heater-disconnect` 已于 2026-09-11
+线性快进合并到 `master`（`b30a095`），并删除分支引用。历史尖端由以下归档标签保留：
 
-- `feature/automation-valve-microwave`
+- `archive/2026-09-11/automation-valve-microwave`
+- `archive/2026-09-11/heater-disconnect`
 
-这条分支只承载以下工作：
-
-- 电磁阀控制接入
-- 切换阀控制接入
-- 微波合成仪自动化控制接入
-- 与上述设备直接相关的 API、实验动作、测试和文档同步
-
-不要把无关前端重构、历史清理或通用 UI 美化混入这条分支。
+后续工作应从最新 `master` 新建任务分支，不要继续使用已归档分支。项目进度汇报的 HTML、
+PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录，不作为项目文档提交。

@@ -48,6 +48,10 @@ data/
 reports/*.html
 reports/*.png
 output/
+# Progress-report and group-presentation exports belong outside the repository.
+docs/project_progress_report_*.html
+docs/Heat_project_progress_report_*.pptx
+docs/archive/presentation/
 
 # Config with sensitive info (if any)
 # config/local_config.yaml

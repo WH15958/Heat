@@ -205,7 +205,7 @@ git push github <branch>
 
 示例：
 
-- `feature/automation-valve-microwave`
+- `feature/device-integration`
 - `fix/experiment-stop-flow`
 - `docs/branch-policy`
 
