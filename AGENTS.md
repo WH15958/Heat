@@ -100,6 +100,10 @@ When a validation command fails because a Python package is missing, judge wheth
 
 Use task branches for normal development. Do not start routine work directly on `master`.
 
+Before creating any new local branch or worktree, explain why it is needed and wait for the
+user's explicit approval. A user request that names the new branch or explicitly asks to create
+a branch counts as approval; a request to edit, commit, merge, or push does not.
+
 Before committing:
 
 1. Inspect the worktree with targeted `git status --short` and relevant diffs.

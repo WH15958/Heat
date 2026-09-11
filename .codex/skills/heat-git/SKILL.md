@@ -17,6 +17,11 @@ inspect changes -> validate as needed -> update docs as needed -> stage relevant
 
 It does not mean auto-push, reset unrelated files, clean untracked files, or run every build for documentation-only changes.
 
+Before creating a new local branch or worktree, explain the reason and wait for the user's
+explicit approval. Treat an explicitly requested branch creation or user-supplied new branch
+name as approval. Do not infer branch-creation approval from a request to edit, commit, merge,
+or push.
+
 ## Fast Inspection
 
 Use narrow commands first because this Windows workspace can stall on broad PowerShell output.
