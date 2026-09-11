@@ -563,27 +563,34 @@ class AIHeaterDevice(BaseDevice):
         self, expected: RunStatus, *, require_zero_output: bool = False
     ) -> bool:
         """Boundedly confirm the readable output status after a command."""
-        last_data = None
+        actual_status = RunStatus.UNKNOWN
+        actual_mv = None
+        actual_alarms = None
         for attempt in range(self.READBACK_ATTEMPTS):
             try:
-                last_data = self.read_data()
+                status_value, response = self._protocol.read_parameter(
+                    ParameterCode.OUTPUT_STATUS
+                )
+                actual_status = self._safe_run_status(int(status_value) & 0x03)
+                actual_mv = response.mv
+                actual_alarms = self._parse_alarms(response.alarm_status)
             except Exception as exc:
                 self._logger.warning(f"Heater state readback failed: {exc}")
-                last_data = None
+                actual_status = RunStatus.UNKNOWN
+                actual_mv = None
+                actual_alarms = None
             if (
-                last_data is not None
-                and last_data.run_status == expected
-                and not last_data.alarms
-                and (not require_zero_output or last_data.mv == 0)
+                actual_status == expected
+                and not actual_alarms
+                and (not require_zero_output or actual_mv == 0)
             ):
                 return True
             if attempt + 1 < self.READBACK_ATTEMPTS:
                 time.sleep(self.READBACK_DELAY)
         self.last_command_error = (
             f"heater state readback mismatch: expected={expected.name} "
-            f"actual={getattr(getattr(last_data, 'run_status', None), 'name', 'UNKNOWN')} "
-            f"mv={getattr(last_data, 'mv', None)} "
-            f"alarms={getattr(last_data, 'alarms', None)}"
+            f"actual={actual_status.name} "
+            f"mv={actual_mv} alarms={actual_alarms}"
         )
         self._logger.error(self.last_command_error)
         return False

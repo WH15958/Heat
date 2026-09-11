@@ -242,9 +242,19 @@ async def disconnect_heater(device_id: str, request: Request):
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, dm.disconnect_heater, device_id)
-        return {"success": result, "device_id": device_id}
+        if not result:
+            detail = dm.get_last_command_error(device_id)
+            raise HTTPException(
+                status_code=400,
+                detail=detail or "Heater stop or disconnect failed",
+            )
+        return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/heater/{device_id}/data")

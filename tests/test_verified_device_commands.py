@@ -3,6 +3,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+from fastapi import HTTPException
+
 from src.devices.base_device import DeviceStatus
 from src.devices.heater import AIHeaterDevice, HeaterConfig
 from src.protocols.parameters import ParameterCode, RunStatus
@@ -31,6 +34,13 @@ def _heater_data(*, status, sv=60.0, mv=0, alarms=None):
     )
 
 
+def _heater_status_response(*, status, mv=0, alarm_status=0):
+    return (
+        int(status),
+        SimpleNamespace(mv=mv, alarm_status=alarm_status),
+    )
+
+
 def test_heater_readback_registers_match_vendor_aibus_table():
     assert ParameterCode.SV_READ == 75
     assert ParameterCode.MV_ALARM == 76
@@ -47,22 +57,50 @@ def test_heater_set_temperature_requires_matching_sv(monkeypatch):
     assert heater.set_temperature(60.0) is False
 
 
-def test_heater_start_rejects_unknown_status(monkeypatch):
+def test_heater_start_rejects_unknown_status():
     heater = _heater()
-    monkeypatch.setattr(
-        heater, "read_data", lambda: _heater_data(status=RunStatus.UNKNOWN)
+    heater._protocol.read_parameter.return_value = _heater_status_response(
+        status=RunStatus.UNKNOWN
     )
 
     assert heater.start() is False
 
 
-def test_heater_emergency_stop_requires_zero_output(monkeypatch):
+def test_heater_emergency_stop_requires_zero_output():
     heater = _heater()
-    monkeypatch.setattr(
-        heater, "read_data", lambda: _heater_data(status=RunStatus.STOP, mv=10)
+    heater._protocol.read_parameter.return_value = _heater_status_response(
+        status=RunStatus.STOP, mv=10
     )
 
     assert heater.emergency_stop() is False
+
+
+def test_heater_stop_uses_direct_status_readback_without_full_data_retry(monkeypatch):
+    heater = _heater()
+    heater._protocol.read_parameter.return_value = _heater_status_response(
+        status=RunStatus.STOP
+    )
+    read_data = Mock(side_effect=AssertionError("full read_data retry is too slow"))
+    monkeypatch.setattr(heater, "read_data", read_data)
+
+    assert heater.stop() is True
+    read_data.assert_not_called()
+    heater._protocol.read_parameter.assert_called_once_with(ParameterCode.OUTPUT_STATUS)
+
+
+def test_heater_disconnect_api_exposes_stop_failure_detail():
+    from src.web.api.devices import disconnect_heater
+
+    dm = Mock()
+    dm.disconnect_heater.return_value = False
+    dm.get_last_command_error.return_value = "heater stop confirmation timed out"
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(device_manager=dm)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(disconnect_heater("heater1", request))
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "heater stop confirmation timed out"
 
 
 def test_pause_aware_sleep_uses_elapsed_monotonic_time(monkeypatch):

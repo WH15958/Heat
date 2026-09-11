@@ -536,6 +536,11 @@ async function connectHeater(id: string) {
 
 async function disconnectHeater(id: string) {
   devices.heaters[id].loading = true
+  const progressMessage = ElMessage({
+    message: `正在安全停止并断开加热器 ${id}...`,
+    type: 'info',
+    duration: 0,
+  })
   try {
     const res = await devicesApi.disconnectHeater(id)
     if (!res.data.success) {
@@ -547,6 +552,7 @@ async function disconnectHeater(id: string) {
   } catch (e: any) {
     ElMessage.error(`断开失败: ${e.response?.data?.detail || e.message}`)
   } finally {
+    progressMessage.close()
     devices.heaters[id].loading = false
   }
 }
