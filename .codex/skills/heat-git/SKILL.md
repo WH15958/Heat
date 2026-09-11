@@ -22,6 +22,10 @@ explicit approval. Treat an explicitly requested branch creation or user-supplie
 name as approval. Do not infer branch-creation approval from a request to edit, commit, merge,
 or push.
 
+Never develop directly on `master`: do not edit source code, tests, documentation, rules, or
+skills there. `master` is only for merging validated branches and release or verification
+operations. An exception requires the user's explicit approval before editing.
+
 ## Fast Inspection
 
 Use narrow commands first because this Windows workspace can stall on broad PowerShell output.

@@ -98,7 +98,10 @@ When a validation command fails because a Python package is missing, judge wheth
 
 ## 7. Git Workflow
 
-Use task branches for normal development. Do not start routine work directly on `master`.
+All development must happen on an approved task branch. Do not edit source code, tests,
+documentation, rules, or skills directly on `master`. Use `master` only to merge validated
+branches and perform release or verification operations. Any exception requires the user's
+explicit approval before editing.
 
 Before creating any new local branch or worktree, explain why it is needed and wait for the
 user's explicit approval. A user request that names the new branch or explicitly asks to create
