@@ -4,7 +4,7 @@
 功能：
 1. 进程锁文件 - 防止多进程同时访问同一串口
 2. 强制释放 - 启动时清理残留串口占用
-3. 看门狗线程 - 监控进程状态，异常时自动释放
+3. 进程退出清理 - 通过atexit释放已登记资源
 4. 幂等操作 - 防止重复连接/断开
 """
 
@@ -428,6 +428,7 @@ class SerialPortManager:
         self._port_lock = SerialPortLock()
         self._active_ports: Set[str] = set()
         self._port_handles: Dict[str, object] = {}
+        self._state_lock = threading.RLock()
         self._watchdog: Optional[WatchdogThread] = None
         self._cleanup_registered = False
         
@@ -450,23 +451,19 @@ class SerialPortManager:
         Returns:
             bool: 成功获取返回True
         """
-        if port in self._active_ports:
-            logger.warning(f"Port {port} already acquired")
+        with self._state_lock:
+            if port in self._active_ports:
+                logger.warning(f"Port {port} already acquired")
+                return False
+
+            if force:
+                SerialPortForceRelease.force_release(port)
+
+            if not self._port_lock.acquire(port):
+                return False
+
+            self._active_ports.add(port)
             return True
-        
-        if force:
-            SerialPortForceRelease.force_release(port)
-        
-        if not self._port_lock.acquire(port):
-            return False
-        
-        self._active_ports.add(port)
-        
-        if self._watchdog is None or not self._watchdog.is_alive():
-            self._watchdog = WatchdogThread(callback=self.cleanup)
-            self._watchdog.start()
-        
-        return True
     
     def release_port(self, port: str) -> bool:
         """
@@ -478,60 +475,72 @@ class SerialPortManager:
         Returns:
             bool: 成功释放返回True
         """
-        if port not in self._active_ports:
-            return True
-        
-        if port in self._port_handles:
-            try:
-                handle = self._port_handles[port]
-                if hasattr(handle, 'close'):
-                    handle.close()
-            except Exception as e:
-                logger.warning(f"Error closing port handle: {e}")
-            del self._port_handles[port]
-        
-        self._port_lock.release(port)
-        self._active_ports.discard(port)
-        
-        return True
+        with self._state_lock:
+            if port not in self._active_ports:
+                return True
+
+            success = True
+            if port in self._port_handles:
+                try:
+                    handle = self._port_handles[port]
+                    if hasattr(handle, 'close'):
+                        handle.close()
+                except Exception as e:
+                    logger.warning(f"Error closing port handle: {e}")
+                    success = False
+                del self._port_handles[port]
+
+            if not self._port_lock.release(port):
+                success = False
+            self._active_ports.discard(port)
+
+            return success
     
     def register_handle(self, port: str, handle):
         """注册串口句柄"""
-        self._port_handles[port] = handle
+        with self._state_lock:
+            if port not in self._active_ports:
+                raise RuntimeError(f"Port {port} has not been acquired")
+            if port in self._port_handles and self._port_handles[port] is not handle:
+                raise RuntimeError(f"Port {port} already has a registered handle")
+            self._port_handles[port] = handle
     
     def cleanup(self):
         """清理所有资源"""
         logger.info("SerialPortManager cleanup started")
         
-        for port in list(self._active_ports):
-            try:
-                self.release_port(port)
-            except Exception as e:
-                logger.error(f"Error releasing {port}: {e}")
-        
-        self._port_lock.release_all()
-        
-        if self._watchdog:
-            self._watchdog.stop()
-            if self._watchdog.is_alive():
-                self._watchdog.join(timeout=2.0)
-            self._watchdog = None
+        with self._state_lock:
+            for port in list(self._active_ports):
+                try:
+                    self.release_port(port)
+                except Exception as e:
+                    logger.error(f"Error releasing {port}: {e}")
+
+            self._port_lock.release_all()
+
+            if self._watchdog:
+                self._watchdog.stop()
+                if self._watchdog.is_alive():
+                    self._watchdog.join(timeout=2.0)
+                self._watchdog = None
         
         logger.info("SerialPortManager cleanup completed")
     
     def get_status(self) -> Dict:
         """获取状态信息"""
-        return {
-            'active_ports': list(self._active_ports),
-            'lock_info': {
-                port: self._port_lock.get_lock_info(port)
-                for port in self._active_ports
+        with self._state_lock:
+            return {
+                'active_ports': list(self._active_ports),
+                'lock_info': {
+                    port: self._port_lock.get_lock_info(port)
+                    for port in self._active_ports
+                }
             }
-        }
     
     def is_port_acquired(self, port: str) -> bool:
         """检查端口是否已被获取"""
-        return port in self._active_ports
+        with self._state_lock:
+            return port in self._active_ports
     
     def feed_watchdog(self):
         """喂狗 - 更新看门狗心跳时间，防止误触发cleanup"""

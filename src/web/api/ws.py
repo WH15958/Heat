@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, Callable, Hashable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 
@@ -15,6 +16,47 @@ MICROWAVE_READ_TIMEOUT = 5.0
 def _with_binding(payload: dict, binding_status: dict) -> dict:
     payload.update(binding_status)
     return payload
+
+
+class DeviceReadCoordinator:
+    """Keep at most one blocking status read in flight for each device."""
+
+    def __init__(self):
+        self._tasks: dict[Hashable, asyncio.Task] = {}
+
+    @staticmethod
+    def _observe_completion(task: asyncio.Task):
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            pass
+
+    async def read(
+        self,
+        key: Hashable,
+        reader: Callable[[], Any],
+        timeout: float,
+    ) -> Any:
+        task = self._tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(asyncio.to_thread(reader))
+            task.add_done_callback(self._observe_completion)
+            self._tasks[key] = task
+
+        try:
+            result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise
+        except Exception:
+            if self._tasks.get(key) is task:
+                del self._tasks[key]
+            raise
+        else:
+            if self._tasks.get(key) is task:
+                del self._tasks[key]
+            return result
 
 
 class ConnectionManager:
@@ -108,18 +150,22 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
-async def build_realtime_payload(dm) -> dict:
+async def build_realtime_payload(
+    dm,
+    read_coordinator: DeviceReadCoordinator | None = None,
+) -> dict:
     """Read connected devices once and build the WebSocket payload."""
     payload = {"type": "realtime", "heaters": {}, "pumps": {}, "microwaves": {}}
-    loop = asyncio.get_running_loop()
+    read_coordinator = read_coordinator or DeviceReadCoordinator()
 
     heaters = dm.get_all_heaters()
     for did, heater in heaters.items():
         if heater.is_connected():
             try:
-                data = await asyncio.wait_for(
-                    loop.run_in_executor(None, heater.read_data),
-                    timeout=DEVICE_READ_TIMEOUT,
+                data = await read_coordinator.read(
+                    ("heater", did),
+                    heater.read_data,
+                    DEVICE_READ_TIMEOUT,
                 )
                 payload["heaters"][did] = _with_binding({
                     "device_id": did,
@@ -149,9 +195,10 @@ async def build_realtime_payload(dm) -> dict:
     for did, pump in pumps.items():
         if pump.is_connected():
             try:
-                status = await asyncio.wait_for(
-                    loop.run_in_executor(None, dm.read_pump_status, did),
-                    timeout=PUMP_READ_TIMEOUT,
+                status = await read_coordinator.read(
+                    ("pump", did),
+                    lambda did=did: dm.read_pump_status(did),
+                    PUMP_READ_TIMEOUT,
                 )
                 payload["pumps"][did] = status
             except asyncio.TimeoutError:
@@ -173,9 +220,10 @@ async def build_realtime_payload(dm) -> dict:
     for did, microwave in microwaves.items():
         if microwave.is_connected():
             try:
-                status = await asyncio.wait_for(
-                    loop.run_in_executor(None, dm.read_microwave_data, did),
-                    timeout=MICROWAVE_READ_TIMEOUT,
+                status = await read_coordinator.read(
+                    ("microwave", did),
+                    lambda did=did: dm.read_microwave_data(did),
+                    MICROWAVE_READ_TIMEOUT,
                 )
                 payload["microwaves"][did] = status
             except asyncio.TimeoutError:
@@ -207,11 +255,12 @@ async def data_push_loop(app):
 
     from src.utils.serial_manager import get_serial_manager
     serial_mgr = get_serial_manager()
+    read_coordinator = DeviceReadCoordinator()
 
     while True:
         try:
             serial_mgr.feed_watchdog()
-            payload = await build_realtime_payload(dm)
+            payload = await build_realtime_payload(dm, read_coordinator)
 
             if manager.active:
                 await manager.broadcast(payload)

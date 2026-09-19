@@ -1228,7 +1228,11 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 已连接返回True
         """
-        return self.status == DeviceStatus.CONNECTED and self._protocol is not None
+        return (
+            self.status == DeviceStatus.CONNECTED
+            and self._protocol is not None
+            and self._protocol.is_connected
+        )
     
     def write_command(self, command: str, value: Any) -> bool:
         """

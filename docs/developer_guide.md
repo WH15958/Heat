@@ -216,7 +216,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - 控制开放：按 2026-06-20 用户确认，`allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`，且不再作为手动 REST/前端或 YAML 自动控制的阻断门；字段保留在配置和 payload 中用于兼容旧状态展示。
 - 防错边界：普通配置批量写入仍拒绝覆盖控制字 `40151`；多段配置会先完整校验并转换全部段，任一后续段非法时不会写入前序段；完整配置写与 start/stop 使用同一设备锁，不能交错成“配置一半即启动”。总线在实际写入途中失败仍可能留下已写前序寄存器，不能把多次 Modbus 写误认为事务原子。
 - 控制竞态：`DeviceManager` 对同一加热器或微波仪的写控制做串行协调，并用 stop 请求代次取消更早进入但尚未执行的 start，避免 stop 已返回成功后旧 start 再启动；全局急停和 shutdown cleanup 执行期间的新 start 会被拒绝。主动断开和 cleanup 按同一设备锁先 stop，stop 返回 `False` 或异常时保留连接供重试，不得继续 disconnect。
-- 进程退出：`SerialPortManager` 只登记 `atexit` 资源清理，不接管 `SIGTERM` 或调用 `os._exit()`；Web 服务由 Uvicorn/FastAPI lifespan 先执行设备 stop/cleanup，辅助 CLI 由应用级信号处理器执行同样的停机流程。
+- 串口资源：AIBUS 与 Modbus RTU 在打开串口前统一通过 `SerialPortManager` 取得进程锁并登记句柄；同一进程内重复占用同一端口会被拒绝，连接失败或断开时会释放锁和句柄。管理器只登记 `atexit` 资源清理，不启动超时看门狗、不接管 `SIGTERM` 或调用 `os._exit()`；Web 服务由 Uvicorn/FastAPI lifespan 先执行设备 stop/cleanup，辅助 CLI 由应用级信号处理器执行同样的停机流程。
 - 失败传播：设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
 - 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。实验自然结束也会清理本次启动的设备；清理失败时运行标记为 `failed` 并阻止同一引擎重新启动，直到重试停机成功。
 

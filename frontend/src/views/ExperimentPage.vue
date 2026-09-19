@@ -508,7 +508,11 @@ async function stopExperiment() {
 
   stopping.value = true
   try {
-    await axios.post(`/api/experiments/${selectedFilename.value}/stop`)
+    const res = await axios.post(`/api/experiments/${selectedFilename.value}/stop`)
+    if (!res.data.success) {
+      ElMessage.error('停止未确认：至少一个设备停止或清理失败')
+      return
+    }
     ElMessage.info('实验已停止')
   } catch (e: any) {
     ElMessage.error(`停止失败: ${e.response?.data?.detail || e.message}`)
