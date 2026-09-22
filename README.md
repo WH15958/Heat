@@ -70,6 +70,8 @@ python run_server.py
 
 浏览器访问 `http://localhost:8000`。
 
+Windows 完成上述依赖安装和前端构建后，也可双击根目录的 `start_heat.bat`。启动器会检查环境和页面文件，确认 Heat 就绪后打开浏览器；保留服务窗口，用 `Ctrl+C` 正常退出。环境选择、失败日志和端口冲突处理见 [用户指南](docs/user_guide.md#11-启动后端服务)。
+
 ## 文档导航
 
 ### 面向 AI
