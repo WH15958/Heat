@@ -7,19 +7,27 @@
           <el-tag type="info" size="small">串口 {{ heater.connectionPort || '--' }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small">{{ heater.bindingLabel }}</el-tag>
           <el-tag :type="bindingTagType" size="small">{{ bindingTagText }}</el-tag>
-          <el-tag :type="heater.connected ? 'success' : 'info'" size="small">
-            {{ heater.connected ? '已连接' : '未连接' }}
+          <el-tag :type="heater.disconnectFailed ? 'danger' : heater.connected ? 'success' : 'info'" size="small">
+            {{ heater.disconnectFailed ? '连接异常' : heater.connected ? '已连接' : '未连接' }}
           </el-tag>
         </div>
       </div>
     </template>
     <el-form label-width="80px" size="default">
-      <el-form-item label="连接">
+      <el-alert
+        v-if="heater.disconnectFailed"
+        title="上次安全断开失败，设备停止状态未确认。请先现场确认设备状态并检查串口，再重试。"
+        type="error"
+        :closable="false"
+        show-icon
+        class="disconnect-alert"
+      />
+      <el-form-item label="连接控制">
         <el-button v-if="!heater.connected" type="primary" @click="$emit('connect', heaterId)" :loading="heater.loading">
           连接设备
         </el-button>
-        <el-button v-else type="danger" @click="$emit('disconnect', heaterId)" :loading="heater.loading">
-          断开连接
+        <el-button v-else :type="heater.disconnectFailed ? 'warning' : 'danger'" @click="$emit('disconnect', heaterId)" :loading="heater.loading">
+          {{ heater.disconnectFailed ? '重试安全断开' : '断开连接' }}
         </el-button>
       </el-form-item>
       <el-form-item label="目标温度">
@@ -43,6 +51,7 @@ const props = defineProps<{
   heaterId: string
   heater: {
     connected: boolean
+    disconnectFailed: boolean
     loading: boolean
     connectionPort?: string
     bindingMode?: string
@@ -81,4 +90,5 @@ const showBindingLabel = computed(() => props.heater.bindingMode === 'fingerprin
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .header-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.disconnect-alert { margin-bottom: 18px; }
 </style>

@@ -101,6 +101,7 @@ interface PumpDeviceState {
 
 interface HeaterDeviceState {
   connected: boolean
+  disconnectFailed: boolean
   loading: boolean
   connectionPort?: string
   bindingMode?: string
@@ -350,9 +351,12 @@ function hasUnresolvedBinding(data: any): boolean {
 function applyDeviceData(data: any) {
   for (const [id, info] of Object.entries(data.heaters || {})) {
     if (!devices.heaters[id]) {
-      devices.heaters[id] = { connected: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }
+      devices.heaters[id] = { connected: false, disconnectFailed: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }
     }
     devices.heaters[id].connected = (info as any).connected
+    if (!devices.heaters[id].connected) {
+      devices.heaters[id].disconnectFailed = false
+    }
     devices.heaters[id].connectionPort = (info as any).connection_port
     devices.heaters[id].bindingMode = (info as any).connection_binding_mode
     devices.heaters[id].bindingLabel = (info as any).binding_label
@@ -526,6 +530,7 @@ async function connectHeater(id: string) {
       return
     }
     devices.heaters[id].connected = true
+    devices.heaters[id].disconnectFailed = false
     ElMessage.success(`加热器 ${id} 已连接`)
   } catch (e: any) {
     ElMessage.error(`连接失败: ${e.response?.data?.detail || e.message}`)
@@ -544,12 +549,15 @@ async function disconnectHeater(id: string) {
   try {
     const res = await devicesApi.disconnectHeater(id)
     if (!res.data.success) {
+      devices.heaters[id].disconnectFailed = true
       ElMessage.error('断开失败: 加热器设备返回失败')
       return
     }
     devices.heaters[id].connected = false
+    devices.heaters[id].disconnectFailed = false
     ElMessage.info(`加热器 ${id} 已断开`)
   } catch (e: any) {
+    devices.heaters[id].disconnectFailed = true
     ElMessage.error(`断开失败: ${e.response?.data?.detail || e.message}`)
   } finally {
     progressMessage.close()
