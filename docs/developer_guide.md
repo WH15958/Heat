@@ -216,7 +216,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - 控制开放：按 2026-06-20 用户确认，`allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control` 当前默认 `true`，且不再作为手动 REST/前端或 YAML 自动控制的阻断门；字段保留在配置和 payload 中用于兼容旧状态展示。
 - 防错边界：普通配置批量写入仍拒绝覆盖控制字 `40151`；多段配置会先完整校验并转换全部段，任一后续段非法时不会写入前序段；完整配置写与 start/stop 使用同一设备锁，不能交错成“配置一半即启动”。总线在实际写入途中失败仍可能留下已写前序寄存器，不能把多次 Modbus 写误认为事务原子。
 - 控制竞态：`DeviceManager` 对同一加热器或微波仪的写控制做串行协调，并用 stop 请求代次取消更早进入但尚未执行的 start，避免 stop 已返回成功后旧 start 再启动；全局急停和 shutdown cleanup 执行期间的新 start 会被拒绝。主动断开和 cleanup 按同一设备锁先 stop，stop 返回 `False` 或异常时保留连接供重试，不得继续 disconnect。
-- 进程退出：`SerialPortManager` 只登记 `atexit` 资源清理，不接管 `SIGTERM` 或调用 `os._exit()`；Web 服务由 Uvicorn/FastAPI lifespan 先执行设备 stop/cleanup，辅助 CLI 由应用级信号处理器执行同样的停机流程。
+- 串口资源：AIBUS 与 Modbus RTU 在打开串口前统一通过 `SerialPortManager` 取得进程锁并登记句柄；同一进程内重复占用同一端口会被拒绝，连接失败或断开时会释放锁和句柄。管理器只登记 `atexit` 资源清理，不启动超时看门狗、不接管 `SIGTERM` 或调用 `os._exit()`；Web 服务由 Uvicorn/FastAPI lifespan 先执行设备 stop/cleanup，辅助 CLI 由应用级信号处理器执行同样的停机流程。
 - 失败传播：设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
 - 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。实验自然结束也会清理本次启动的设备；清理失败时运行标记为 `failed` 并阻止同一引擎重新启动，直到重试停机成功。
 
@@ -385,7 +385,7 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 当前仓库采用任务分支制：
 
-- `master` 是唯一长期稳定主线
+- `master` 是唯一长期稳定主线，只用于合并已验证分支及发布、核验操作，不直接修改代码、测试、文档或规则
 - 每个新需求从最新 `master` 切分支
 - 一个分支只做一个主题
 - 合并进 `master` 后默认删除该任务分支
@@ -400,15 +400,11 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 只有在大型集成项目里，才允许临时保留阶段性集成分支；但必须提前说明用途、生命周期和删除条件。
 
-当前下一阶段硬件集成建议使用独立分支：
+`feature/automation-valve-microwave` 和 `codex/fix-heater-disconnect` 已于 2026-09-11
+线性快进合并到 `master`（`b30a095`），并删除分支引用。历史尖端由以下归档标签保留：
 
-- `feature/automation-valve-microwave`
+- `archive/2026-09-11/automation-valve-microwave`
+- `archive/2026-09-11/heater-disconnect`
 
-这条分支只承载以下工作：
-
-- 电磁阀控制接入
-- 切换阀控制接入
-- 微波合成仪自动化控制接入
-- 与上述设备直接相关的 API、实验动作、测试和文档同步
-
-不要把无关前端重构、历史清理或通用 UI 美化混入这条分支。
+后续工作应从最新 `master` 新建任务分支，不要继续使用已归档分支。项目进度汇报的 HTML、
+PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录，不作为项目文档提交。

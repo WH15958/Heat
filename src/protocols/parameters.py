@@ -38,11 +38,10 @@ class ParameterCode(IntEnum):
     AHYS = 5
     CTR_L = 6
     HB = 7
-    D_P = 8
+    D_P = 12
     OPL = 9
     OPH = 10
     CR_L = 11
-    CR_H = 12
     ADDR = 23
     FILT = 24
     AMAN = 25
@@ -157,7 +156,7 @@ PARAMETER_DEFINITIONS: Dict[int, ParameterDefinition] = {
         decimal_places=0, min_value=0, max_value=100
     ),
     ParameterCode.D_P: ParameterDefinition(
-        code=8, name="dPt", description="小数点位置",
+        code=12, name="dPt", description="小数点位置",
         decimal_places=0, min_value=0, max_value=3
     ),
     ParameterCode.OPL: ParameterDefinition(
@@ -170,10 +169,6 @@ PARAMETER_DEFINITIONS: Dict[int, ParameterDefinition] = {
     ),
     ParameterCode.CR_L: ParameterDefinition(
         code=11, name="CrL", description="冷端补偿下限", 
-        decimal_places=1, min_value=-999, max_value=9999
-    ),
-    ParameterCode.CR_H: ParameterDefinition(
-        code=12, name="CrH", description="冷端补偿上限", 
         decimal_places=1, min_value=-999, max_value=9999
     ),
     ParameterCode.ADDR: ParameterDefinition(

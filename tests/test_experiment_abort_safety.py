@@ -269,7 +269,7 @@ def test_paused_experiment_still_records_sensor_data():
     original_sleep = ws_mod.asyncio.sleep
     original_get_serial_manager = serial_mod.get_serial_manager
 
-    async def payload_builder(_dm):
+    async def payload_builder(_dm, _read_coordinator=None):
         return {"type": "device_data", "heaters": {}, "pumps": {}, "microwaves": {}}
 
     async def stop_after_iteration(_seconds):
