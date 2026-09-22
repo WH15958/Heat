@@ -160,6 +160,31 @@ git push origin <branch>
 git push github <branch>
 ```
 
+### 6.3 代理排查与临时重试
+
+Git HTTPS 出现连接重置、空响应或无法连接，而浏览器可以访问时，应检查 Git 的代理路径。一个远程成功、另一个失败时分别报告，只重试失败的远程。
+
+1. 检查 Git 当前有效的代理配置及其来源、代理环境变量和 Windows 系统代理。系统代理只作参考，不能假定 Git 自动使用它；输出配置时避免暴露认证信息。
+2. 查找实际运行的 Clash/Mihomo 核心进程，从命令行的 `-f`（配置文件）、`-d`（工作目录）等参数定位正在使用的配置。进程名可能因版本而异，例如 `verge-mihomo.exe`、`mihomo.exe` 或 Clash 核心。不要固定某个厂商的 AppData 目录，也不要从遗留配置或上次成功记录直接复用端口。
+3. 只读取该活动配置中相关的 `mixed-port`、`port`、`socks-port` 等字段，并用该核心 PID 对应的实际监听端口交叉验证。若配置与监听不一致，以运行状态继续排查；多实例或无法确认活动配置时，不猜端口。HTTP/混合代理使用 `http://`，纯 SOCKS 代理使用 `socks5h://`，地址应匹配已验证的本机监听地址。
+4. 使用本次确认的代理 URL 执行单次只读请求；成功后，继续原来已获授权的 fetch/push 操作。默认不修改仓库级或全局 Git 代理设置，不把端口固化到配置中；代理重启或状态变化后重新发现并验证。
+
+下列为诊断示例，`<core-PID>`、`<verified-proxy-url>`、`<failed-remote>` 和 `<branch>` 均需替换为当前核验值：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name LIKE '%mihomo%' OR Name LIKE '%clash%'" | Select-Object ProcessId, Name, CommandLine
+Get-NetTCPConnection -State Listen -OwningProcess <core-PID> | Select-Object LocalAddress, LocalPort
+git -c http.proxy="<verified-proxy-url>" ls-remote <failed-remote>
+```
+
+只读检查成功且推送已获授权时，才执行：
+
+```powershell
+git -c http.proxy="<verified-proxy-url>" push <failed-remote> <branch>
+```
+
+代理重试成功说明这次故障在网络/代理路由，不能据此推断所有网络错误都由代理引起。若核心未运行或监听不可用，先报告实际情况，不通过改写仓库内容或固定旧端口来解决。
+
 ---
 
 ## 7. 合并前最终检查
@@ -196,7 +221,7 @@ git push github <branch>
 - 创建新的本地分支或 worktree 前，必须说明原因并取得用户明确同意；仅要求修改、提交、合并或推送不等于同意创建分支
 - 每个独立项目或功能从最新 `master` 切出新分支
 - 一个分支只承载一个明确主题
-- 合并进 `master` 后，任务分支默认删除本地和远程引用
+- 合并进 `master` 后，任务分支先打附注归档标签并同步到所有已配置远程，核验通过后再删除本地和远程分支引用；归档失败时保留分支
 
 推荐命名：
 
@@ -226,21 +251,41 @@ git push origin feature/<topic>
 git push github feature/<topic>
 ```
 
-合并回 `master` 后默认执行：
+合并回 `master` 后，先归档再删除分支。以下命令为占位示例，不应整段未经核验执行；每一步失败即停止清理：
+
+1. 记录任务分支最终提交的完整 SHA，确认其全部提交已包含在 `master`，工作区干净，且所有已配置远程的 `master` 都已同步。不能只凭“关键提交已包含”删除仍有未合并提交的分支。
+2. 在记录的分支尖端创建附注标签，命名为 `archive/<YYYY-MM-DD>/<branch-name>`。日期为归档当天，保留原分支名中的 `/`；标签说明记录原分支名及合并后的 `master` 提交。例如分支 `feature/example` 对应 `archive/<YYYY-MM-DD>/feature/example`。
 
 ```bash
-git branch -d feature/<topic>
-git push origin --delete feature/<topic>
-git push github --delete feature/<topic>
+git tag -a archive/<YYYY-MM-DD>/<branch-name> <branch-tip-SHA> -m "Archive <branch-name>; merged into master <master-SHA>"
+```
+
+归档标签长期保留，不移动或强制覆盖。同名标签已存在时，核验它是否为指向同一提交的附注标签；一致可复用，否则用追加提交短 SHA 等方式选择新名称。历史归档标签无需重命名。
+
+3. 只推送本次归档标签到所有已配置远程（本仓库通常为 `origin`、`github`），不要使用 `--tags` 批量发布其他标签：
+
+```bash
+git push origin refs/tags/archive/<YYYY-MM-DD>/<branch-name>
+git push github refs/tags/archive/<YYYY-MM-DD>/<branch-name>
+```
+
+4. 通过 `git ls-remote --tags` 核验各远程该标签的标签对象及解引用后的提交（`^{}`），应与本地附注标签和已记录的分支尖端一致。任一推送或核验失败，保留所有分支引用，只重试失败的远程。没有推送授权时，停在本地归档，不删除分支。
+5. 标签全部核验通过后，重新检查待删除的远程分支没有新增未合并提交，仅删除实际存在的分支。远程删除使用刚核验的 SHA 作为 lease，避免误删并发更新后的分支；最后以 `git branch -d` 删除本地分支，不使用强制删除：
+
+```bash
+git push origin --force-with-lease=refs/heads/<branch-name>:<verified-origin-tip-SHA> --delete <branch-name>
+git push github --force-with-lease=refs/heads/<branch-name>:<verified-github-tip-SHA> --delete <branch-name>
+git branch -d <branch-name>
 ```
 
 ### 9.2 当前仓库的收尾判定
 
-如果一个阶段分支满足以下条件，通常应删除：
+一个阶段分支满足以下条件后，才进入分支清理：
 
-- `master` 已包含该分支关键提交
+- `master` 已包含该分支全部提交
 - 工作区干净
-- 两个远程的 `master` 已同步
+- 所有已配置远程的 `master` 已同步
+- 分支最终提交的附注归档标签已在本地及所有已配置远程核验一致
 - 该分支不再承担长期集成职责
 
 ## 10. Codex `/git` 判断式流程

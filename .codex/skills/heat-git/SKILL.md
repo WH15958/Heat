@@ -1,6 +1,6 @@
 ---
 name: heat-git
-description: Use for Heat repo /git workflow: inspect changes, choose right-sized validation, update only needed docs, commit relevant files, and wait for explicit confirmation before push.
+description: "Use for Heat repo /git workflow: inspect changes, choose right-sized validation, update only needed docs, commit relevant files, and wait for explicit confirmation before push."
 ---
 
 # Heat Git Workflow
@@ -104,6 +104,10 @@ After commit:
 git push origin <branch>
 git push github <branch>
 ```
+
+When an authorized merge is being completed, archive the task branch's final tip with an annotated tag before deleting local or remote branch references. Verify that `master` contains the full branch history and that both `master` and the archive tag are synchronized to every configured remote. Keep branches if archival fails, never overwrite archive tags, and retry only the failed remote. See [the branch lifecycle](../../../docs/testing_and_merge_flow.md#9-分支管理规则) for naming and verification; this does not authorize an otherwise unrequested push.
+
+For Git HTTPS connection failures, discover the active Clash/Mihomo configuration from its running core process and verify the actual proxy listener. Do not hard-code a configuration directory or port, or persist a fixed proxy in local/global Git config. Retry only the failed remote with a per-command `git -c http.proxy=...`. Follow [the proxy diagnostic procedure](../../../docs/testing_and_merge_flow.md#63-代理排查与临时重试).
 
 ## Git Loose Objects
 

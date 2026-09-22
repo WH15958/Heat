@@ -150,17 +150,9 @@ git push origin <branch>
 git push github <branch>
 ```
 
-When one remote succeeds and the other fails, report them separately and retry only the failed remote. On this workstation, if `github` HTTPS operations fail with errors such as `Empty reply from server`, `Connection was reset`, or `Could not connect to server` while GitHub is still reachable in a browser, suspect that Git is not using Clash even though the browser is. In that case:
+When one remote succeeds and the other fails, report them separately and retry only the failed remote. For Git HTTPS connection failures, inspect the running Clash/Mihomo core process to discover its active configuration path and verify its actual listening address, port and proxy protocol. Do not assume a vendor-specific configuration directory or reuse a port from an earlier session. Use a verified proxy only via per-command `git -c http.proxy=...`; do not persist a fixed port in repository or global Git configuration. See `docs/testing_and_merge_flow.md` section 6.3 for the diagnostic procedure.
 
-1. Check the active Clash local proxy port from `%APPDATA%\io.github.clash-verge-ninja.clash-verge-ninja\config.yaml` (for example `mixed-port`).
-2. Prefer a temporary per-command proxy retry before changing global Git config:
-
-```powershell
-git -c http.proxy=http://127.0.0.1:<mixed-port> -c https.proxy=http://127.0.0.1:<mixed-port> ls-remote github
-git -c http.proxy=http://127.0.0.1:<mixed-port> -c https.proxy=http://127.0.0.1:<mixed-port> push github <branch>
-```
-
-3. Treat a successful proxy-assisted `ls-remote` or `push` as proof that the problem is network/proxy routing, not repository content.
+After merging a task branch, create an annotated archive tag at its final tip before deleting any branch references. First confirm that `master` contains the full branch history and is synchronized to all configured remotes, then push and verify the archive tag on those remotes. If any tag push or verification fails, retain the branches and retry only the failed remote. Never overwrite an existing archive tag. Follow the naming, verification and deletion procedure in `docs/testing_and_merge_flow.md` section 9; archiving does not itself authorize a push.
 
 ## 8. Generated Files
 
