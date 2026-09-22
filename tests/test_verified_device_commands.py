@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from src.devices.base_device import DeviceStatus
 from src.devices.heater import AIHeaterDevice, HeaterConfig
-from src.protocols.parameters import ParameterCode, RunStatus
+from src.protocols.parameters import ParameterCode, RunStatus, get_parameter_info
 from src.experiment.executor import StepExecutor
 from src.experiment.actions import ActionType, ExperimentStep, WaitCondition
 
@@ -42,6 +42,11 @@ def _heater_status_response(*, status, mv=0, alarm_status=0):
 
 
 def test_heater_readback_registers_match_vendor_aibus_table():
+    assert ParameterCode.D_P == 12
+    dpt = get_parameter_info(ParameterCode.D_P)
+    assert dpt is not None
+    assert dpt.code == 12
+    assert dpt.name == "dPt"
     assert ParameterCode.SV_READ == 75
     assert ParameterCode.MV_ALARM == 76
     assert ParameterCode.OUTPUT_STATUS == 77
