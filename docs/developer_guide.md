@@ -137,6 +137,7 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - Modbus 读写除 CRC 外还必须匹配 slave、function、长度、byte count 和写响应 echo；CRC 正确但属于其他请求或设备的帧不能算成功。
 - `ConfigManager.load()` 对硬件配置验证失败时直接抛错；有限数、整数和布尔配置按声明类型严格校验，`connection.stopbits`、`connection.bytesize`、泵通道 `max_flow_rate` 和设备级 `tube_model_readback_overrides` 会透传到 Web/CLI 设备配置，不再静默忽略。读回覆盖的键和值必须是 `0-13` 的整数。
 - 加热器 OUTPUT_STATUS 使用宇电协议参数 `77`；启停确认直接对该参数做有界读回，避免套用完整数据读取的重试层。读取失败或枚举未知时使用 `RunStatus.UNKNOWN`，不能用默认 RUN/STOP 伪装确定状态；主动断开确认失败时 `/api/heater/{device_id}/disconnect` 返回 `400` 和驱动失败详情，同时保留串口连接供重试。
+- 加热器 RUN/STOP 和急停在状态读回前必须确认 AIBUS 写命令返回成功；写入失败不能由碰巧匹配的旧状态读回覆盖。泵诊断读取与 WebSocket 状态读取共享每泵单飞协调器；诊断等待超时后，后续读取继续等待同一个底层串口任务，不另起并发访问。泵通道读取失败时实时状态值设为 `null`、`run_status=UNKNOWN` 且 `read_ok=false`，消费者不得把缓存值解释为当前状态。
 
 Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `404`，解析后的静态文件路径必须仍位于 `src/web/static` 内。
 

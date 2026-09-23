@@ -438,17 +438,23 @@ class AIHeaterDevice(BaseDevice):
                 self._logger.warning("Emergency stop: protocol not initialized")
                 return False
             try:
-                self._protocol.write_parameter(
+                stop_response = self._protocol.write_parameter(
                     ParameterCode.SRUN, 
                     RunStatus.STOP,
                     decimal_places=0
                 )
+                if stop_response is None or stop_response is False:
+                    self.last_command_error = "heater emergency stop RUN/STOP write failed"
+                    return False
                 
-                self._protocol.write_parameter(
+                output_response = self._protocol.write_parameter(
                     ParameterCode.MV,
                     0,
                     decimal_places=0
                 )
+                if output_response is None or output_response is False:
+                    self.last_command_error = "heater emergency stop output-zero write failed"
+                    return False
                 
                 if not self._verify_run_state(
                     RunStatus.STOP, require_zero_output=True
@@ -530,11 +536,14 @@ class AIHeaterDevice(BaseDevice):
         self.last_command_error = None
         with self._lock:
             def _start():
-                self._protocol.write_parameter(
+                response = self._protocol.write_parameter(
                     ParameterCode.SRUN,
                     RunStatus.RUN,
                     decimal_places=0
                 )
+                if response is None or response is False:
+                    self.last_command_error = "heater RUN write failed"
+                    return False
                 if not self._verify_run_state(RunStatus.RUN):
                     return False
                 self._logger.info("Heater started and verified")
@@ -547,11 +556,14 @@ class AIHeaterDevice(BaseDevice):
         self.last_command_error = None
         with self._lock:
             def _stop():
-                self._protocol.write_parameter(
+                response = self._protocol.write_parameter(
                     ParameterCode.SRUN,
                     RunStatus.STOP,
                     decimal_places=0
                 )
+                if response is None or response is False:
+                    self.last_command_error = "heater STOP write failed"
+                    return False
                 if not self._verify_run_state(RunStatus.STOP):
                     return False
                 self._logger.info("Heater stopped and verified")

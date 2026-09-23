@@ -18,12 +18,12 @@ export interface HeaterRealtimeData {
 }
 
 export interface PumpChannelData {
-  running: boolean
+  running: boolean | null
   run_status?: string
-  flow_rate: number
-  volume: number
+  flow_rate: number | null
+  volume: number | null
   direction: string | null
-  flow_unit: string
+  flow_unit: string | null
   read_ok?: boolean
 }
 

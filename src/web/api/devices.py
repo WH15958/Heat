@@ -674,23 +674,42 @@ async def pump_diagnose(device_id: str, request: Request):
     }
 
     if pump.is_connected():
+        from src.web.api.ws import DeviceReadCoordinator, PUMP_READ_TIMEOUT
+
         loop = asyncio.get_event_loop()
+        read_coordinator = getattr(
+            request.app.state, "device_read_coordinator", None
+        ) or DeviceReadCoordinator()
         channel_tests = {}
-        for ch in range(1, 5):
-            try:
-                ch_data = await asyncio.wait_for(
-                    loop.run_in_executor(None, pump.read_channel_status, ch),
-                    timeout=5.0,
-                )
-                channel_tests[f"CH{ch}"] = {
-                    "success": True,
-                    "running": ch_data.running,
-                    "flow_rate": ch_data.flow_rate,
-                }
-            except asyncio.TimeoutError:
-                channel_tests[f"CH{ch}"] = {"success": False, "error": "timeout"}
-            except Exception as e:
-                channel_tests[f"CH{ch}"] = {"success": False, "error": str(e)}
+        try:
+            status = await read_coordinator.read(
+                ("pump", device_id),
+                lambda: dm.read_pump_status(device_id),
+                timeout=PUMP_READ_TIMEOUT,
+            )
+            for ch in range(1, 5):
+                channel = status["channels"][str(ch)]
+                if channel.get("read_ok"):
+                    channel_tests[f"CH{ch}"] = {
+                        "success": True,
+                        "running": channel["running"],
+                        "flow_rate": channel["flow_rate"],
+                    }
+                else:
+                    channel_tests[f"CH{ch}"] = {
+                        "success": False,
+                        "error": "read_failed",
+                    }
+        except (asyncio.TimeoutError, TimeoutError):
+            channel_tests = {
+                f"CH{ch}": {"success": False, "error": "timeout"}
+                for ch in range(1, 5)
+            }
+        except Exception as e:
+            channel_tests = {
+                f"CH{ch}": {"success": False, "error": str(e)}
+                for ch in range(1, 5)
+            }
         result["channel_tests"] = channel_tests
 
     return result

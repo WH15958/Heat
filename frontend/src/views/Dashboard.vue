@@ -62,7 +62,7 @@
               <span v-if="ch.read_ok !== false && ch.running" class="channel-detail">
                 {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} {{ flowUnitLabel(ch.flow_unit) }}
               </span>
-              <span v-if="ch.read_ok !== false && ch.running && ch.volume > 0" class="channel-detail">
+              <span v-if="ch.read_ok !== false && ch.running && ch.volume != null && ch.volume > 0" class="channel-detail">
                 已泵 {{ ch.volume?.toFixed(1) ?? '0.0' }} mL
               </span>
               <span v-if="ch.read_ok !== false && ch.running && ch.direction" class="channel-detail">
@@ -269,11 +269,11 @@ const FLOW_UNIT_LABELS: Record<string, string> = {
   RPM: 'RPM',
 }
 
-function flowUnitLabel(unit: string | undefined): string {
+function flowUnitLabel(unit: string | null | undefined): string {
   return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
 }
 
-function flowRateToMlMin(flowRate: number, unit: string | undefined): number | null {
+function flowRateToMlMin(flowRate: number, unit: string | null | undefined): number | null {
   if (unit === 'UL_MIN') return flowRate / 1000
   if (unit === 'ML_MIN') return flowRate
   if (unit === 'L_MIN') return flowRate * 1000

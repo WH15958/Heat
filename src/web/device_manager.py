@@ -535,6 +535,14 @@ class DeviceManager:
                     read_ok = True
             except Exception as e:
                 logger.warning(f"Pump {device_id} CH{ch} read error: {e}")
+                self._pump_channel_cache[device_id][str(ch)] = {
+                    "running": None,
+                    "run_status": "UNKNOWN",
+                    "flow_rate": None,
+                    "volume": None,
+                    "direction": None,
+                    "flow_unit": None,
+                }
 
             self._pump_channel_cache[device_id][str(ch)]["read_ok"] = read_ok
 

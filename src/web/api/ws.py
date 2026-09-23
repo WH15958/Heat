@@ -255,7 +255,9 @@ async def data_push_loop(app):
 
     from src.utils.serial_manager import get_serial_manager
     serial_mgr = get_serial_manager()
-    read_coordinator = DeviceReadCoordinator()
+    read_coordinator = getattr(app.state, "device_read_coordinator", None)
+    if read_coordinator is None:
+        read_coordinator = DeviceReadCoordinator()
 
     while True:
         try:

@@ -12,7 +12,7 @@ from src.utils.serial_binding import resolve_connection
 from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
 from src.web.api.experiments import router as experiments_router
-from src.web.api.ws import router as ws_router, data_push_loop
+from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
 
 logger = get_logger(__name__)
@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Heat Web Server...")
     setup_logging(level="INFO", console_output=True, file_output=True)
     app.state.device_manager = create_device_manager()
+    app.state.device_read_coordinator = DeviceReadCoordinator()
     push_task = asyncio.create_task(data_push_loop(app))
     yield
     logger.info("Shutting down...")
