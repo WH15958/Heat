@@ -374,7 +374,7 @@ function applyDeviceData(data: any) {
     }
     const pumpInfo = info as any
     devices.pumps[id].connected = pumpInfo.connected
-    if (devices.pumps[id].connected) devices.pumps[id].connectionError = null
+    devices.pumps[id].connectionError = pumpInfo.connection_error || null
     devices.pumps[id].connectionPort = pumpInfo.connection_port
     devices.pumps[id].bindingMode = pumpInfo.connection_binding_mode
     devices.pumps[id].bindingLabel = pumpInfo.binding_label

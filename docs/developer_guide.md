@@ -192,6 +192,10 @@ Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `40
 
 ## 串口稳定绑定
 
+Windows 串口锁使用 `port_COMx.lock` 命名；不得使用 `COMx.lock`，因为 `COM1`–`COM9` 即使带扩展名仍是 Windows 保留设备名，可能被解释为设备而非普通文件。
+
+蠕动泵初始化逐项检查命令结果，失败时返回 `False` 并保留 `ERROR` 状态及 `connection_error`；`/api/devices` 的泵状态透传该字段。此时 `is_connected()` 仍反映可用的串口连接，以保留停止、断开和清理路径，但上层禁止启动。重开串口不会清除初始化失败。串口锁删除遇到权限错误最多尝试三次，间隔 50 ms；持续失败时保留资源占用记录，供后续释放重试，不报告成功。
+
 Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理：
 
 - 配置层：`DeviceConnectionConfig.binding`
@@ -217,7 +221,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 后端在绑定未解析时会阻止 `connect_*`，避免把设备误连到不确定串口。
 - 绑定刷新：`POST /api/devices/refresh_bindings` 会重新运行串口解析并更新已注册设备实例的最终端口；控制页发现“未匹配”时会自动调用一次，用于处理设备晚于后端启动才被 Windows 枚举出来的情况。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置请求必须包含 1-5 段，数值字段拒绝布尔值；请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
-- WebSocket：实时 payload 包含 `microwaves`，读取失败时写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
+- WebSocket：实时 payload 包含 `microwaves`；各类设备读取超时（包括 Python 3.10 中不同的 `asyncio.TimeoutError` 与内置 `TimeoutError`）写入 `{"error": "read_timeout"}`，其他读取失败写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
 - 泵实时 payload 的每个通道包含 `running` 和 `read_ok`。历史 `flow_rate` 是设备设定/报告值，只有读取有效且确认运行的区间才表示软件确认的输运区间，不等价于外部流量计实测。
 - 全局急停 `POST /api/devices/emergency_stop` 保留顶层 `success`，并返回 `devices` 明细；每项包含 `device_type`、`device_id`、`connected`、`attempted`、`command_result`、`final_state`、`success` 和 `reason`。已注册但未连接、命令失败或最终状态未确认都会使总体结果失败。
 - 实验日志：`ExperimentLogger.record_sensor_data()` 会把实时 payload 中的微波仪 `material_temperature`、`power_percent`、`current`、`runtime_seconds` 分别保存到 `sensor_data.microwaves[device_id]` 下，供历史记录实验报告绘制微波温度、功率和电流曲线。

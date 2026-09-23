@@ -127,6 +127,7 @@ def _fake_pump(
 ):
     readback_overrides = dict(tube_model_readback_overrides or {})
     pump = Mock()
+    pump.connection_error = None
     pump.is_connected.return_value = True
     pump.config.tube_model_readback_overrides = readback_overrides
     pump.get_channel_config.return_value = SimpleNamespace(

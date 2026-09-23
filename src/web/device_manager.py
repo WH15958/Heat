@@ -778,6 +778,7 @@ class DeviceManager:
             pumps[did] = self._binding_enriched_payload({
                 "connected": p.is_connected(),
                 "status": p.status.name,
+                "connection_error": getattr(p, "connection_error", None),
                 "channels": {
                     str(channel.channel): {
                         "enabled": channel.enabled,
@@ -1044,6 +1045,9 @@ class DeviceManager:
             return False
         if not pump.is_connected():
             logger.warning(f"Pump {device_id} not connected")
+            return False
+        if getattr(pump, "connection_error", None):
+            logger.error(f"Pump {device_id} initialization failed; start rejected")
             return False
         try:
             from src.protocols.pump_params import PumpDirection, PumpRunMode

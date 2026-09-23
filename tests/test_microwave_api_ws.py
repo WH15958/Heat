@@ -250,15 +250,16 @@ def test_websocket_microwave_read_failure_is_error_payload():
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}
     dm.get_microwave_binding.return_value = {}
-    dm.read_microwave_data.side_effect = TimeoutError("simulated timeout")
+    for error_type in (TimeoutError, asyncio.TimeoutError):
+        dm.read_microwave_data.side_effect = error_type("simulated timeout")
 
-    payload = run(build_realtime_payload(dm))
+        payload = run(build_realtime_payload(dm))
 
-    assert payload["microwaves"]["mw1"] == {
-        "device_id": "mw1",
-        "connection_port": "COM12",
-        "error": "read_timeout",
-    }
+        assert payload["microwaves"]["mw1"] == {
+            "device_id": "mw1",
+            "connection_port": "COM12",
+            "error": "read_timeout",
+        }
 
 
 def test_create_device_manager_raises_on_config_load_failure():

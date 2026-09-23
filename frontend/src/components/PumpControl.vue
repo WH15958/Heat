@@ -4,8 +4,8 @@
       <div class="card-header">
         <div class="device-heading"><img :src="deviceArtwork" alt="" /><div><h2>蠕动泵</h2><span>{{ pumpId }} 控制</span></div></div>
         <div class="header-tags">
-          <el-tag :type="pump.connected ? 'success' : 'info'" size="small" style="margin-right: 8px">
-            {{ pump.connected ? '已连接' : '未连接' }}
+          <el-tag :type="pump.connectionError ? 'danger' : pump.connected ? 'success' : 'info'" size="small" style="margin-right: 8px">
+            {{ pump.connectionError ? '连接异常' : pump.connected ? '已连接' : '未连接' }}
           </el-tag>
           <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>

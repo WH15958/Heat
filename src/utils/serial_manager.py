@@ -65,7 +65,8 @@ class SerialPortLock:
     def _get_lock_file(self, port: str) -> Path:
         """获取锁文件路径"""
         safe_name = port.replace(":", "_").replace("\\", "_")
-        return self.LOCK_DIR / f"{safe_name}.lock"
+        # COM1..COM9 remain reserved Windows device names even with an extension.
+        return self.LOCK_DIR / f"port_{safe_name}.lock"
     
     def acquire(self, port: str, pid: Optional[int] = None) -> bool:
         """
@@ -161,8 +162,16 @@ class SerialPortLock:
         lock_file = self._get_lock_file(port)
         
         try:
-            if lock_file.exists():
-                lock_file.unlink()
+            for attempt in range(3):
+                try:
+                    lock_file.unlink()
+                    break
+                except FileNotFoundError:
+                    break
+                except PermissionError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.05)
             if port in self._locks:
                 del self._locks[port]
             logger.info(f"Lock released for {port}")
@@ -208,7 +217,7 @@ class SerialPortLock:
                     except (OSError, json.JSONDecodeError):
                         # 损坏的锁文件也记录一下
                         locks.append({
-                            'port': lock_file.stem.replace("_", ":"),
+                            'port': lock_file.stem.removeprefix("port_").replace("_", ":"),
                             'pid': None,
                             'time': None,
                             'datetime': None,
@@ -492,7 +501,8 @@ class SerialPortManager:
 
             if not self._port_lock.release(port):
                 success = False
-            self._active_ports.discard(port)
+            if success:
+                self._active_ports.discard(port)
 
             return success
     

@@ -152,6 +152,7 @@ class LabSmartPumpDevice(BaseDevice):
             info: 设备信息对象（可选）
         """
         self._closed = False
+        self.connection_error = None
         self._protocol: Optional[ModbusRTUProtocol] = None
         self._channel_data: Dict[int, PumpChannelData] = {}
         self._consecutive_failures = 0
@@ -212,12 +213,15 @@ class LabSmartPumpDevice(BaseDevice):
             bool: 连接成功返回True
         """
         with self._lock:
+            if self.connection_error and self._protocol is not None and self._protocol.is_connected:
+                return False
             if self.status == DeviceStatus.CONNECTED:
                 return True
             if self._status == DeviceStatus.CONNECTING:
                 self._logger.error("Connection already in progress")
                 return False
             self.status = DeviceStatus.CONNECTING
+            self.connection_error = None
         
         protocol = None
         try:
@@ -253,16 +257,20 @@ class LabSmartPumpDevice(BaseDevice):
                     return True
                 self._protocol = protocol
                 self._closed = False
-                self.status = DeviceStatus.CONNECTED
                 protocol = None
             
-            self._logger.info(f"Pump {self.config.device_id} connected on {port} ({baudrate}, {parity})")
+            self._logger.info(f"Pump {self.config.device_id} serial opened on {port} ({baudrate}, {parity}); initializing")
             
             try:
-                self._initialize_channels()
+                if not self._initialize_channels():
+                    raise RuntimeError(self.last_command_error or "通道初始化命令未确认")
             except Exception as e:
-                self._logger.warning(f"Channel initialization failed (non-fatal): {e}")
-            
+                self.connection_error = f"蠕动泵初始化失败，停止状态未确认；保留串口供重试安全停止：{e}"
+                self.status = DeviceStatus.ERROR
+                self._logger.error(self.connection_error)
+                return False
+
+            self.status = DeviceStatus.CONNECTED
             return True
             
         except Exception as e:
@@ -290,6 +298,7 @@ class LabSmartPumpDevice(BaseDevice):
                 self._protocol = None
             
             self.status = DeviceStatus.DISCONNECTED
+            self.connection_error = None
             self._logger.info(f"Pump {self.config.device_id} disconnected")
             return True
     
@@ -326,35 +335,47 @@ class LabSmartPumpDevice(BaseDevice):
             channel = ch_config.channel
             if ch_config.enabled:
                 try:
-                    self.stop_channel(channel)
+                    if not self.stop_channel(channel):
+                        return False
                     time.sleep(0.05)
-                    self.enable_channel(channel, True)
+                    if not self.enable_channel(channel, True):
+                        return False
                     time.sleep(0.1)
                 except Exception as e:
                     self._logger.error(f"CH{channel} enable failed: {e}")
-                    continue
+                    return False
                 try:
                     result = self.set_tube_model(channel, ch_config.tube_model)
                     self._logger.info(f"CH{channel} set_tube_model={ch_config.tube_model} result={result}")
+                    if not result:
+                        return False
                     time.sleep(0.1)
                 except Exception as e:
                     self._logger.error(f"CH{channel} set_tube_model failed: {e}")
+                    return False
                 try:
-                    self.set_direction(channel, ch_config.default_direction)
+                    if not self.set_direction(channel, ch_config.default_direction):
+                        return False
                     time.sleep(0.1)
                 except Exception as e:
                     self._logger.error(f"CH{channel} set_direction failed: {e}")
+                    return False
                 try:
-                    self.set_run_mode(channel, PumpRunMode.FLOW_MODE)
+                    if not self.set_run_mode(channel, PumpRunMode.FLOW_MODE):
+                        return False
                     time.sleep(0.1)
                 except Exception as e:
                     self._logger.error(f"CH{channel} set_run_mode failed: {e}")
+                    return False
                 try:
                     if ch_config.suck_back_angle > 0:
-                        self.set_suck_back_angle(channel, ch_config.suck_back_angle)
+                        if not self.set_suck_back_angle(channel, ch_config.suck_back_angle):
+                            return False
                         time.sleep(0.1)
                 except Exception as e:
                     self._logger.error(f"CH{channel} set_suck_back_angle failed: {e}")
+                    return False
+        return True
     
     def _get_slave_address(self) -> int:
         """获取从站地址"""
@@ -508,8 +529,8 @@ class LabSmartPumpDevice(BaseDevice):
             if protocol.connect():
                 self._protocol = protocol
                 self._consecutive_failures = 0
-                self.status = DeviceStatus.CONNECTED
-                logger.info(f"Pump {self.config.device_id} reconnected successfully")
+                self.status = DeviceStatus.ERROR if self.connection_error else DeviceStatus.CONNECTED
+                logger.info(f"Pump {self.config.device_id} serial port reopened; device response not yet confirmed")
             else:
                 self.status = DeviceStatus.ERROR
                 logger.error(f"Pump {self.config.device_id} reconnect failed")
@@ -569,6 +590,9 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 成功返回True
         """
+        if self.connection_error:
+            self.last_command_error = self.connection_error
+            return False
         if not self._validate_channel(channel):
             return False
 
@@ -670,6 +694,9 @@ class LabSmartPumpDevice(BaseDevice):
         Returns:
             bool: 成功返回True
         """
+        if self.connection_error:
+            self.last_command_error = self.connection_error
+            return False
         return self._write_register(10, 1)
     
     def stop_all(self) -> bool:
@@ -1229,7 +1256,7 @@ class LabSmartPumpDevice(BaseDevice):
             bool: 已连接返回True
         """
         return (
-            self.status == DeviceStatus.CONNECTED
+            self.status in (DeviceStatus.CONNECTED, DeviceStatus.ERROR)
             and self._protocol is not None
             and self._protocol.is_connected
         )

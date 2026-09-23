@@ -176,7 +176,7 @@ async def build_realtime_payload(
                     "alarms": data.alarms,
                     "run_status": data.run_status.name,
                 }, dm.get_heater_binding(did))
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 logger.warning(f"Heater {did} read timeout")
                 payload["heaters"][did] = _with_binding({
                     "device_id": did,
@@ -201,7 +201,7 @@ async def build_realtime_payload(
                     PUMP_READ_TIMEOUT,
                 )
                 payload["pumps"][did] = status
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 logger.warning(f"Pump {did} read timeout")
                 payload["pumps"][did] = _with_binding({
                     "device_id": did,
@@ -226,7 +226,7 @@ async def build_realtime_payload(
                     MICROWAVE_READ_TIMEOUT,
                 )
                 payload["microwaves"][did] = status
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 logger.warning(f"Microwave {did} read timeout")
                 payload["microwaves"][did] = _with_binding({
                     "device_id": did,

@@ -136,7 +136,7 @@ def test_current_microwave_config_resolves_new_usb_rs485_adapter():
     config = ConfigManager().load()
     microwave = config.get_microwave_config("microwave1")
     assert microwave is not None
-    assert microwave.connection.port == "COM17"
+    assert microwave.connection.port == "COM6"
     assert microwave.connection.binding.serial_number == "DU0ENS4UA"
 
     with patch("src.utils.serial_binding.enumerate_serial_ports", return_value=[
