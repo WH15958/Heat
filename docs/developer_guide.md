@@ -51,7 +51,7 @@ Vue 前端
 
 ### 前端主题维护
 
-全局导航和路由缓存位于 `frontend/src/App.vue`，蓝白主题与响应式断点集中在 `frontend/src/styles/theme.css`。主题覆盖 Element Plus 展示样式，设备控制页通过 `device-columns` 组织两列独立内容；小于 1200px 使用单列，小于 768px 展开式导航。其他页面沿用原有业务布局。
+全局导航位于 `frontend/src/App.vue`，页面切换时会卸载旧页面，以便清理轮询和 WebSocket，并在再次进入设备控制页时刷新设备状态。蓝白主题与响应式断点集中在 `frontend/src/styles/theme.css`。主题覆盖 Element Plus 展示样式，设备控制页通过 `device-columns` 组织两列独立内容；小于 1200px 使用单列，小于 768px 展开式导航。其他页面沿用原有业务布局。
 
 本地装饰资源位于 `frontend/src/assets/theme/`，由用户提供的图片裁切并压缩为 WebP。插画使用空 `alt` 和非交互样式；状态、故障和参数必须继续使用真实文本及现有数据源。修改主题时同时检查 Element Plus 懒加载样式的优先级和弹窗，不将设备事件处理迁入展示层。
 

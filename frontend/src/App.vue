@@ -54,7 +54,7 @@ watch(() => route.path, () => { menuOpen.value = false })
     </aside>
     <main id="main-content" class="app-main" tabindex="-1">
       <div class="page-heading"><div class="heading-title"><img :src="bow" class="heading-bow decoration" alt="" /><div><p>{{ currentPage.caption }}</p><h1>{{ currentPage.label }}</h1></div></div><span class="page-heading-note">HEAT / LABORATORY</span></div>
-      <router-view v-slot="{ Component }"><keep-alive><component :is="Component" /></keep-alive></router-view>
+      <router-view />
       <div class="workspace-footer"><span>HEAT · 实验控制平台</span><img :src="cat" alt="" /></div>
     </main>
   </div>
