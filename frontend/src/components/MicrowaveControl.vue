@@ -1,8 +1,8 @@
 <template>
-  <el-card shadow="hover" style="margin-bottom: 20px">
+  <el-card shadow="never" class="device-card microwave-card">
     <template #header>
       <div class="card-header">
-        <span>微波仪 {{ microwaveId }} 控制</span>
+        <div class="device-heading"><img :src="deviceArtwork" alt="" /><div><h2>微波仪</h2><span>{{ microwaveId }} 控制</span></div></div>
         <div class="header-tags">
           <el-tag type="info" size="small">串口 {{ connectionPort }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small">{{ bindingLabel }}</el-tag>
@@ -16,6 +16,8 @@
       </div>
     </template>
 
+    <el-alert v-if="microwave.connectionError" :title="microwave.connectionError" type="error" :closable="false" show-icon class="connection-feedback" />
+
     <el-alert
       title="操作前请人工检查炉门、反应瓶、探头、设备绑定身份、当前解析串口和现场看护。协议当前没有可靠门状态寄存器，软件不会伪造 door_closed。"
       type="warning"
@@ -27,10 +29,10 @@
     <el-form label-width="88px" size="default">
       <el-form-item label="连接">
         <el-button v-if="!microwave.connected" type="primary" @click="$emit('connect', microwaveId)" :loading="microwave.loading">
-          连接设备
+          {{ microwave.loading ? '连接中…' : '连接设备' }}
         </el-button>
         <el-button v-else type="danger" @click="$emit('disconnect', microwaveId)" :loading="microwave.loading">
-          断开连接
+          {{ microwave.loading ? '断开中…' : '断开连接' }}
         </el-button>
         <el-button
           style="margin-left: 8px"
@@ -161,6 +163,7 @@
 </template>
 
 <script setup lang="ts">
+import deviceArtwork from '../assets/theme/microwave.webp'
 import { computed } from 'vue'
 import { MICROWAVE_MODES, type MicrowaveMode } from '../api/devices'
 import type { MicrowaveRealtimeData } from '../composables/useWebSocket'
@@ -179,6 +182,7 @@ interface MicrowaveSegmentConfig {
 interface MicrowaveDeviceState {
   connected: boolean
   loading: boolean
+  connectionError?: string | null
   refreshing: boolean
   configuring: boolean
   starting: boolean
@@ -272,6 +276,7 @@ function formatRuntime(seconds: number | null | undefined): string {
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.connection-feedback { margin-bottom: 12px; }
 .header-tags,
 .status-tags,
 .time-row,

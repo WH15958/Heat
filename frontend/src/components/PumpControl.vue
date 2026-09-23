@@ -1,9 +1,9 @@
 <template>
-  <el-card shadow="hover" style="margin-bottom: 20px">
+  <el-card shadow="never" class="device-card pump-card">
     <template #header>
       <div class="card-header">
-        <span>蠕动泵 {{ pumpId }} 控制</span>
-        <div>
+        <div class="device-heading"><img :src="deviceArtwork" alt="" /><div><h2>蠕动泵</h2><span>{{ pumpId }} 控制</span></div></div>
+        <div class="header-tags">
           <el-tag :type="pump.connected ? 'success' : 'info'" size="small" style="margin-right: 8px">
             {{ pump.connected ? '已连接' : '未连接' }}
           </el-tag>
@@ -11,14 +11,16 @@
           <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
           <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag>
           <el-button v-if="!pump.connected" type="primary" size="small" @click="$emit('connect', pumpId)" :loading="pump.loading">
-            连接
+            {{ pump.loading ? '连接中…' : '连接' }}
           </el-button>
           <el-button v-else type="danger" size="small" @click="$emit('disconnect', pumpId)" :loading="pump.loading">
-            断开
+            {{ pump.loading ? '断开中…' : '断开' }}
           </el-button>
         </div>
       </div>
     </template>
+
+    <el-alert v-if="pump.connectionError" :title="pump.connectionError" type="error" :closable="false" show-icon class="connection-feedback" />
 
     <el-alert
       title="蠕动泵开机后请检查通信参数设置（波特率、校验位、软管型号），确保与实际配置一致后再操作"
@@ -225,6 +227,7 @@
 </template>
 
 <script setup lang="ts">
+import deviceArtwork from '../assets/theme/pump.webp'
 import { computed } from 'vue'
 import { PUMP_MODES, TUBE_MODELS, FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, type PumpMode } from '../api/devices'
 import { calculateDeadVolumeMl, calculatePrimingTimeSeconds, convertFlowToMlMin } from '../utils/pumpCalculations'
@@ -253,6 +256,7 @@ const props = defineProps<{
   pump: {
     connected: boolean
     loading: boolean
+    connectionError?: string | null
     connectionPort?: string
     bindingMode?: string
     bindingLabel?: string
@@ -401,6 +405,7 @@ function onTubeModelChange(ch: ChannelConfig) {
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
+.connection-feedback { margin-bottom: 12px; }
 .channel-control {
   padding: 10px 0;
   border-bottom: 1px solid #f0f0f0;

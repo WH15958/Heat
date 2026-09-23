@@ -1,36 +1,20 @@
 <template>
   <div class="control-panel">
-    <el-row :gutter="20">
-      <el-col :span="12">
-        <HeaterControl
-          v-for="(heater, id) in devices.heaters"
-          :key="'h-' + id"
-          :heater-id="id"
-          :heater="heater"
-          @connect="connectHeater"
-          @disconnect="disconnectHeater"
-          @set-temp="setTemp"
-          @start="startHeater"
-          @stop="stopHeater"
-        />
-      </el-col>
-
-      <el-col :span="12">
-        <PumpControl
-          v-for="(pump, pumpId) in devices.pumps"
-          :key="'p-' + pumpId"
-          :pump-id="pumpId"
-          :pump="pump"
-          :channel-status="channelStatus"
-          @connect="connectPump"
-          @disconnect="disconnectPump"
-          @start-channel="startPumpChannel"
-          @stop-channel="stopPumpChannel"
-          @stop-all="stopPumpAll"
-        />
-      </el-col>
-
-      <el-col :span="12">
+    <div class="device-columns">
+      <div class="device-column">
+        <section v-if="Object.keys(devices.heaters).length" class="heater-group" aria-label="加热器设备">
+          <HeaterControl
+            v-for="(heater, id) in devices.heaters"
+            :key="'h-' + id"
+            :heater-id="id"
+            :heater="heater"
+            @connect="connectHeater"
+            @disconnect="disconnectHeater"
+            @set-temp="setTemp"
+            @start="startHeater"
+            @stop="stopHeater"
+          />
+        </section>
         <MicrowaveControl
           v-for="(microwave, microwaveId) in devices.microwaves"
           :key="'m-' + microwaveId"
@@ -44,13 +28,29 @@
           @start="startMicrowave"
           @stop="stopMicrowave"
         />
-      </el-col>
-    </el-row>
+      </div>
+      <div class="device-column">
+        <PumpControl
+          v-for="(pump, pumpId) in devices.pumps"
+          :key="'p-' + pumpId"
+          :pump-id="pumpId"
+          :pump="pump"
+          :channel-status="channelStatus"
+          @connect="connectPump"
+          @disconnect="disconnectPump"
+          @start-channel="startPumpChannel"
+          @stop-channel="stopPumpChannel"
+          @stop-all="stopPumpAll"
+        />
+      </div>
+    </div>
+    <div class="emergency-bar">
+      <div class="emergency-description"><strong>全局设备控制</strong><span>停止所有已注册设备</span></div>
 
-    <el-button type="danger" size="large" @click="emergencyStop"
-               style="width: 100%; margin-top: 10px; font-size: 18px; height: 56px">
-      紧急停止所有设备
-    </el-button>
+      <el-button type="danger" size="large" @click="emergencyStop" class="emergency-button">
+        紧急停止所有设备
+      </el-button>
+    </div>
   </div>
 </template>
 
@@ -90,6 +90,7 @@ interface ChannelConfig {
 interface PumpDeviceState {
   connected: boolean
   loading: boolean
+  connectionError?: string | null
   connectionPort?: string
   bindingMode?: string
   bindingLabel?: string
@@ -103,6 +104,7 @@ interface HeaterDeviceState {
   connected: boolean
   disconnectFailed: boolean
   loading: boolean
+  connectionError?: string | null
   connectionPort?: string
   bindingMode?: string
   bindingLabel?: string
@@ -125,6 +127,7 @@ interface MicrowaveSegmentConfig {
 interface MicrowaveDeviceState {
   connected: boolean
   loading: boolean
+  connectionError?: string | null
   refreshing: boolean
   configuring: boolean
   starting: boolean
@@ -357,6 +360,7 @@ function applyDeviceData(data: any) {
     if (!devices.heaters[id].connected) {
       devices.heaters[id].disconnectFailed = false
     }
+    if (devices.heaters[id].connected) devices.heaters[id].connectionError = null
     devices.heaters[id].connectionPort = (info as any).connection_port
     devices.heaters[id].bindingMode = (info as any).connection_binding_mode
     devices.heaters[id].bindingLabel = (info as any).binding_label
@@ -370,6 +374,7 @@ function applyDeviceData(data: any) {
     }
     const pumpInfo = info as any
     devices.pumps[id].connected = pumpInfo.connected
+    if (devices.pumps[id].connected) devices.pumps[id].connectionError = null
     devices.pumps[id].connectionPort = pumpInfo.connection_port
     devices.pumps[id].bindingMode = pumpInfo.connection_binding_mode
     devices.pumps[id].bindingLabel = pumpInfo.binding_label
@@ -411,6 +416,7 @@ function applyDeviceData(data: any) {
       }
     }
     devices.microwaves[id].connected = (info as any).connected
+    if (devices.microwaves[id].connected) devices.microwaves[id].connectionError = null
     devices.microwaves[id].connectionPort = (info as any).connection_port
     devices.microwaves[id].bindingMode = (info as any).connection_binding_mode
     devices.microwaves[id].bindingLabel = (info as any).binding_label
@@ -522,18 +528,23 @@ async function confirmPumpStart(pumpId: string, channel: number, effectiveFlowRa
 
 async function connectHeater(id: string) {
   if (!ensureBindingResolved(devices.heaters[id].bindingResolved, '加热器' + id, devices.heaters[id].bindingLabel)) return
+  devices.heaters[id].connectionError = null
   devices.heaters[id].loading = true
   try {
     const res = await devicesApi.connectHeater(id)
     if (!res.data.success) {
-      ElMessage.error('连接失败: 加热器设备返回失败')
+      const message = '连接失败: 加热器设备返回失败'
+      devices.heaters[id].connectionError = message
+      ElMessage.error(message)
       return
     }
     devices.heaters[id].connected = true
     devices.heaters[id].disconnectFailed = false
     ElMessage.success(`加热器 ${id} 已连接`)
   } catch (e: any) {
-    ElMessage.error(`连接失败: ${e.response?.data?.detail || e.message}`)
+    const message = `连接失败: ${e.response?.data?.detail || e.message}`
+    devices.heaters[id].connectionError = message
+    ElMessage.error(message)
   } finally {
     devices.heaters[id].loading = false
   }
@@ -620,17 +631,22 @@ async function stopHeater(id: string) {
 
 async function connectPump(id: string) {
   if (!ensureBindingResolved(devices.pumps[id].bindingResolved, '蠕动泵' + id, devices.pumps[id].bindingLabel)) return
+  devices.pumps[id].connectionError = null
   devices.pumps[id].loading = true
   try {
     const res = await devicesApi.connectPump(id)
     if (!res.data.success) {
-      ElMessage.error('连接失败: 蠕动泵设备返回失败')
+      const message = '连接失败: 蠕动泵设备返回失败'
+      devices.pumps[id].connectionError = message
+      ElMessage.error(message)
       return
     }
     devices.pumps[id].connected = true
     ElMessage.success(`蠕动泵 ${id} 已连接`)
   } catch (e: any) {
-    ElMessage.error(`连接失败: ${e.response?.data?.detail || e.message}`)
+    const message = `连接失败: ${e.response?.data?.detail || e.message}`
+    devices.pumps[id].connectionError = message
+    ElMessage.error(message)
   } finally {
     devices.pumps[id].loading = false
   }
@@ -840,11 +856,14 @@ function validateMicrowaveSegment(microwave: MicrowaveDeviceState): boolean {
 
 async function connectMicrowave(id: string) {
   if (!ensureBindingResolved(devices.microwaves[id].bindingResolved, '微波仪' + id, devices.microwaves[id].bindingLabel)) return
+  devices.microwaves[id].connectionError = null
   devices.microwaves[id].loading = true
   try {
     const res = await devicesApi.connectMicrowave(id)
     if (!res.data.success) {
-      ElMessage.error('连接失败: 微波仪设备返回失败')
+      const message = '连接失败: 微波仪设备返回失败'
+      devices.microwaves[id].connectionError = message
+      ElMessage.error(message)
       return
     }
     devices.microwaves[id].connected = true
@@ -852,7 +871,9 @@ async function connectMicrowave(id: string) {
     await refreshDevices()
     await readMicrowaveData(id)
   } catch (e: any) {
-    ElMessage.error(`连接失败: ${e.response?.data?.detail || e.message}`)
+    const message = `连接失败: ${e.response?.data?.detail || e.message}`
+    if (!devices.microwaves[id].connected) devices.microwaves[id].connectionError = message
+    ElMessage.error(message)
   } finally {
     devices.microwaves[id].loading = false
   }
@@ -1058,5 +1079,5 @@ function calcFlowRate(ch: ChannelConfig): number {
 </script>
 
 <style scoped>
-.control-panel { padding: 20px; }
+.control-panel { padding: 0; }
 </style>

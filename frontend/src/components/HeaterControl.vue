@@ -1,8 +1,8 @@
 <template>
-  <el-card shadow="hover" style="margin-bottom: 20px">
+  <el-card shadow="never" class="device-card heater-card">
     <template #header>
       <div class="card-header">
-        <span>加热器 {{ heaterId }} 控制</span>
+        <div class="device-heading"><img :src="deviceArtwork" alt="" /><div><h2>加热器</h2><span>{{ heaterId }} 控制</span></div></div>
         <div class="header-tags">
           <el-tag type="info" size="small">串口 {{ heater.connectionPort || '--' }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small">{{ heater.bindingLabel }}</el-tag>
@@ -13,6 +13,7 @@
         </div>
       </div>
     </template>
+    <el-alert v-if="heater.connectionError" :title="heater.connectionError" type="error" :closable="false" show-icon class="connection-feedback" />
     <el-form label-width="80px" size="default">
       <el-alert
         v-if="heater.disconnectFailed"
@@ -24,10 +25,10 @@
       />
       <el-form-item label="连接控制">
         <el-button v-if="!heater.connected" type="primary" @click="$emit('connect', heaterId)" :loading="heater.loading">
-          连接设备
+          {{ heater.loading ? '连接中…' : '连接设备' }}
         </el-button>
         <el-button v-else :type="heater.disconnectFailed ? 'warning' : 'danger'" @click="$emit('disconnect', heaterId)" :loading="heater.loading">
-          {{ heater.disconnectFailed ? '重试安全断开' : '断开连接' }}
+          {{ heater.loading ? '正在安全断开…' : heater.disconnectFailed ? '重试安全断开' : '断开连接' }}
         </el-button>
       </el-form-item>
       <el-form-item label="目标温度">
@@ -45,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import deviceArtwork from '../assets/theme/heater.webp'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -53,6 +55,7 @@ const props = defineProps<{
     connected: boolean
     disconnectFailed: boolean
     loading: boolean
+    connectionError?: string | null
     connectionPort?: string
     bindingMode?: string
     bindingLabel?: string
@@ -91,4 +94,5 @@ const showBindingLabel = computed(() => props.heater.bindingMode === 'fingerprin
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .header-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .disconnect-alert { margin-bottom: 18px; }
+.connection-feedback { margin-bottom: 16px; }
 </style>
