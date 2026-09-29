@@ -103,9 +103,25 @@ FastAPI 是异步的，但设备是同步的。
 
 - `src/web/app.py`：创建 FastAPI 应用、加载配置、挂载静态资源、启动推送循环
 - `src/web/api/devices.py`：设备连接、控制、状态接口；包含微波仪 `/api/microwave/{device_id}/...` 路由
-- `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史
+- `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史，以及编排器的 YAML 读取、校验和版本保护保存
+- `src/experiment/editor.py`：无硬件访问的 YAML 编排校验、设备引用提示和原子文件保存
+- `src/experiment/parameter_models.py`：设备 REST 与编排器共用的纯参数契约
 - `src/web/api/campaigns.py`：`/api/campaigns` 下的 Campaign、Trial、Recommendation 与表征结果接口
 - `src/web/api/ws.py`：WebSocket 推送与连接管理
+
+#### 实验编排接口
+
+前端路由 `/experiment/editor` 通过可选 `filename` 查询参数打开已有文件，使用 `yaml` 文档树及 CodeMirror 6 编辑同一份原文。
+
+| 接口 | 请求 / 返回 |
+| --- | --- |
+| `GET /api/experiments/{filename}/source` | 返回 `{filename, content, revision}`；revision 为原始 UTF-8 字节的 SHA-256 摘要 |
+| `POST /api/experiments/validate` | 请求 `{content}`；返回 `{valid, errors, warnings}`，各条问题包含 `message, path, step_id, line, column`（行列从 1 开始） |
+| `PUT /api/experiments/{filename}/source` | 请求 `{content, revision}`；新建时 revision 为 null，更新时传读取版本；返回新的 source 对象 |
+
+内容上限为 1,000,000 字符。保存前执行纯结构/参数校验，失败返回 422；同名创建、版本变化、运行或清理中的文件覆盖返回 409。文件名错误返回 400，读取不存在文件返回 404，文件 I/O 失败返回 500。保存与启动装载使用同一进程内锁；文件写入同目录临时文件、flush/fsync 后原子替换，不强制覆盖冲突。当前协调适用于单个后端进程，多 worker 部署需要额外的跨进程协调。
+
+`parse_experiment_data` / `parse_experiment_content` 共享解析器规则，编排时关闭设备存在性阻断并返回设备警告；启动仍保留默认严格检查。编排接口不获取 DeviceManager，不连接或控制设备。软件校验通过不等于设备就绪或安全确认。
 
 Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH Python；`scripts/launch_heat.py` 负责前置检查、日志和启动互斥，并在主线程执行原有 `run_server.py`，保留 Uvicorn 的 Ctrl+C/lifespan 退出流程。`output/heat-launcher.lock` 为进程持有的 Windows 文件锁，退出时自动释放，空闲锁文件无需删除。就绪检测线程仅在启动阶段读取 `/openapi.json` 和首页，不触发设备操作；其回归测试为 `python -m unittest discover -s tests -p test_launcher.py`。
 

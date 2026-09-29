@@ -1,10 +1,11 @@
 import asyncio
 
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.experiment.parser import parse_experiment, list_experiments, _validate_filename
 from src.experiment.engine import ExperimentEngine
+from src.experiment.editor import read_source, write_source, validate_source, source_path, SourceConflict
 from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger, list_experiment_runs, get_experiment_run, delete_experiment_run, delete_all_experiment_runs
 from src.utils.logger import get_logger
@@ -13,6 +14,8 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 _engines: dict = {}
+# Serialize source replacement with loading/registering a run, including initial awaits.
+_source_lock = asyncio.Lock()
 
 
 def _get_active_engine():
@@ -33,6 +36,50 @@ def _cleanup_engine(filename: str, expected_engine=None):
 
 class StartExperimentRequest(BaseModel):
     save_log: bool = True
+
+
+class SourceRequest(BaseModel):
+    content: str = Field(max_length=1_000_000)
+    revision: str | None = None
+
+
+@router.post('/validate')
+async def validate_experiment(body: SourceRequest):
+    return validate_source(body.content)
+
+
+@router.get('/{filename}/source')
+async def get_experiment_source(filename: str):
+    try:
+        return read_source(filename)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Experiment not found')
+    except (ValueError, UnicodeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, '实验文件读取失败') from exc
+
+
+@router.put('/{filename}/source')
+async def save_experiment_source(filename: str, body: SourceRequest):
+    async with _source_lock:
+        try:
+            target = source_path(filename).resolve()
+            for active_name, engine in _engines.items():
+                if source_path(active_name).resolve() == target and (
+                    engine.state.value in ('running', 'paused') or engine.cleanup_pending
+                ):
+                    raise SourceConflict('运行中或停机清理未完成的实验不能覆盖，请另存为。')
+            result = validate_source(body.content, filename)
+            if not result['valid']:
+                raise HTTPException(422, result)
+            return write_source(filename, body.content, body.revision)
+        except SourceConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(500, '保存失败，原文件未被覆盖') from exc
 
 
 @router.get("/")
@@ -67,6 +114,11 @@ async def get_experiment(filename: str):
 
 @router.post("/{filename}/start")
 async def start_experiment(filename: str, body: StartExperimentRequest, request: Request):
+    async with _source_lock:
+        return await _start_experiment_locked(filename, body, request)
+
+
+async def _start_experiment_locked(filename: str, body: StartExperimentRequest, request: Request):
     dm = request.app.state.device_manager
     try:
         _validate_filename(filename)

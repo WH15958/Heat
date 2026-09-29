@@ -13,13 +13,14 @@
           <template #header>
             <div class="card-header">
               <span>可用实验</span>
+              <el-button size="small" type="primary" @click="router.push('/experiment/editor')">新建实验</el-button>
               <el-button size="small" :loading="experimentsLoading" @click="loadExperiments">
                 刷新
               </el-button>
             </div>
           </template>
           <div v-if="experiments.length === 0" style="color: #909399; text-align: center; padding: 20px">
-            暂无实验，请在 experiments/ 目录下添加 YAML 文件
+            暂无实验，点击“新建实验”编排，或在 experiments/ 目录下添加 YAML 文件
           </div>
           <button
             v-for="(exp, index) in experiments"
@@ -41,6 +42,7 @@
             <div class="card-header">
               <span>{{ selectedExp.name }}</span>
               <div class="card-header-actions">
+                <el-button @click="router.push({ path: '/experiment/editor', query: { filename: selectedFilename } })">编辑此实验</el-button>
                 <el-switch
                   v-model="saveLog"
                   active-text="保存日志"
@@ -134,6 +136,7 @@
         </template>
       </div>
       <template #footer>
+        <el-button :disabled="previewLoading" @click="router.push({ path: '/experiment/editor', query: { filename: previewFilename } })">编辑此实验</el-button>
         <el-button @click="previewVisible = false">关闭</el-button>
         <el-button type="primary" :disabled="!previewExp || previewLoading || isRunning || isPaused || starting" @click="choosePreviewExperiment">选择此实验</el-button>
       </template>
@@ -181,11 +184,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket } from '../composables/useWebSocket'
 import { syringeResult } from '../api/syringePumps'
 const { data: syringeData, connected: syringeConnected } = useWebSocket()
+const route = useRoute(), router = useRouter()
 
 interface ExperimentSummary {
   filename: string
@@ -608,6 +613,7 @@ function startPolling() {
 
 onMounted(() => {
   loadExperiments()
+  if (typeof route.query.filename === 'string') previewExperiment(route.query.filename)
   startPolling()
   connectWs()
 })

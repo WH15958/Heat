@@ -14,9 +14,9 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 - 前端：Vue 3 + Vite + Element Plus
 - 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵、MKM-AH1E 微波反应仪
 - 协议：AIBUS、MODBUS RTU
-- 实验定义：YAML
+- 实验定义：YAML，支持图形编排与 YAML 双模式编辑
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
-- Web 页面：`/`、`/control`、`/experiment`、`/campaigns`、`/history`
+- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/campaigns`、`/history`
 - API 前缀：设备 `/api`、实验 `/api/experiments`、Campaign `/api/campaigns`
 
 ## 适用人群

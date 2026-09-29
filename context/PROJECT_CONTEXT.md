@@ -3,7 +3,7 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-09-28
+最后更新：2026-09-30
 
 ---
 
@@ -40,12 +40,15 @@
   - `/`
   - `/control`
   - `/experiment`
+  - `/experiment/editor`（图形编排 / YAML 编辑）
   - `/campaigns`
   - `/history`
 - 设备接口前缀：`/api`
 - 实验接口前缀：`/api/experiments`
 - Campaign 接口前缀：`/api/campaigns`
 - WebSocket：`/ws`
+
+实验编排接口为 `GET/PUT /api/experiments/{filename}/source` 与 `POST /api/experiments/validate`。编辑器保留 YAML 原文，图形操作局部修改文档树；校验与保存不访问硬件。保存使用内容摘要、同目录原子替换，并与启动装载共用锁；运行或清理中的同名文件不得覆盖。未知设备在编排时提示，启动仍执行原有设备检查。
 
 ### 1.4 当前实验动作与等待类型
 

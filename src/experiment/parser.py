@@ -41,7 +41,7 @@ def _validate_filename(filename: str) -> Path:
     """
     if not filename.endswith(".yaml") and not filename.endswith(".yml"):
         raise ValueError(f"Invalid experiment file type: {filename}")
-    if ".." in filename or "/" in filename or "\\" in filename:
+    if ".." in filename or any(c in filename for c in '/\\:<>"|?*') or any(ord(c) < 32 for c in filename):
         raise ValueError(f"Invalid filename: {filename}")
     path = EXPERIMENTS_DIR / filename
     try:
@@ -98,9 +98,17 @@ def parse_experiment(filepath: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Experiment file not found: {filepath}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    return parse_experiment_content(path.read_text(encoding="utf-8"), filename)
 
+
+def parse_experiment_content(content: str, filename: str = "untitled.yaml", *, validate_devices: bool = True) -> dict:
+    """Parse an in-memory definition without creating a file or accessing hardware."""
+    data = yaml.safe_load(content)
+    return parse_experiment_data(data, filename, validate_devices=validate_devices)
+
+
+def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_devices: bool = True) -> dict:
+    """Shared structural/semantic validation for files and editor documents."""
     if not isinstance(data, dict) or "steps" not in data:
         raise ValueError("Invalid experiment file: missing 'steps'")
     if not isinstance(data["steps"], list):
@@ -201,7 +209,7 @@ def parse_experiment(filepath: str) -> dict:
             raise ValueError("syringe_pump_complete requires device_id")
         if wait_type_name == "syringe_pump_complete" and not 0 < timeout <= 3600:
             raise ValueError("Syringe wait timeout must be in (0, 3600]")
-        if action_type.value.startswith("syringe_pump.") or wait_type_name == "syringe_pump_complete":
+        if validate_devices and (action_type.value.startswith("syringe_pump.") or wait_type_name == "syringe_pump_complete"):
             if syringe_ids is None:
                 from src.utils.config import ConfigManager
                 syringe_ids = {c.device_id for c in ConfigManager().load().syringe_pumps if c.enabled}
@@ -251,7 +259,7 @@ def parse_experiment(filepath: str) -> dict:
         steps.append(step)
 
     return {
-        "name": data.get("name", path.stem),
+        "name": data.get("name", Path(filename).stem),
         "description": data.get("description", ""),
         "steps": steps,
         "metadata": data.get("metadata") or {},

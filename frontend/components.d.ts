@@ -39,12 +39,14 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     HeaterControl: typeof import('./src/components/HeaterControl.vue')['default']
     MicrowaveControl: typeof import('./src/components/MicrowaveControl.vue')['default']
+    ParameterFields: typeof import('./src/components/experiment/ParameterFields.vue')['default']
     PumpControl: typeof import('./src/components/PumpControl.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SyringeHistory: typeof import('./src/components/SyringeHistory.vue')['default']
     SyringePumpControl: typeof import('./src/components/SyringePumpControl.vue')['default']
     SyringePumpGroup: typeof import('./src/components/SyringePumpGroup.vue')['default']
+    YamlEditor: typeof import('./src/components/experiment/YamlEditor.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']
