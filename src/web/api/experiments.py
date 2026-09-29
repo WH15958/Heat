@@ -92,6 +92,22 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
                    f"Please stop or wait for it to complete before starting another.",
         )
 
+    for step in data["steps"]:
+        if not step.enabled:
+            continue
+        if step.type.value.startswith("syringe_pump.") or step.wait.type.value == "syringe_pump_complete":
+            ids = set()
+            if step.type.value.startswith("syringe_pump."):
+                ids.add(step.params["device_id"])
+            if step.wait.type.value == "syringe_pump_complete":
+                ids.add(step.wait.device_id)
+            for device_id in ids:
+                try:
+                    c = dm.syringe(device_id)
+                    if not c.device.is_connected():
+                        raise ValueError(f"{device_id} 未配置或未连接")
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from exc
     executor = StepExecutor(dm)
     exp_logger = ExperimentLogger(save_log=body.save_log)
 

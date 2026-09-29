@@ -182,6 +182,7 @@ def test_microwave_configure_without_confirmation_calls_manager():
 def test_websocket_payload_includes_microwaves():
     microwave = FakeConnectedMicrowave()
     dm = Mock()
+    dm.syringe_pumps = {}
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}
@@ -226,6 +227,7 @@ def test_websocket_payload_includes_heater_and_pump_ports():
 
     dm = Mock()
     dm.get_all_heaters.return_value = {"heater1": heater}
+    dm.syringe_pumps = {}
     dm.get_all_pumps.return_value = {"pump1": pump}
     dm.get_all_microwaves.return_value = {}
     dm.get_heater_binding.return_value = {}
@@ -246,6 +248,7 @@ def test_websocket_microwave_read_failure_is_error_payload():
     microwave = FakeConnectedMicrowave()
     microwave.config = SimpleNamespace(connection_params={"port": "COM12"})
     dm = Mock()
+    dm.syringe_pumps = {}
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}

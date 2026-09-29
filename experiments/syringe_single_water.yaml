@@ -1,0 +1,16 @@
+name: 注射泵1水测试示例（实机待验收）
+description: 仅在完成实机验收、确认水路及废液通路后手动启动。体积为理论值。
+metadata:
+  material_system: water
+  recipe_version: syringe-example-v1
+  safety_notes: 确认注射器安装、无堵塞、无气泡并在现场看护；软件不判断漏液或水到位。
+steps:
+  - id: initialize
+    type: syringe_pump.initialize
+    params: {device_id: syringe_pump1, direction: Z, initialization_code: 0, confirm: true, timeout: 120}
+  - id: aspirate
+    type: syringe_pump.aspirate
+    params: {device_id: syringe_pump1, volume: 100, unit: uL, speed: 100, timeout: 120}
+  - id: dispense
+    type: syringe_pump.dispense
+    params: {device_id: syringe_pump1, volume: 100, unit: uL, speed: 100, timeout: 120}

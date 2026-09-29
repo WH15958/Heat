@@ -14,6 +14,7 @@ from src.protocols.microwave_params import MODE_CONTROL_MASKS
 from src.protocols.pump_params import get_channel_address
 from src.utils.logger import get_logger
 from src.utils.serial_binding import resolve_connection
+from src.web.syringe_control import SyringeController
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,25 @@ class DeviceManager:
         self._pump_channel_cache: Dict[str, Dict[str, dict]] = {}
         self._global_stop_depth = 0
         self._last_emergency_stop_report: list[dict] = []
+        self.syringe_pumps: Dict[str, SyringeController] = {}
+
+    def add_syringe_pump(self, config):
+        controller = SyringeController(config)
+        self.syringe_pumps[config.device_id] = controller
+        controller.refresh_binding()
+
+    def syringe(self, device_id):
+        if device_id not in self.syringe_pumps:
+            raise ValueError(f"Syringe pump not found: {device_id}")
+        return self.syringe_pumps[device_id]
+
+    def syringe_command(self, device_id, command, owner=None):
+        with self._lock:
+            if self._global_stop_depth and command.get("action") != "stop":
+                raise RuntimeError("全局停止中")
+            control = self.syringe(device_id)
+            generation = control.generation
+        return control.command(command, owner, generation)
 
     def add_heater(
         self,
@@ -314,6 +334,8 @@ class DeviceManager:
         return self._update_binding_resolution(device_id, device_type, info, device)
 
     def refresh_bindings(self) -> dict:
+        for controller in self.syringe_pumps.values():
+            controller.refresh_binding()
         for did, heater in self._heaters.items():
             self._update_binding_resolution(did, "Heater", self._heater_bindings.get(did), heater)
         for did, pump in self._pumps.items():
@@ -648,7 +670,19 @@ class DeviceManager:
         success = True
         attempted = False
         report = []
-        registered = bool(self._heaters or self._pumps or self._microwaves)
+        registered = bool(self._heaters or self._pumps or self._microwaves or self.syringe_pumps)
+        for device_id, controller in self.syringe_pumps.items():
+            if not controller.device.is_connected():
+                report.append(self._stop_report("syringe_pump", device_id, False, None, "not_connected"))
+                continue
+            attempted = True
+            try:
+                result = controller.stop()
+            except Exception:
+                logger.exception("Syringe emergency stop failed: %s", device_id)
+                result = False
+            success = result and success
+            report.append(self._stop_report("syringe_pump", device_id, True, result))
         for device_id, heater in self._heaters.items():
             self._request_heater_stop(device_id)
             with self._heater_control_lock(device_id):
@@ -811,7 +845,8 @@ class DeviceManager:
                     getattr(m.config, "enable_control_writes", False)
                 ),
             }, self._microwave_bindings.get(did), m.config.connection_params.get("port"))
-        return {"heaters": heaters, "pumps": pumps, "microwaves": microwaves}
+        return {"heaters": heaters, "pumps": pumps, "microwaves": microwaves,
+                "syringe_pumps": {did: c.summary() for did, c in self.syringe_pumps.items()}}
 
     def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
         device_id = microwave.config.device_id
@@ -1566,6 +1601,17 @@ class DeviceManager:
     def _cleanup_devices(self) -> bool:
         """Stop and disconnect every registered device."""
         success = True
+        for controller in self.syringe_pumps.values():
+            try:
+                if controller.device.is_connected():
+                    stopped = controller.stop()
+                    if stopped:
+                        with controller.lock:
+                            stopped = controller.device.disconnect()
+                    success = stopped and success
+            except Exception:
+                logger.exception("Syringe cleanup failed")
+                success = False
         for device_id, heater in self._heaters.items():
             self._request_heater_stop(device_id)
             with self._heater_control_lock(device_id):
@@ -1640,6 +1686,8 @@ class DeviceManager:
     def _begin_global_stop(self) -> None:
         with self._lock:
             self._global_stop_depth += 1
+            for controller in self.syringe_pumps.values():
+                controller.invalidate_pending()
             for device_id in self._heaters:
                 self._heater_stop_generations[device_id] = (
                     self._heater_stop_generations.get(device_id, 0) + 1

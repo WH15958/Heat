@@ -16,6 +16,20 @@ class ActionType(Enum):
     PUMP_START = "pump.start"
     PUMP_STOP = "pump.stop"
     PUMP_STOP_CHANNEL = "pump.stop_channel"
+    SYRINGE_INITIALIZE = "syringe_pump.initialize"
+    SYRINGE_CONFIGURE = "syringe_pump.configure"
+    SYRINGE_MOVE = "syringe_pump.move"
+    SYRINGE_ASPIRATE = "syringe_pump.aspirate"
+    SYRINGE_DISPENSE = "syringe_pump.dispense"
+    SYRINGE_VALVE = "syringe_pump.valve"
+    SYRINGE_STOP = "syringe_pump.stop"
+    SYRINGE_PAUSE = "syringe_pump.pause"
+    SYRINGE_RESUME = "syringe_pump.resume"
+    SYRINGE_IO = "syringe_pump.io"
+    SYRINGE_PROGRAM_LOAD = "syringe_pump.program_load"
+    SYRINGE_PROGRAM_STORE = "syringe_pump.program_store"
+    SYRINGE_PROGRAM_RUN = "syringe_pump.program_run"
+    SYRINGE_REPEAT = "syringe_pump.repeat"
     WAIT = "wait"
     EMERGENCY_STOP = "emergency_stop"
     LOG = "log"
@@ -29,6 +43,7 @@ class WaitType(Enum):
     MICROWAVE_TEMPERATURE_REACHED = "microwave_temperature_reached"
     MICROWAVE_COMPLETE = "microwave_complete"
     PUMP_COMPLETE = "pump_complete"
+    SYRINGE_PUMP_COMPLETE = "syringe_pump_complete"
 
 
 @dataclass

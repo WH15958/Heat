@@ -124,3 +124,8 @@ npm --prefix frontend run build
 - Web 层只能桥接同步设备，不应改变设备语义
 - `output/` 是运行产物，不应纳入版本控制
 - 文档变更需要和代码行为保持同步
+
+
+### MSP1-CX 注射泵
+
+支持两台独立注射泵的手动控制、OEM/DT通信、有限程序、YAML自动化与历史记录；第二台默认待配置。软件验证通过，实机验收待进行。见 [接入说明与功能覆盖](docs/syringe_pump_integration.md)、[现场验收清单](docs/syringe_pump_acceptance.md)。

@@ -241,6 +241,14 @@ async def build_realtime_payload(
                     "error": "read_failed",
                 }, dm.get_microwave_binding(did))
 
+    payload["syringe_pumps"] = {}
+    for did, controller in getattr(dm, "syringe_pumps", {}).items():
+        try:
+            payload["syringe_pumps"][did] = await read_coordinator.read(
+                ("syringe_pump", did), controller.read, 10.0)
+        except Exception as exc:
+            payload["syringe_pumps"][did] = {**controller.summary(),
+                **controller.device.unknown(str(exc))}
     return payload
 
 

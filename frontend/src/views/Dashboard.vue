@@ -1,13 +1,34 @@
 <template>
   <div class="dashboard">
-    <el-row :gutter="20">
-      <el-col :span="12" v-for="(heater, id) in realtimeData?.heaters" :key="'h-'+id">
+    <div class="device-workspace">
+      <nav class="device-selector" aria-label="选择监测设备">
+        <div class="selector-heading">设备列表 <span>{{ dashboardDevices.length }} 台</span></div>
+        <button v-for="item in deviceGroups" :key="item.key" type="button" class="device-choice" :class="{ selected: selectedDevice === item.key }" :aria-pressed="selectedDevice === item.key" @click="selectedDevice = item.key">
+          <span class="choice-heading"><strong>{{ item.name }}</strong><span class="connection-dot" :class="{ online: item.online }" /></span>
+          <span class="choice-meta">{{ item.summary }}</span>
+        </button>
+        <el-empty v-if="!dashboardDevices.length" description="暂无设备" :image-size="48" />
+      </nav>
+      <div class="device-detail">
+      <div v-for="(pump, id) in dashboardSyringes" v-show="selectedDevice === 'syringe_pumps'" :key="id">
+        <el-card class="device-card" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <div class="device-heading"><img :src="syringePumpArtwork" alt="" /><div><h2>注射泵</h2><span>{{ pump.name }} 监测</span></div></div>
+            </div>
+          </template>
+          <p>{{ !pump.configured ? '待配置' : !pump.connected ? '未连接' : !wsConnected || !pump.read_ok ? '状态未知' : pump.fault_code ? pump.fault_description : pump.busy ? '运行中' : '空闲' }}</p>
+          <p>位置：{{ wsConnected && pump.read_ok ? pump.position ?? '运动中' : '未知' }} 步；理论筒内体积：{{ wsConnected && pump.read_ok && pump.position_trusted ? pump.theoretical_volume_ul?.toFixed(2) : '未知' }} µL</p>
+          <p>地址 {{ pump.address }} · {{ pump.connection_port || '串口待配置' }} · {{ pump.orientation || '方向未确认' }}</p>
+        </el-card>
+      </div>
+      <div v-for="(heater, id) in dashboardHeaters" v-show="selectedDevice === 'heaters'" :key="'h-'+id">
         <el-card shadow="hover" class="device-card">
           <template #header>
             <div class="card-header">
-              <span class="device-title">加热器 {{ id }}</span>
+              <div class="device-heading"><img :src="heaterArtwork" alt="" /><div><h2>加热器</h2><span>{{ id }} 监测</span></div></div>
               <el-tag :type="heater.error ? 'danger' : heater.run_status === 'RUNNING' ? 'success' : 'info'" size="small">
-                {{ heater.error ? '异常' : heater.run_status }}
+                {{ heater.error ? '异常' : heater.run_status || deviceInfo('heaters', id)?.status }}
               </el-tag>
             </div>
           </template>
@@ -22,7 +43,7 @@
             </div>
             <div class="temp-block">
               <span class="temp-label">输出功率</span>
-              <span class="temp-value">{{ heater.mv ?? 0 }}%</span>
+              <span class="temp-value">{{ heater.mv ?? '--' }}%</span>
             </div>
           </div>
           <div class="alarms">
@@ -34,15 +55,15 @@
             </el-tag>
           </div>
         </el-card>
-      </el-col>
+      </div>
 
-      <el-col :span="12" v-for="(pump, id) in realtimeData?.pumps" :key="'p-'+id">
+      <div v-for="(pump, id) in dashboardPumps" v-show="selectedDevice === 'pumps'" :key="'p-'+id">
         <el-card shadow="hover" class="device-card">
           <template #header>
             <div class="card-header">
-              <span class="device-title">蠕动泵 {{ id }}</span>
-              <el-tag :type="pump.error ? 'danger' : 'success'" size="small">
-                {{ pump.error ? '异常' : '在线' }}
+              <div class="device-heading"><img :src="pumpArtwork" alt="" /><div><h2>蠕动泵</h2><span>{{ id }} 监测</span></div></div>
+              <el-tag :type="pump.error ? 'danger' : deviceInfo('pumps', id)?.hasData ? 'success' : 'info'" size="small">
+                {{ pump.error ? '异常' : deviceInfo('pumps', id)?.status }}
               </el-tag>
             </div>
           </template>
@@ -53,7 +74,8 @@
             </div>
             <div v-for="(ch, chId) in pump.channels" :key="chId" class="channel-row">
               <span class="channel-label">通道 {{ chId }}</span>
-              <el-tag v-if="ch.read_ok === false" type="danger" size="small">
+              <el-tag v-if="ch.running == null" type="info" size="small">未知</el-tag>
+              <el-tag v-else-if="ch.read_ok === false" type="danger" size="small">
                 读取失败
               </el-tag>
               <el-tag v-else :type="ch.running ? 'success' : 'info'" size="small">
@@ -71,13 +93,13 @@
             </div>
           </div>
         </el-card>
-      </el-col>
+      </div>
 
-      <el-col :span="12" v-for="(microwave, id) in dashboardMicrowaves" :key="'m-'+id">
+      <div v-for="(microwave, id) in dashboardMicrowaves" v-show="selectedDevice === 'microwaves'" :key="'m-'+id">
         <el-card shadow="hover" class="device-card">
           <template #header>
             <div class="card-header">
-              <span class="device-title">微波仪 {{ id }}</span>
+              <div class="device-heading"><img :src="microwaveArtwork" alt="" /><div><h2>微波仪</h2><span>{{ id }} 监测</span></div></div>
               <el-tag :type="microwaveStatusType(microwave)" size="small">
                 {{ microwaveStatusText(microwave) }}
               </el-tag>
@@ -111,16 +133,10 @@
           </div>
           <div class="alarms">
             <el-tag :type="Number(microwave.fault_code || 0) ? 'danger' : 'info'" size="small">
-              故障码 {{ microwave.fault_code ?? 0 }}
+              故障码 {{ microwave.fault_code ?? '未知' }}
             </el-tag>
             <el-tag type="info" size="small" style="margin: 2px">
               串口 {{ microwave.connection_port ?? '--' }}
-            </el-tag>
-            <el-tag type="success" size="small" style="margin: 2px">
-              配置写入可用
-            </el-tag>
-            <el-tag type="warning" size="small" style="margin: 2px">
-              启动/停止可用
             </el-tag>
             <el-tag v-if="!microwave.connected" type="info" size="small" style="margin: 2px">未连接</el-tag>
             <el-tag v-if="microwave.error" type="danger" size="small" style="margin: 2px">读取失败</el-tag>
@@ -129,11 +145,11 @@
             </el-tag>
           </div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+      <el-empty v-if="!dashboardDevices.length" description="暂无设备数据" />
 
-    <el-row :gutter="20" style="margin-top: 20px">
-      <el-col :span="12">
+    <div class="chart-grid">
+      <div v-show="selectedDevice === 'heaters'">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -145,8 +161,8 @@
           </template>
           <div ref="heaterTempChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
-      </el-col>
-      <el-col :span="12">
+      </div>
+      <div v-show="selectedDevice === 'microwaves'">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -158,11 +174,8 @@
           </template>
           <div ref="microwaveTempChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
-      </el-col>
-    </el-row>
-
-    <el-row :gutter="20" style="margin-top: 20px">
-      <el-col :span="24">
+      </div>
+      <div v-show="selectedDevice === 'pumps'">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -174,8 +187,10 @@
           </template>
           <div ref="flowChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -183,7 +198,12 @@
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import { devicesApi } from '../api/devices'
-import { useWebSocket, type MicrowaveRealtimeData, type RealtimeData } from '../composables/useWebSocket'
+import { useWebSocket, type HeaterRealtimeData, type PumpRealtimeData, type PumpChannelData, type MicrowaveRealtimeData } from '../composables/useWebSocket'
+import type { SyringeState } from '../api/syringePumps'
+import heaterArtwork from '../assets/theme/heater.webp'
+import pumpArtwork from '../assets/theme/pump.webp'
+import syringePumpArtwork from '../assets/theme/syringe-pump.webp'
+import microwaveArtwork from '../assets/theme/microwave.webp'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 
@@ -232,6 +252,75 @@ interface DashboardMicrowaveData extends MicrowaveRealtimeData {
 }
 
 const registeredMicrowaves = ref<Record<string, RegisteredMicrowaveStatus>>({})
+const selectedDevice = ref('')
+let initialSelectionReady = false
+const registeredDevices = ref<Record<string, Record<string, { connected: boolean; connection_port?: string; name?: string; configured?: boolean; channels?: Record<string, unknown> }>>>({})
+const registeredSyringes = ref<Record<string, SyringeState>>({})
+const dashboardDevices = computed(() => {
+  const groups = [ ['heaters', '加热器'], ['pumps', '蠕动泵'], ['microwaves', '微波仪'], ['syringe_pumps', '注射泵'] ] as const
+  return groups.flatMap(([kind, label]) => {
+    const liveDevices = realtimeData.value?.[kind] || {}
+    const registered = registeredDevices.value[kind] || {}
+    return [...new Set([...Object.keys(registered), ...Object.keys(liveDevices)])].map((id, index) => {
+      const live = liveDevices[id]
+      const config = registered[id]
+      const configured = kind !== 'syringe_pumps' || config?.configured !== false
+      const online = configured && (config ? Boolean(config.connected) : Boolean(live && (!('connected' in live) || live.connected)))
+      const readFailed = live && (('read_ok' in live && live.read_ok === false) || ('error' in live && live.error))
+      const fault = live && 'fault_code' in live && live.fault_code
+      return {
+        key: `${kind}:${id}`, name: config?.name || `${label}${index + 1}`,
+        port: live?.connection_port || config?.connection_port,
+        online,
+        status: !configured ? '待配置' : !online ? '未连接' : !wsConnected.value || !live ? '状态未知' : readFailed ? '读取失败' : fault ? '故障' : '在线',
+        hasData: Boolean(live && online && wsConnected.value && !readFailed),
+      }
+    })
+  })
+})
+const deviceGroups = computed(() => [
+  { key: 'heaters', name: '加热器' },
+  { key: 'pumps', name: '蠕动泵' },
+  { key: 'microwaves', name: '微波仪' },
+  { key: 'syringe_pumps', name: '注射泵' },
+].map(group => {
+  const members = dashboardDevices.value.filter(device => device.key.startsWith(group.key + ':'))
+  const connectedCount = members.filter(device => device.online).length
+  const attention = [...new Set(members.map(device => device.status).filter(status => ['待配置', '读取失败', '故障', '状态未知'].includes(status)))]
+  return { ...group, count: members.length, online: connectedCount > 0,
+    summary: `${members.length} 台 · 已连接 ${connectedCount}/${members.length}${attention.length ? ' · ' + attention.join('、') : ''}` }
+}).filter(group => group.count > 0))
+function deviceInfo(kind: string, id: string) {
+  return dashboardDevices.value.find(item => item.key === `${kind}:${id}`)
+}
+const dashboardHeaters = computed<Record<string, Partial<HeaterRealtimeData>>>(() => Object.fromEntries(
+  dashboardDevices.value.filter(item => item.key.startsWith('heaters:')).map(item => {
+    const id = item.key.slice(8)
+    return [id, { connection_port: item.port, ...(item.hasData ? realtimeData.value?.heaters[id] : {}) }]
+  })
+))
+const dashboardPumps = computed<Record<string, Partial<PumpRealtimeData>>>(() => Object.fromEntries(
+  dashboardDevices.value.filter(item => item.key.startsWith('pumps:')).map(item => {
+    const id = item.key.slice(6)
+    const channels: Record<string, PumpChannelData> = Object.fromEntries(
+      Object.keys(registeredDevices.value.pumps?.[id]?.channels || {}).map(channel => [channel, {
+        running: null, flow_rate: null, volume: null, direction: null, flow_unit: null,
+      }])
+    )
+    return [id, { connection_port: item.port, channels, ...(item.hasData ? realtimeData.value?.pumps[id] : {}) }]
+  })
+))
+const dashboardSyringes = computed(() => Object.fromEntries(
+  dashboardDevices.value.filter(item => item.key.startsWith('syringe_pumps:')).map(item => {
+    const id = item.key.slice(14)
+    const state = realtimeData.value?.syringe_pumps[id] || registeredSyringes.value[id]
+    return [id, { ...state, read_ok: item.hasData, position_trusted: item.hasData && state?.position_trusted }]
+  })
+))
+watch(deviceGroups, items => {
+  if (!initialSelectionReady) return
+  if (!items.some(item => item.key === selectedDevice.value)) selectedDevice.value = items[0]?.key || ''
+}, { immediate: true })
 
 const dashboardMicrowaves = computed<Record<string, DashboardMicrowaveData>>(() => {
   const merged: Record<string, DashboardMicrowaveData> = {}
@@ -250,13 +339,13 @@ const dashboardMicrowaves = computed<Record<string, DashboardMicrowaveData>>(() 
     }
   }
   for (const [id, live] of Object.entries(realtimeData.value?.microwaves || {})) {
-    const registered = registeredMicrowaves.value[id]
+    const item = dashboardDevices.value.find(device => device.key === `microwaves:${id}`)
     merged[id] = {
       ...(merged[id] || {}),
-      ...live,
+      ...(item?.hasData ? live : {}),
       device_id: live.device_id || id,
-      connected: registered?.connected ?? true,
-      status: registered?.status ?? merged[id]?.status,
+      connected: item?.online ?? false,
+      status: item?.status,
     }
   }
   return merged
@@ -310,6 +399,7 @@ function formatRuntime(seconds: number | null | undefined): string {
 
 function microwaveStatusType(microwave: DashboardMicrowaveData): TagType {
   if (!microwave.connected) return 'info'
+  if (microwave.status === '读取失败' || microwave.status === '状态未知') return 'warning'
   if (microwave.error) return 'danger'
   if (Number(microwave.fault_code || 0)) return 'danger'
   if (microwave.control_active || microwave.output_active) return 'success'
@@ -319,6 +409,7 @@ function microwaveStatusType(microwave: DashboardMicrowaveData): TagType {
 
 function microwaveStatusText(microwave: DashboardMicrowaveData): string {
   if (!microwave.connected) return '离线'
+  if (microwave.status === '读取失败' || microwave.status === '状态未知') return microwave.status
   if (microwave.error) return '读取失败'
   if (Number(microwave.fault_code || 0)) return '异常'
   if (microwave.control_active || microwave.output_active) return '运行中'
@@ -329,7 +420,13 @@ function microwaveStatusText(microwave: DashboardMicrowaveData): string {
 async function refreshRegisteredDevices() {
   try {
     const res = await devicesApi.list()
+    registeredDevices.value = res.data
+    registeredSyringes.value = res.data.syringe_pumps || {}
     registeredMicrowaves.value = res.data.microwaves || {}
+    if (!initialSelectionReady) {
+      selectedDevice.value = deviceGroups.value[0]?.key || ''
+      initialSelectionReady = true
+    }
   } catch (error) {
     console.error('[Dashboard] 设备状态读取失败:', error)
   }
@@ -341,36 +438,36 @@ function initCharts() {
   try {
     if (heaterTempChartRef.value) {
       if (heaterTempChart) heaterTempChart.dispose()
-      heaterTempChart = init(heaterTempChartRef.value)
+      heaterTempChart = init(heaterTempChartRef.value, undefined, { width: heaterTempChartRef.value.clientWidth || 400, height: 350 })
       heaterTempChart.setOption({
         tooltip: { trigger: 'axis' },
-        legend: { data: [], top: 0 },
-        grid: { left: 60, right: 20, top: 30, bottom: 30 },
-        xAxis: { type: 'time' },
+        legend: { data: [], top: 0, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 60, bottom: 35 },
+        xAxis: { type: 'time', axisLabel: { hideOverlap: true, formatter: '{HH}:{mm}:{ss}' } },
         yAxis: { type: 'value', name: '加热器温度(°C)' },
         series: [],
       })
     }
     if (microwaveTempChartRef.value) {
       if (microwaveTempChart) microwaveTempChart.dispose()
-      microwaveTempChart = init(microwaveTempChartRef.value)
+      microwaveTempChart = init(microwaveTempChartRef.value, undefined, { width: microwaveTempChartRef.value.clientWidth || 400, height: 350 })
       microwaveTempChart.setOption({
         tooltip: { trigger: 'axis' },
-        legend: { data: [], top: 0 },
-        grid: { left: 60, right: 20, top: 30, bottom: 30 },
-        xAxis: { type: 'time' },
+        legend: { data: [], top: 0, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 60, bottom: 35 },
+        xAxis: { type: 'time', axisLabel: { hideOverlap: true, formatter: '{HH}:{mm}:{ss}' } },
         yAxis: { type: 'value', name: '微波物料温度(°C)' },
         series: [],
       })
     }
     if (flowChartRef.value) {
       if (flowChart) flowChart.dispose()
-      flowChart = init(flowChartRef.value)
+      flowChart = init(flowChartRef.value, undefined, { width: flowChartRef.value.clientWidth || 400, height: 350 })
       flowChart.setOption({
         tooltip: { trigger: 'axis' },
-        legend: { data: [], top: 0 },
-        grid: { left: 60, right: 20, top: 30, bottom: 30 },
-        xAxis: { type: 'time' },
+        legend: { data: [], top: 0, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 60, bottom: 35 },
+        xAxis: { type: 'time', axisLabel: { hideOverlap: true, formatter: '{HH}:{mm}:{ss}' } },
         yAxis: { type: 'value', name: '流量(mL/min)' },
         series: [],
       })
@@ -385,11 +482,7 @@ onMounted(async () => {
   await nextTick()
   initCharts()
 
-  resizeObserver = new ResizeObserver(() => {
-    heaterTempChart?.resize()
-    microwaveTempChart?.resize()
-    flowChart?.resize()
-  })
+  resizeObserver = new ResizeObserver(handleResize)
   if (heaterTempChartRef.value) resizeObserver.observe(heaterTempChartRef.value)
   if (microwaveTempChartRef.value) resizeObserver.observe(microwaveTempChartRef.value)
   if (flowChartRef.value) resizeObserver.observe(flowChartRef.value)
@@ -409,22 +502,23 @@ onUnmounted(() => {
 })
 
 function handleResize() {
-  heaterTempChart?.resize()
-  microwaveTempChart?.resize()
-  flowChart?.resize()
+  if (heaterTempChartRef.value?.clientWidth) heaterTempChart?.resize({ width: heaterTempChartRef.value.clientWidth, height: 350 })
+  if (microwaveTempChartRef.value?.clientWidth) microwaveTempChart?.resize({ width: microwaveTempChartRef.value.clientWidth, height: 350 })
+  if (flowChartRef.value?.clientWidth) flowChart?.resize({ width: flowChartRef.value.clientWidth, height: 350 })
 }
 
-watch(realtimeData, (newData: RealtimeData | null) => {
+watch(selectedDevice, async () => {
+  await nextTick()
+  handleResize()
+})
+
+watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
   if (!newData) return
   const now = Date.now()
 
-  const heaterKeys = Object.keys(newData.heaters || {})
-  const pumpKeys = Object.keys(newData.pumps || {})
-  const microwaveKeys = Object.keys(newData.microwaves || {})
-  if (heaterKeys.length === 0 && pumpKeys.length === 0 && microwaveKeys.length === 0) return
-
   if (heaterTempChart) {
-    for (const [id, heater] of Object.entries(newData.heaters || {})) {
+    // Switching devices redraws retained samples without adding another reading.
+    for (const [id, heater] of Object.entries(newData === oldData ? {} : newData.heaters || {})) {
       if (heater.error) continue
       if (typeof heater.pv !== 'number' || typeof heater.sv !== 'number') continue
       if (!heaterDataMap[id]) heaterDataMap[id] = { pv: [], sv: [] }
@@ -437,6 +531,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
     const heaterSeries: LineSeriesOption[] = []
     const heaterLegend: string[] = []
     for (const [id, s] of Object.entries(heaterDataMap)) {
+      if (!deviceInfo('heaters', id)?.hasData || selectedDevice.value !== 'heaters') continue
       if (s.pv.length === 0) continue
       heaterLegend.push(`${id} PV`, `${id} SV`)
       heaterSeries.push(
@@ -444,16 +539,14 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         { name: `${id} SV`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
       )
     }
-    if (heaterSeries.length > 0) {
-      heaterTempChart.setOption(
+    heaterTempChart.setOption(
         { legend: { data: heaterLegend }, series: heaterSeries },
         { replaceMerge: ['series'] }
       )
-    }
   }
 
   if (microwaveTempChart) {
-    for (const [id, microwave] of Object.entries(newData.microwaves || {})) {
+    for (const [id, microwave] of Object.entries(newData === oldData ? {} : newData.microwaves || {})) {
       if (microwave.error) continue
       if (typeof microwave.material_temperature !== 'number') continue
       if (!microwaveDataMap[id]) microwaveDataMap[id] = { temperature: [] }
@@ -464,21 +557,20 @@ watch(realtimeData, (newData: RealtimeData | null) => {
     const microwaveSeries: LineSeriesOption[] = []
     const microwaveLegend: string[] = []
     for (const [id, s] of Object.entries(microwaveDataMap)) {
+      if (!deviceInfo('microwaves', id)?.hasData || selectedDevice.value !== 'microwaves') continue
       if (s.temperature.length === 0) continue
       const name = `${id} 物料温度`
       microwaveLegend.push(name)
       microwaveSeries.push({ name, type: 'line', data: s.temperature, smooth: true, showSymbol: false })
     }
-    if (microwaveSeries.length > 0) {
-      microwaveTempChart.setOption(
+    microwaveTempChart.setOption(
         { legend: { data: microwaveLegend }, series: microwaveSeries },
         { replaceMerge: ['series'] }
       )
-    }
   }
 
   if (flowChart) {
-    for (const [pumpId, pump] of Object.entries(newData.pumps || {})) {
+    for (const [pumpId, pump] of Object.entries(newData === oldData ? {} : newData.pumps || {})) {
       if (pump.error) continue
       if (!pump.channels) continue
       if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
@@ -499,6 +591,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
     const flowSeries: LineSeriesOption[] = []
     const flowLegend: string[] = []
     for (const [pumpId, pData] of Object.entries(pumpDataMap)) {
+      if (!deviceInfo('pumps', pumpId)?.hasData || selectedDevice.value !== 'pumps') continue
       for (const [chId, chSeries] of Object.entries(pData.channels)) {
         if (chSeries.length === 0) continue
         const name = `${pumpId} CH${chId}`
@@ -516,21 +609,36 @@ watch(realtimeData, (newData: RealtimeData | null) => {
         })
       }
     }
-    if (flowSeries.length > 0) {
-      flowChart.setOption(
+    flowChart.setOption(
         { legend: { data: flowLegend }, series: flowSeries },
         { replaceMerge: ['series'] }
       )
-    }
   }
 })
 </script>
 
 <style scoped>
-.dashboard { padding: 20px; }
-.device-card { margin-bottom: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.device-title { font-weight: bold; font-size: 16px; }
+.dashboard { padding: 0; }
+.device-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.device-selector { position: sticky; top: 88px; padding-right: 14px; border-right: 1px solid var(--el-border-color-light); min-width: 0; }
+.selector-heading { display: flex; justify-content: space-between; padding: 8px 12px 14px; font-size: 14px; font-weight: 600; }
+.selector-heading span { color: var(--el-text-color-secondary); font-size: 12px; }
+.device-choice { display: block; width: 100%; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--el-text-color-regular); text-align: left; cursor: pointer; font: inherit; }
+.device-choice:hover { background: var(--el-fill-color-light); }
+.device-choice.selected { background: var(--el-color-primary-light-9); border-color: var(--el-color-primary-light-7); }
+.device-choice:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.choice-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.choice-heading strong, .choice-meta { overflow-wrap: anywhere; }
+.connection-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--el-text-color-placeholder); }
+.connection-dot.online { background: var(--el-color-success); }
+.choice-meta { display: block; margin-top: 5px; color: var(--el-text-color-secondary); font-size: 12px; }
+.device-detail { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.device-card { margin-bottom: 0; }
+.device-detail :deep(.el-card__header) { min-height: 88px; display: flex; align-items: center; box-sizing: border-box; }
+.device-detail .card-header { width: 100%; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.chart-grid > div { min-width: 0; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .heater-info { display: flex; gap: 30px; justify-content: center; padding: 10px 0; }
 .temp-block { display: flex; flex-direction: column; align-items: center; }
 .temp-label { font-size: 12px; color: #909399; margin-bottom: 4px; }
@@ -538,7 +646,7 @@ watch(realtimeData, (newData: RealtimeData | null) => {
 .temp-value.target { color: #409eff; }
 .alarms { margin-top: 8px; text-align: center; }
 .pump-channels { padding: 5px 0; }
-.channel-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+.channel-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
 .channel-row:last-child { border-bottom: none; }
 .channel-label { font-weight: 500; min-width: 60px; }
 .channel-detail { color: #606266; font-size: 13px; }
@@ -566,5 +674,14 @@ watch(realtimeData, (newData: RealtimeData | null) => {
   font-weight: 600;
   font-size: 16px;
   word-break: break-word;
+}
+@media (max-width: 900px) {
+  .device-workspace, .chart-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .device-selector { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--el-border-color-light); }
+  .selector-heading { grid-column: 1 / -1; padding: 0 2px 4px; }
+  .device-choice { margin: 0; padding: 10px; }
+  .heater-info { gap: 12px; flex-wrap: wrap; }
+  .temp-value { font-size: 22px; }
+  .microwave-info { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

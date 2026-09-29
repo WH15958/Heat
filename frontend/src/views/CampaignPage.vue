@@ -1,53 +1,34 @@
 <template>
   <div class="campaign-page">
     <el-row :gutter="20">
-      <el-col :span="7">
+      <el-col :xs="24" :md="7">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
               <span>Campaign</span>
-              <el-button size="small" @click="loadCampaigns" :loading="loading">刷新</el-button>
+              <div class="card-header-actions">
+                <el-button size="small" @click="loadCampaigns" :loading="loading">刷新</el-button>
+                <el-button size="small" type="primary" @click="createVisible = true">新建</el-button>
+              </div>
             </div>
           </template>
 
-          <el-form :model="campaignForm" label-position="top" class="create-form">
-            <el-form-item label="名称">
-              <el-input v-model="campaignForm.name" placeholder="CsPbBr3 PL optimization" />
-            </el-form-item>
-            <el-form-item label="材料体系">
-              <el-input v-model="campaignForm.material_system" placeholder="CsPbBr3" />
-            </el-form-item>
-            <el-form-item label="主目标指标">
-              <el-input v-model="campaignForm.objective_metric" placeholder="pl_intensity" />
-            </el-form-item>
-            <el-form-item label="参数名">
-              <el-input v-model="parameterNamesText" placeholder="temperature_c, flow_a, flow_b" />
-            </el-form-item>
-            <el-button type="primary" style="width: 100%" @click="createCampaign" :loading="creating">
-              创建 Campaign
-            </el-button>
-          </el-form>
-
-          <el-divider />
-
           <div v-if="campaigns.length === 0" class="empty-state">暂无 Campaign</div>
-          <div
-            v-for="campaign in campaigns"
+          <button
+            v-for="(campaign, index) in campaigns"
             :key="campaign.campaign_id"
+            type="button"
             class="campaign-item"
             :class="{ active: selectedCampaign?.campaign_id === campaign.campaign_id }"
-            @click="selectCampaign(campaign)"
+            @click="previewCampaign = campaign"
           >
-            <div class="campaign-title">{{ campaign.name }}</div>
-            <div class="campaign-meta">
-              {{ campaign.material_system || '-' }} · {{ campaign.objective_metric }}
-            </div>
-            <el-tag size="small" type="success">{{ campaign.status }}</el-tag>
-          </div>
+            <span class="campaign-number">{{ index + 1 }}</span>
+            <span class="campaign-title">{{ campaign.name }}</span>
+          </button>
         </el-card>
       </el-col>
 
-      <el-col :span="17">
+      <el-col :xs="24" :md="17">
         <div v-if="!selectedCampaign" class="empty-panel">
           选择或创建一个 Campaign 后开始批次优化
         </div>
@@ -206,6 +187,38 @@
         </template>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="createVisible" title="新建 Campaign" width="min(560px, 92vw)" top="5vh">
+      <el-form :model="campaignForm" label-position="top" class="create-form">
+        <el-form-item label="名称"><el-input v-model="campaignForm.name" placeholder="CsPbBr3 PL optimization" /></el-form-item>
+        <el-form-item label="材料体系"><el-input v-model="campaignForm.material_system" placeholder="CsPbBr3" /></el-form-item>
+        <el-form-item label="主目标指标"><el-input v-model="campaignForm.objective_metric" placeholder="pl_intensity" /></el-form-item>
+        <el-form-item label="参数名"><el-input v-model="parameterNamesText" placeholder="temperature_c, flow_a, flow_b" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" @click="createCampaign" :loading="creating">创建 Campaign</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog :model-value="Boolean(previewCampaign)" @close="previewCampaign = null" title="Campaign 详情" width="min(680px, 92vw)" top="5vh">
+      <template v-if="previewCampaign">
+        <h2 class="preview-title">{{ previewCampaign.name }}</h2>
+        <el-descriptions :column="1" border size="small" class="campaign-preview-details">
+          <el-descriptions-item label="Campaign ID">{{ previewCampaign.campaign_id }}</el-descriptions-item>
+          <el-descriptions-item label="材料体系">{{ previewCampaign.material_system || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="主目标指标">{{ previewCampaign.objective_metric }}</el-descriptions-item>
+          <el-descriptions-item label="参数名">{{ previewCampaign.parameter_names.join(', ') || '未设置' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ previewCampaign.status }}</el-descriptions-item>
+          <el-descriptions-item v-if="previewCampaign.notes" label="备注">{{ previewCampaign.notes }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ previewCampaign.created_at }}</el-descriptions-item>
+        </el-descriptions>
+      </template>
+      <template #footer>
+        <el-button @click="previewCampaign = null">关闭</el-button>
+        <el-button type="primary" @click="enterCampaign">进入 Campaign</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -215,6 +228,8 @@ import { ElMessage } from 'element-plus'
 import { campaignsApi, type Campaign, type CharacterizationResult, type Trial } from '../api/campaigns'
 
 const campaigns = ref<Campaign[]>([])
+const createVisible = ref(false)
+const previewCampaign = ref<Campaign | null>(null)
 const selectedCampaign = ref<Campaign | null>(null)
 const trials = ref<Trial[]>([])
 const characterizations = ref<CharacterizationResult[]>([])
@@ -308,6 +323,7 @@ async function createCampaign() {
     })
     campaigns.value.unshift(resp.data)
     await selectCampaign(resp.data)
+    createVisible.value = false
     ElMessage.success('Campaign 已创建')
   } catch (e) {
     ElMessage.error(`创建失败: ${readError(e)}`)
@@ -320,6 +336,13 @@ async function selectCampaign(campaign: Campaign) {
   selectedCampaign.value = campaign
   charForm.trial_id = ''
   await loadCampaignData()
+}
+
+async function enterCampaign() {
+  if (!previewCampaign.value) return
+  const campaign = previewCampaign.value
+  previewCampaign.value = null
+  await selectCampaign(campaign)
 }
 
 function fillExample() {
@@ -430,31 +453,40 @@ onMounted(loadCampaigns)
   justify-content: space-between;
   gap: 12px;
 }
+.card-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card-header-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .create-form {
   margin-bottom: 4px;
 }
 .campaign-item {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #ebeef5;
   padding: 12px;
-  margin-bottom: 10px;
   cursor: pointer;
-  background: #fff;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
+.campaign-item:hover { background: var(--el-fill-color-light); }
+.campaign-item:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; }
 .campaign-item.active {
   border-color: #409eff;
   background: #ecf5ff;
 }
 .campaign-title {
+  min-width: 0;
   font-weight: 600;
   color: #303133;
-  margin-bottom: 6px;
+  overflow-wrap: anywhere;
 }
-.campaign-meta {
-  color: #606266;
-  font-size: 13px;
-  margin-bottom: 8px;
-}
+.campaign-number { flex: 0 0 24px; color: var(--el-text-color-secondary); font-size: 13px; }
+.preview-title { margin: 0 0 16px; font-size: 20px; line-height: 1.5; overflow-wrap: anywhere; }
+.campaign-page :deep(.campaign-preview-details .el-descriptions__content) { overflow-wrap: anywhere; }
 .empty-state,
 .empty-panel {
   color: #909399;
@@ -479,4 +511,5 @@ code {
   word-break: break-all;
   color: #303133;
 }
+@media (max-width: 991px) { .campaign-page > .el-row { row-gap: 16px; } }
 </style>

@@ -2,7 +2,7 @@
   <div class="history-page">
     <el-card shadow="hover">
       <template #header>
-        <div class="card-header">
+        <div ref="historyHeaderRef" class="card-header">
           <span>实验历史记录</span>
           <div>
             <span v-if="selectedRuns.length > 0" class="selection-count">已选 {{ selectedRuns.length }} 条</span>
@@ -18,7 +18,8 @@
         暂无历史记录，运行实验后自动保存
       </div>
 
-      <el-table :data="runs" stripe style="width: 100%" @row-click="handleRowClick" @selection-change="handleSelectionChange" v-else>
+      <div v-else ref="historyTableShellRef">
+      <el-table :data="runs" stripe :max-height="historyTableMaxHeight" scrollbar-always-on style="width: 100%" @row-click="handleRowClick" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="run_id" label="Run ID" width="220" />
         <el-table-column prop="experiment_name" label="实验名称" width="200" />
@@ -55,6 +56,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
     <el-dialog v-model="detailVisible" :title="detailTitle" width="70%" top="5vh">
@@ -81,6 +83,7 @@
         </el-descriptions>
 
         <h4 style="margin: 12px 0 8px">步骤详情</h4>
+        <SyringeHistory :series="detailData.sensor_data?.syringe_pumps" />
         <el-table :data="detailData.steps || []" stripe size="small" max-height="400">
           <el-table-column prop="step_index" label="#" width="50" />
           <el-table-column prop="step_id" label="步骤ID" width="150" />
@@ -142,10 +145,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
+import SyringeHistory from '../components/SyringeHistory.vue'
 
 interface TimePoint {
   t: number
@@ -178,6 +182,7 @@ interface MicrowaveSensorData {
 }
 
 interface SensorData {
+  syringe_pumps?: Record<string, { position?: TimePoint[]; theoretical_volume_ul?: TimePoint[]; states?: unknown[] }>
   heaters: Record<string, HeaterSensorData>
   pumps: Record<string, Record<string, ChannelSensorData>>
   microwaves?: Record<string, MicrowaveSensorData>
@@ -204,6 +209,19 @@ interface RunData {
 }
 
 const runs = ref<RunData[]>([])
+const historyHeaderRef = ref<HTMLElement>()
+const historyTableShellRef = ref<HTMLElement>()
+const historyTableMaxHeight = ref<number>()
+let historyHeaderObserver: ResizeObserver | null = null
+
+async function resizeHistoryTable() {
+  await nextTick()
+  if (!historyTableShellRef.value) return
+  const tableTop = historyTableShellRef.value.getBoundingClientRect().top + window.scrollY
+  historyTableMaxHeight.value = Math.max(160, window.innerHeight - tableTop - 24)
+}
+
+watch(historyTableShellRef, resizeHistoryTable, { flush: 'post' })
 const selectedRuns = ref<RunData[]>([])
 const loading = ref(false)
 const deleting = ref(false)
@@ -622,6 +640,10 @@ function exportRunText(data: RunData): string {
   for (const step of data.steps || []) {
     lines.push(`[${step.step_index + 1}] ${step.step_id} | ${step.action_type} | ${statusLabel(step.status)} | 耗时: ${step.duration?.toFixed(1) || '-'}s${step.error ? ' | 错误: ' + step.error : ''}`)
   }
+  for (const step of data.steps || []) {
+    if (step.device_result) lines.push(`注射泵步骤 ${step.step_id}: ${JSON.stringify(step.device_result)}`)
+  }
+  if (data.sensor_data?.syringe_pumps) lines.push(`注射泵采样（理论体积）: ${JSON.stringify(data.sensor_data.syringe_pumps)}`)
   return lines.join('\n')
 }
 
@@ -793,9 +815,14 @@ async function deleteAll() {
 
 onMounted(() => {
   loadRuns()
+  window.addEventListener('resize', resizeHistoryTable)
+  historyHeaderObserver = new ResizeObserver(resizeHistoryTable)
+  if (historyHeaderRef.value) historyHeaderObserver.observe(historyHeaderRef.value)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', resizeHistoryTable)
+  historyHeaderObserver?.disconnect()
   detailVisible.value = false
   disposeReportCharts()
 })
@@ -803,7 +830,9 @@ onUnmounted(() => {
 
 <style scoped>
 .history-page { padding: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-header > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.card-header :deep(.el-button + .el-button) { margin-left: 0; }
 .selection-count { color: #606266; font-size: 13px; margin-right: 8px; }
 .empty-state { text-align: center; padding: 40px; color: #909399; }
 </style>

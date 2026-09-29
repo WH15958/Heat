@@ -112,12 +112,19 @@ class ExperimentEngine:
         self._stop_result = None
         self._completion_notified = False
         self._pause_event.set()
-        self._exp_logger.start_run(
-            experiment_name=self._experiment_name,
-            experiment_file=self._experiment_file,
-            total_steps=len(self._steps),
-            metadata=self._metadata,
-        )
+        if isinstance(self._executor, StepExecutor):
+            await self._executor.reserve_syringes(self._steps)
+        try:
+            self._exp_logger.start_run(
+                experiment_name=self._experiment_name,
+                experiment_file=self._experiment_file,
+                total_steps=len(self._steps),
+                metadata=self._metadata,
+            )
+        except Exception:
+            if isinstance(self._executor, StepExecutor):
+                self._executor.release_unused_syringes()
+            raise
         self._state = ExperimentState.RUNNING
         self._start_time = time.time()
         self._task = asyncio.create_task(self._run())
@@ -147,10 +154,19 @@ class ExperimentEngine:
 
             step_start = time.time()
             success = await self._executor.execute(step)
+            device_result = getattr(self._executor, "last_device_result", None)
+            if device_result is not None:
+                self._exp_logger.record_device_result(i, device_result)
             wait_duration = time.time() - step_start
 
-            if not self._stop_flag:
-                await self._pause_event.wait()
+            while success and not self._stop_flag and not self._pause_event.is_set():
+                try:
+                    await asyncio.wait_for(self._pause_event.wait(), timeout=0.2)
+                except asyncio.TimeoutError:
+                    if isinstance(self._executor, StepExecutor):
+                        success = await self._executor.check_syringe_health()
+                        if not success and self._executor.last_device_result is not None:
+                            self._exp_logger.record_device_result(i, self._executor.last_device_result)
 
             if self._stop_flag:
                 cleanup_ok = await self._cleanup_active_devices()
@@ -188,6 +204,7 @@ class ExperimentEngine:
                 elif step.on_error == "skip":
                     self._exp_logger.skip_step(i, reason="Skipped due to error")
                     logger.warning(f"Skipping failed step: {step.id}")
+                    await self._pause_event.wait()
                     continue
             else:
                 self._exp_logger.finish_step(i, success=True, wait_duration=wait_duration)
