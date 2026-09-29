@@ -11,6 +11,7 @@ from src.utils.logger import get_logger, setup_logging
 from src.utils.serial_binding import resolve_connection
 from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
+from src.web.api.syringe_pumps import router as syringe_router
 from src.web.api.experiments import router as experiments_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
@@ -141,6 +142,9 @@ def create_device_manager() -> DeviceManager:
             binding_info=binding_info,
         )
         logger.info(f"Registered microwave: {m_cfg.device_id}")
+    for cfg in config.syringe_pumps:
+        if cfg.enabled:
+            dm.add_syringe_pump(cfg)
     return dm
 
 
@@ -156,15 +160,32 @@ async def lifespan(app: FastAPI):
     app.state.device_manager = create_device_manager()
     app.state.device_read_coordinator = DeviceReadCoordinator()
     push_task = asyncio.create_task(data_push_loop(app))
+    syringe_task = asyncio.create_task(syringe_supervisor(app.state.device_manager))
     yield
     logger.info("Shutting down...")
     push_task.cancel()
+    syringe_task.cancel()
+    try:
+        await syringe_task
+    except asyncio.CancelledError:
+        pass
     try:
         await push_task
     except asyncio.CancelledError:
         pass
     if not app.state.device_manager.cleanup():
         logger.error("One or more devices failed to stop or disconnect during shutdown")
+
+
+async def syringe_supervisor(dm):
+    """Enforce deadlines of explicitly requested actions, independent of browser reads."""
+    while True:
+        for controller in dm.syringe_pumps.values():
+            try:
+                await asyncio.to_thread(controller.enforce_timeout)
+            except Exception:
+                logger.exception("Syringe action supervisor failed")
+        await asyncio.sleep(0.2)
 
 
 app = FastAPI(
@@ -190,6 +211,7 @@ app.add_middleware(
 )
 
 app.include_router(devices_router, prefix="/api")
+app.include_router(syringe_router, prefix="/api")
 app.include_router(experiments_router, prefix="/api")
 app.include_router(campaigns_router, prefix="/api")
 app.include_router(ws_router)
@@ -227,9 +249,10 @@ if STATIC_DIR.exists() and any(STATIC_DIR.iterdir()):
             raise HTTPException(status_code=404, detail="Not Found")
 
         if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(static_root / "index.html"))
+            headers = {"Cache-Control": "no-store"} if file_path.suffix == ".html" else None
+            return FileResponse(str(file_path), headers=headers)
+        return FileResponse(str(static_root / "index.html"), headers={"Cache-Control": "no-store"})
 
     @app.get("/")
     async def index():
-        return FileResponse(str(STATIC_DIR / "index.html"))
+        return FileResponse(str(STATIC_DIR / "index.html"), headers={"Cache-Control": "no-store"})

@@ -513,6 +513,36 @@ class LoggingConfig(BaseConfig):
 
 
 @dataclass
+class SyringePumpConfig(BaseConfig):
+    device_id: str = "syringe_pump1"
+    name: str = "注射泵"
+    connection: DeviceConnectionConfig = field(default_factory=lambda: DeviceConnectionConfig(port=""))
+    capacity_ml: float = 2.5
+    valve_type: str = "Y3"
+    protocol: str = "OEM"
+    enabled: bool = True
+
+    def validate(self):
+        errors = []
+        if not self.device_id or not _is_strict_bool(self.enabled):
+            errors.append("无效的注射泵ID/enabled")
+        if not _is_finite_number(self.capacity_ml) or self.capacity_ml not in (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5):
+            errors.append("注射器容量须为手册支持规格")
+        if self.valve_type != "Y3" or self.protocol not in ("OEM", "DT"):
+            errors.append("当前支持三口Y型阀及OEM/DT协议")
+        if not _is_strict_int(self.connection.address) or not 0 <= self.connection.address <= 14:
+            errors.append("注射泵拨盘地址须为0..14")
+        if (self.connection.baudrate not in (9600, 38400) or self.connection.parity != "N"
+                or self.connection.bytesize != 8 or self.connection.stopbits != 1):
+            errors.append("注射泵通信参数须为9600/38400、8N1")
+        # An explicit empty endpoint is a visible placeholder, never COM1 fallback.
+        errors.extend(e for e in self.connection.validate()
+                      if not (not self.connection.port and self.connection.binding.mode == "fixed_port"
+                              and "端口不能为空" in e))
+        return errors
+
+
+@dataclass
 class SystemConfig(BaseConfig):
     """系统主配置"""
     name: str = "自动化控制系统"
@@ -520,6 +550,7 @@ class SystemConfig(BaseConfig):
     heaters: List[HeaterDeviceConfig] = field(default_factory=list)
     pumps: List[PumpDeviceConfig] = field(default_factory=list)
     microwaves: List[MicrowaveDeviceConfig] = field(default_factory=list)
+    syringe_pumps: List[SyringePumpConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -564,6 +595,12 @@ class SystemConfig(BaseConfig):
                 errors.append(f"微波仪{microwave.device_id}: 重复的设备ID")
             seen_microwave_ids.add(microwave.device_id)
         
+        seen = set(seen_heater_ids | seen_pump_ids | seen_microwave_ids)
+        for pump in self.syringe_pumps:
+            errors.extend(f"注射泵{pump.device_id}: {e}" for e in pump.validate())
+            if pump.device_id in seen:
+                errors.append(f"重复设备ID: {pump.device_id}")
+            seen.add(pump.device_id)
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
         errors.extend(self.logging.validate())
@@ -677,6 +714,10 @@ class ConfigManager:
             heaters=heaters,
             pumps=pumps,
             microwaves=microwaves,
+            syringe_pumps=[SyringePumpConfig(
+                **{k: v for k, v in item.items() if k != "connection"},
+                connection=self._parse_connection_config({"port": "", **item.get("connection", {})}),
+            ) for item in data.get("syringe_pumps", [])],
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),

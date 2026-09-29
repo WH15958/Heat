@@ -14,9 +14,9 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 - 前端：Vue 3 + Vite + Element Plus
 - 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵、MKM-AH1E 微波反应仪
 - 协议：AIBUS、MODBUS RTU
-- 实验定义：YAML
+- 实验定义：YAML，支持图形编排与 YAML 双模式编辑
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
-- Web 页面：`/`、`/control`、`/experiment`、`/campaigns`、`/history`
+- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/campaigns`、`/history`
 - API 前缀：设备 `/api`、实验 `/api/experiments`、Campaign `/api/campaigns`
 
 ## 适用人群
@@ -124,3 +124,8 @@ npm --prefix frontend run build
 - Web 层只能桥接同步设备，不应改变设备语义
 - `output/` 是运行产物，不应纳入版本控制
 - 文档变更需要和代码行为保持同步
+
+
+### MSP1-CX 注射泵
+
+支持两台独立注射泵的手动控制、OEM/DT通信、有限程序、YAML自动化与历史记录；第二台默认待配置。软件验证通过，实机验收待进行。见 [接入说明与功能覆盖](docs/syringe_pump_integration.md)、[现场验收清单](docs/syringe_pump_acceptance.md)。

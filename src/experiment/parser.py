@@ -41,7 +41,7 @@ def _validate_filename(filename: str) -> Path:
     """
     if not filename.endswith(".yaml") and not filename.endswith(".yml"):
         raise ValueError(f"Invalid experiment file type: {filename}")
-    if ".." in filename or "/" in filename or "\\" in filename:
+    if ".." in filename or any(c in filename for c in '/\\:<>"|?*') or any(ord(c) < 32 for c in filename):
         raise ValueError(f"Invalid filename: {filename}")
     path = EXPERIMENTS_DIR / filename
     try:
@@ -67,7 +67,10 @@ ACTION_MAP = {
     "log": ActionType.LOG,
 }
 
+ACTION_MAP.update({a.value: a for a in ActionType if a.value.startswith("syringe_pump.")})
+
 WAIT_MAP = {
+    "syringe_pump_complete": WaitType.SYRINGE_PUMP_COMPLETE,
     "none": WaitType.NONE,
     "duration": WaitType.DURATION,
     "temperature_reached": WaitType.TEMPERATURE_REACHED,
@@ -95,9 +98,17 @@ def parse_experiment(filepath: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Experiment file not found: {filepath}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    return parse_experiment_content(path.read_text(encoding="utf-8"), filename)
 
+
+def parse_experiment_content(content: str, filename: str = "untitled.yaml", *, validate_devices: bool = True) -> dict:
+    """Parse an in-memory definition without creating a file or accessing hardware."""
+    data = yaml.safe_load(content)
+    return parse_experiment_data(data, filename, validate_devices=validate_devices)
+
+
+def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_devices: bool = True) -> dict:
+    """Shared structural/semantic validation for files and editor documents."""
     if not isinstance(data, dict) or "steps" not in data:
         raise ValueError("Invalid experiment file: missing 'steps'")
     if not isinstance(data["steps"], list):
@@ -106,6 +117,7 @@ def parse_experiment(filepath: str) -> dict:
     steps = []
     step_ids = set()
     pump_repeat_counts = {}
+    syringe_ids = None
     for s in data.get("steps", []):
         if not isinstance(s, dict):
             raise ValueError("Invalid experiment step: expected object")
@@ -177,6 +189,36 @@ def parse_experiment(filepath: str) -> dict:
         if on_error not in {"stop", "skip"}:
             raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
 
+        if action_type.value.startswith("syringe_pump."):
+            from src.devices.syringe_commands import SyringeCommand
+            if not isinstance(params.get("device_id"), str) or not params["device_id"]:
+                raise ValueError("Syringe action requires device_id")
+            values = {k: v for k, v in params.items() if k != "device_id"}
+            values["action"] = action_type.value.split(".", 1)[1]
+            command = SyringeCommand.model_validate(values)
+            if command.action == "pause":
+                raise ValueError("Hardware pause is manual only; experiment pause uses action boundaries")
+            if command.program:
+                from src.protocols.syringe_pump import check_program
+                # Check feasible stroke intervals without assuming an initial position.
+                # Upload/execution rechecks against live position and selected mode.
+                check_program(command.program, None, 48000)
+            if command.action in ("program_run", "program_load", "program_store", "repeat") and "timeout" not in values:
+                raise ValueError("Programs require an explicit timeout")
+        if wait_type_name == "syringe_pump_complete" and not wait.device_id:
+            raise ValueError("syringe_pump_complete requires device_id")
+        if wait_type_name == "syringe_pump_complete" and not 0 < timeout <= 3600:
+            raise ValueError("Syringe wait timeout must be in (0, 3600]")
+        if validate_devices and (action_type.value.startswith("syringe_pump.") or wait_type_name == "syringe_pump_complete"):
+            if syringe_ids is None:
+                from src.utils.config import ConfigManager
+                syringe_ids = {c.device_id for c in ConfigManager().load().syringe_pumps if c.enabled}
+            ids = ([params["device_id"]] if action_type.value.startswith("syringe_pump.") else [])
+            if wait_type_name == "syringe_pump_complete":
+                ids.append(wait.device_id)
+            if any(did not in syringe_ids for did in ids):
+                raise ValueError("Device is not a configured syringe_pump type")
+
         if enabled:
             if action_type == ActionType.PUMP_START:
                 pump_key = (params.get("device_id"), params.get("channel"))
@@ -217,7 +259,7 @@ def parse_experiment(filepath: str) -> dict:
         steps.append(step)
 
     return {
-        "name": data.get("name", path.stem),
+        "name": data.get("name", Path(filename).stem),
         "description": data.get("description", ""),
         "steps": steps,
         "metadata": data.get("metadata") or {},

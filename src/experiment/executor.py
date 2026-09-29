@@ -33,8 +33,34 @@ class StepExecutor:
         self._active_pumps = set()
         self._pump_repeat_counts = {}
         self._active_microwaves = set()
+        self._active_syringes = set()
+        self._reserved_syringes = set()
+        self._syringe_owner = object()
         self._last_error = None
         self._current_step = None
+        self.last_device_result = None
+
+    async def reserve_syringes(self, steps):
+        ids = set()
+        for step in steps:
+            if not step.enabled:
+                continue
+            if step.type.value.startswith("syringe_pump."):
+                ids.add(step.params["device_id"])
+            if step.wait.type == WaitType.SYRINGE_PUMP_COMPLETE:
+                ids.add(step.wait.device_id)
+        try:
+            for device_id in sorted(ids):
+                await asyncio.to_thread(self._dm.syringe(device_id).claim, self._syringe_owner)
+                self._reserved_syringes.add(device_id)
+        except Exception:
+            self.release_unused_syringes()
+            raise
+
+    def release_unused_syringes(self):
+        for device_id in self._reserved_syringes - self._active_syringes:
+            self._dm.syringe(device_id).release(self._syringe_owner)
+        self._reserved_syringes.intersection_update(self._active_syringes)
 
     @property
     def last_error(self):
@@ -98,6 +124,7 @@ class StepExecutor:
         """
         logger.info(f"Executing step: {step.id} ({step.type.value})")
         self._current_step = step
+        self.last_device_result = None
         target = step.params.get("device_id", "system")
         channel = step.params.get("channel")
         channel_text = f" CH{channel}" if channel is not None else ""
@@ -109,7 +136,25 @@ class StepExecutor:
         try:
             loop = asyncio.get_event_loop()
 
-            if step.type == ActionType.HEATER_SET_TEMP:
+            if step.type.value.startswith("syringe_pump."):
+                device_id = step.params["device_id"]
+                control = self._dm.syringe(device_id)
+                if device_id not in self._active_syringes:
+                    await asyncio.to_thread(control.claim, self._syringe_owner)
+                    self._active_syringes.add(device_id)
+                params = {k: v for k, v in step.params.items() if k != "device_id"}
+                params["action"] = step.type.value.split(".", 1)[1]
+                try:
+                    result = await asyncio.to_thread(self._dm.syringe_command, device_id, params, self._syringe_owner)
+                finally:
+                    self.last_device_result = control.summary()
+                if result.get("result") == "stop_unconfirmed":
+                    return False
+                if params["action"] in ("initialize", "configure", "move", "aspirate", "dispense", "valve", "program_run", "repeat"):
+                    if not await self._wait_syringe(device_id, params.get("timeout", 120)):
+                        return False
+
+            elif step.type == ActionType.HEATER_SET_TEMP:
                 result = await loop.run_in_executor(
                     None, self._dm.set_temperature, step.params["device_id"], step.params["temperature"]
                 )
@@ -327,6 +372,25 @@ class StepExecutor:
         """Stop devices that this executor attempted to start."""
         loop = asyncio.get_running_loop()
         success = True
+        self.release_unused_syringes()
+
+        for device_id in list(self._active_syringes):
+            control = self._dm.syringe(device_id)
+            try:
+                state = await asyncio.to_thread(control.read)
+                clean = (state.get("read_ok") and state.get("busy") is False
+                         and state.get("fault_code") == 0
+                         and state.get("action", {}).get("result") in ("completed", "sent_unverified"))
+                stopped = clean or await asyncio.to_thread(control.stop)
+                if stopped:
+                    control.release(self._syringe_owner)
+                    self._active_syringes.discard(device_id)
+                    self._reserved_syringes.discard(device_id)
+                else:
+                    success = False
+            except Exception as exc:
+                self._last_error = str(exc)
+                success = False
 
         for device_id, channel in list(self._active_pumps):
             try:
@@ -371,6 +435,40 @@ class StepExecutor:
                 success = False
 
         return success
+
+    async def _wait_syringe(self, device_id, timeout):
+        deadline = time.monotonic() + timeout
+        control = self._dm.syringe(device_id)
+        while time.monotonic() < deadline:
+            if self._should_stop():
+                return False
+            state = await asyncio.to_thread(control.read)
+            self.last_device_result = state
+            if not state.get("read_ok") or state.get("fault_code"):
+                self._last_error = state.get("fault_description") or state.get("read_error")
+                return False
+            result = state.get("action", {}).get("result")
+            if result in ("failed", "unknown", "stopped"):
+                self._last_error = f"Syringe action {result}"
+                return False
+            if state.get("busy") is False and result in ("completed", "sent_unverified"):
+                return True
+            # Keep checking faults during experiment pause; do not dispatch another action.
+            await asyncio.sleep(0.1)
+        self._last_error = "Syringe completion timeout"
+        stopped = await asyncio.to_thread(control.stop)
+        self._last_error += "; stop confirmed" if stopped else "; STOP UNCONFIRMED"
+        self.last_device_result = control.summary()
+        return False
+
+    async def check_syringe_health(self):
+        for device_id in self._active_syringes:
+            state = await asyncio.to_thread(self._dm.syringe(device_id).read)
+            if not state.get("read_ok") or state.get("fault_code") or state.get("action", {}).get("result") in ("failed", "unknown", "stopped"):
+                self.last_device_result = state
+                self._last_error = "Syringe fault or unknown state during experiment pause"
+                return False
+        return True
 
     def _microwave_segments(self, raw_segments):
         segments = []
@@ -451,6 +549,8 @@ class StepExecutor:
         Args:
             condition: 等待条件
         """
+        if condition.type == WaitType.SYRINGE_PUMP_COMPLETE:
+            return await self._wait_syringe(condition.device_id, condition.timeout)
         loop = asyncio.get_event_loop()
         start_time = time.time()
 

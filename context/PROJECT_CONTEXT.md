@@ -3,7 +3,7 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-09-11
+最后更新：2026-09-30
 
 ---
 
@@ -21,7 +21,7 @@
 
 - 项目名称：Heat
 - 领域：实验室 / 小型工业自动化控制
-- 目标：统一管理加热器、蠕动泵、实验流程、实时监控、日志与样品记录
+- 目标：统一管理加热器、蠕动泵、注射泵、实验流程、实时监控、日志与样品记录
 - 当前主运行方式：FastAPI + Vue Web 界面
 - 辅助运行方式：`src/main.py` 中的本地控制入口仍存在，但不是主协作路径
 
@@ -40,12 +40,15 @@
   - `/`
   - `/control`
   - `/experiment`
+  - `/experiment/editor`（图形编排 / YAML 编辑）
   - `/campaigns`
   - `/history`
 - 设备接口前缀：`/api`
 - 实验接口前缀：`/api/experiments`
 - Campaign 接口前缀：`/api/campaigns`
 - WebSocket：`/ws`
+
+实验编排接口为 `GET/PUT /api/experiments/{filename}/source` 与 `POST /api/experiments/validate`。编辑器保留 YAML 原文，图形操作局部修改文档树；校验与保存不访问硬件。保存使用内容摘要、同目录原子替换，并与启动装载共用锁；运行或清理中的同名文件不得覆盖。未知设备在编排时提示，启动仍执行原有设备检查。
 
 ### 1.4 当前实验动作与等待类型
 
@@ -344,3 +347,15 @@ AI 不应做的是：
 - 是否要补专门的 API 参考文档
 - 微波仪真实硬件联调结果尚未回填
 - 是否要继续拆分历史问题库与 AI 规则库
+
+
+## 11. MSP1-CX 注射泵接入（2026-09-28）
+
+- 独立 `syringe_pump` 设备类型；当前只支持两台三口Y型阀的独立USB串口，OEM/DT，RS232/RS485，不支持CAN及共用串口总线。
+- `syringe_pump1` 配置COM9、唯一转换器序列号DSCCG146B12、拨盘1；`syringe_pump2`串口/指纹空、拨盘暂0，待现场复核。两台默认2.5mL、9600/8N1，配置文件为身份事实来源。
+- 启动服务、页面加载、GET和WebSocket生命周期不连接/初始化/运行泵。驱动同步、复用SerialPortManager；上层协调读写、实验所有权和动作超时。
+- 运动超时不自动重发，未知/过载/停止后位置失信。不能用旧读数掩盖读取失败；体积只代表理论排量，软件没有漏液/水到位传感器。
+- 本文2.3通用暂停规则对注射泵有明确例外：按用户选择，当前已发动作/有限程序继续完成，暂停不发下一步，恢复不重放；暂停期间仍读Q监督故障和处理停止。引擎步骤/运行完成状态仍等待恢复；故障则立即进入失败清理。
+- 新API前缀 `/api/syringe_pump/{device_id}`。新增 `syringe_pump.initialize/configure/move/aspirate/dispense/valve/stop/resume/io/program_load/program_store/program_run/repeat` YAML动作和 `syringe_pump_complete` 等待；h硬件暂停为手动入口。
+- `steps[].device_result`记录短动作终态，历史采样增加 `sensor_data.syringe_pumps`，复用run_id/sample_id及原持久化失败报告。Planner仍不能直接控制泵。
+- 本轮仅软件验证，无实机通信/运动验收。不能可靠读回的配置/EEPROM标记已发送待验证；程序槽位重新连接后须重新登记。详见 `docs/syringe_pump_integration.md` 与 `docs/syringe_pump_acceptance.md`。

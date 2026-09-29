@@ -30,3 +30,12 @@
 代码、日志或验收清单中的现场观察只对记录的设备序列号、固件和配置 commit 有效。例如 `pump1` 的软管型号 `写入 11 -> 读回 13` 已由 HMI 显示 `1.52 x 0.86` 确认，因此仅作为该设备的配置级覆盖；完整扫描表只是诊断记录，不是通用可执行映射。
 
 实机结论统一填写在 [MVP 系统验收清单](../mvp_system_acceptance_checklist.md)，微波仪专项步骤见 [微波 smoke test](../microwave_smoke_test.md)。
+
+
+## MSP1-CX 新增原始资料
+
+- 文件：[MSP1-CX用户手册 2025.6.4.pdf](MSP1-CX用户手册%202025.6.4.pdf)，用户提供的原始扫描资料，保留原件。
+- SHA-256：`6BB9FE4189CD398EBBEF695BC54360BE96DA1A9BE599751EB33EDA94B46FAA5A`。
+- 对应 `src/protocols/syringe_pump.py`、`src/devices/syringe_pump.py`；印刷27–44页用于串口命令、程序、参数及查询，PDF页码与印刷页码不同。
+- 当前配置：两台2.5mL、三口Y型阀；泵1指纹DSCCG146B12、COM9、拨盘1、9600/8N1；泵2串口及指纹空、拨盘暂0。RS232与RS485必须匹配实际线束/拨码，不能依据DB9外形推断。
+- 日期来自文件名，实际固件/铭牌与手册对应仍需现场核验。[功能覆盖表](../syringe_pump_integration.md) 与 [实机验收清单](../syringe_pump_acceptance.md) 区分软件实现和实物结论；软件验证不替代现场验收。

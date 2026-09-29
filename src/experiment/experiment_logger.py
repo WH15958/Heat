@@ -47,6 +47,7 @@ class StepLog:
     error: Optional[str] = None
     wait_type: str = "none"
     wait_duration: float = 0.0
+    device_result: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -100,6 +101,16 @@ class ExperimentLogger:
             start = datetime.fromisoformat(self._active_run.started_at)
             elapsed = (datetime.now() - start).total_seconds()
         point = {"t": round(elapsed, 1)}
+        syringe_series = self._active_run.sensor_data.setdefault("syringe_pumps", {})
+        for did, data in (realtime_payload.get("syringe_pumps") or {}).items():
+            series = syringe_series.setdefault(did, {"position": [], "theoretical_volume_ul": [],
+                                                    "fault_code": [], "states": []})
+            for key in ("position", "theoretical_volume_ul", "fault_code"):
+                series[key].append({"t": point["t"], "v": data.get(key) if data.get("read_ok") else None})
+            series["states"].append({"t": point["t"], "read_ok": data.get("read_ok"),
+                                     "busy": data.get("busy"), "valve": data.get("valve_position"),
+                                     "position_trusted": data.get("position_trusted"),
+                                     "action": data.get("action"), "events": data.get("events", [])})
         heaters_recorded = 0
         pumps_recorded = 0
         microwaves_recorded = 0
@@ -214,6 +225,11 @@ class ExperimentLogger:
         self._step_logs[step_index] = step_log
         self._emit("step_started", step_log.to_dict())
         logger.info(f"Step started: [{step_index}] {step_id} ({action_type})")
+
+    def record_device_result(self, step_index: int, result: dict):
+        if step_index in self._step_logs:
+            # Freeze short action results independently of periodic sensor sampling.
+            self._step_logs[step_index].device_result = json.loads(json.dumps(result))
 
     def finish_step(self, step_index: int, success: bool, error: str = None, wait_duration: float = 0.0):
         if step_index not in self._step_logs:

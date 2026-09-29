@@ -103,9 +103,25 @@ FastAPI 是异步的，但设备是同步的。
 
 - `src/web/app.py`：创建 FastAPI 应用、加载配置、挂载静态资源、启动推送循环
 - `src/web/api/devices.py`：设备连接、控制、状态接口；包含微波仪 `/api/microwave/{device_id}/...` 路由
-- `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史
+- `src/web/api/experiments.py`：实验启动、暂停、恢复、停止、进度、历史，以及编排器的 YAML 读取、校验和版本保护保存
+- `src/experiment/editor.py`：无硬件访问的 YAML 编排校验、设备引用提示和原子文件保存
+- `src/experiment/parameter_models.py`：设备 REST 与编排器共用的纯参数契约
 - `src/web/api/campaigns.py`：`/api/campaigns` 下的 Campaign、Trial、Recommendation 与表征结果接口
 - `src/web/api/ws.py`：WebSocket 推送与连接管理
+
+#### 实验编排接口
+
+前端路由 `/experiment/editor` 通过可选 `filename` 查询参数打开已有文件，使用 `yaml` 文档树及 CodeMirror 6 编辑同一份原文。
+
+| 接口 | 请求 / 返回 |
+| --- | --- |
+| `GET /api/experiments/{filename}/source` | 返回 `{filename, content, revision}`；revision 为原始 UTF-8 字节的 SHA-256 摘要 |
+| `POST /api/experiments/validate` | 请求 `{content}`；返回 `{valid, errors, warnings}`，各条问题包含 `message, path, step_id, line, column`（行列从 1 开始） |
+| `PUT /api/experiments/{filename}/source` | 请求 `{content, revision}`；新建时 revision 为 null，更新时传读取版本；返回新的 source 对象 |
+
+内容上限为 1,000,000 字符。保存前执行纯结构/参数校验，失败返回 422；同名创建、版本变化、运行或清理中的文件覆盖返回 409。文件名错误返回 400，读取不存在文件返回 404，文件 I/O 失败返回 500。保存与启动装载使用同一进程内锁；文件写入同目录临时文件、flush/fsync 后原子替换，不强制覆盖冲突。当前协调适用于单个后端进程，多 worker 部署需要额外的跨进程协调。
+
+`parse_experiment_data` / `parse_experiment_content` 共享解析器规则，编排时关闭设备存在性阻断并返回设备警告；启动仍保留默认严格检查。编排接口不获取 DeviceManager，不连接或控制设备。软件校验通过不等于设备就绪或安全确认。
 
 Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH Python；`scripts/launch_heat.py` 负责前置检查、日志和启动互斥，并在主线程执行原有 `run_server.py`，保留 Uvicorn 的 Ctrl+C/lifespan 退出流程。`output/heat-launcher.lock` 为进程持有的 Windows 文件锁，退出时自动释放，空闲锁文件无需删除。就绪检测线程仅在启动阶段读取 `/openapi.json` 和首页，不触发设备操作；其回归测试为 `python -m unittest discover -s tests -p test_launcher.py`。
 
@@ -139,7 +155,7 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - 加热器 OUTPUT_STATUS 使用宇电协议参数 `77`；启停确认直接对该参数做有界读回，避免套用完整数据读取的重试层。读取失败或枚举未知时使用 `RunStatus.UNKNOWN`，不能用默认 RUN/STOP 伪装确定状态；主动断开确认失败时 `/api/heater/{device_id}/disconnect` 返回 `400` 和驱动失败详情，同时保留串口连接供重试。
 - 加热器 RUN/STOP 和急停在状态读回前必须确认 AIBUS 写命令返回成功；写入失败不能由碰巧匹配的旧状态读回覆盖。泵诊断读取与 WebSocket 状态读取共享每泵单飞协调器；诊断等待超时后，后续读取继续等待同一个底层串口任务，不另起并发访问。泵通道读取失败时实时状态值设为 `null`、`run_status=UNKNOWN` 且 `read_ok=false`，消费者不得把缓存值解释为当前状态。
 
-Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `404`，解析后的静态文件路径必须仍位于 `src/web/static` 内。
+Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `404`，解析后的静态文件路径必须仍位于 `src/web/static` 内。HTML 页面返回 `Cache-Control: no-store`，确保重新打开页面时读取当前构建入口；带内容哈希的资源仍由静态资源服务处理。
 
 ### 3.4 样品与记录
 
@@ -421,3 +437,14 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 后续工作应从最新 `master` 新建任务分支，不要继续使用已归档分支。项目进度汇报的 HTML、
 PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录，不作为项目文档提交。
+
+
+## MSP1-CX 注射泵架构
+
+新增独立 `syringe_pump` 类型，配置来自 `SystemConfig.syringe_pumps`。协议 `src/protocols/syringe_pump.py` 实现 OEM/DT、错误解码和有界程序校验；`src/devices/syringe_pump.py` 保持同步，复用 SerialPortManager，无驱动线程或队列。请求模型 `SyringeCommand` 同时供 REST/YAML 使用。
+
+`src/web/syringe_control.py` 按设备协调 REST、WS 和实验访问，使用实验所有权及停止世代号阻止手动插入/过期命令。串口等待不跨动作执行周期占锁；Web层监督动作超时，GET/WS读本身不控制硬件。DeviceManager统一注册、绑定刷新、急停和关闭清理。接口为 `/api/syringe_pump/{device_id}/connect|disconnect|status|diagnostics|programs|command`，方法、请求及状态字段详见 [注射泵接入说明](syringe_pump_integration.md#api-与状态)。
+
+实验日志新增可选 `steps[].device_result` 及 `sensor_data.syringe_pumps`，保留旧记录兼容。EEPROM登记位于忽略目录 `data/syringe_programs/`，原子替换文件；设备不能可靠读回的内容标记未验证，重连撤销槽位执行资格。Campaign/planner边界不变。
+
+相关软件测试为 `tests/test_syringe_pump.py`；禁止测试打开真实COM。真实时序、液路和停机需 [实机验收](syringe_pump_acceptance.md)。

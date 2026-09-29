@@ -117,6 +117,36 @@ microwaves:
     allow_real_hardware_writes: true
     enable_control_writes: true
 
+syringe_pumps:
+  - device_id: "syringe_pump1"
+    name: "注射泵1"
+    capacity_ml: 2.5
+    valve_type: "Y3"
+    protocol: "OEM"
+    enabled: true
+    connection:
+      port: "COM9"
+      baudrate: 9600
+      address: 1
+      timeout: 2.0
+      binding:
+        mode: "fingerprint"
+        serial_number: "DSCCG146B12"
+        fallback_to_port: false
+  - device_id: "syringe_pump2"
+    name: "注射泵2"
+    capacity_ml: 2.5
+    valve_type: "Y3"
+    protocol: "OEM"
+    enabled: true
+    connection:
+      port: ""
+      baudrate: 9600
+      address: 0
+      timeout: 2.0
+      binding:
+        mode: "fixed_port"
+
 monitor:
   enabled: true
   log_interval: 1.0

@@ -634,9 +634,17 @@ steps:
 
 ---
 
-## 9. 常见错误
+## 9. 图形编排与 YAML 编辑
 
-### 9.1 文件名错误
+实验自动化页面的“实验编排”入口以顺序步骤卡片编辑本规范中的 `steps`，也可以直接切换到 YAML 编辑。两种模式使用同一份文档；图形操作不会改变步骤 ID，并保留 `wait` 的完整字段、`enabled`、`on_error`、自定义 metadata 以及未识别字段。
+
+页面的“校验”复用执行解析器的结构和语义检查，并补充纯参数校验；只读取文件和配置，不连接设备、不初始化动作，也不代表现场安全确认。编排时未知或未启用设备显示警告且保留原 ID，启动时仍执行原有设备检查。保存使用版本摘要和同目录临时文件原子替换；文件被外部修改、实验运行中或停机清理未完成时会拒绝覆盖。
+
+包含 YAML 锚点、别名、合并键、显式标签或多文档的文件不能安全映射为动作卡片，只能在 YAML 模式编辑。语法错误时原始文本仍保留，修复并重新校验后才能回到图形模式。
+
+## 10. 常见错误
+
+### 10.1 文件名错误
 
 错误：
 
@@ -648,7 +656,7 @@ steps:
 
 - 当前系统会拒绝路径穿越形式的文件名
 
-### 9.2 动作名错误
+### 10.2 动作名错误
 
 错误：
 
@@ -662,7 +670,7 @@ type: set_temperature
 type: heater.set_temperature
 ```
 
-### 9.3 缺少 `steps`
+### 10.3 缺少 `steps`
 
 错误：
 
@@ -675,7 +683,7 @@ description: no steps
 
 - `steps` 是必填顶层字段
 
-### 9.4 重复模式缺少间隔
+### 10.4 重复模式缺少间隔
 
 错误：
 
@@ -688,7 +696,7 @@ interval_time: 0
 
 - `repeat_count != 1` 时必须有大于 0 的 `interval_time`
 
-### 9.5 单位省略太多
+### 10.5 单位省略太多
 
 虽然系统会为部分单位补默认值，但建议显式写出：
 
@@ -699,7 +707,7 @@ interval_time: 0
 
 这样更容易调试和复现实验。
 
-### 9.6 微波仪自动控制失败
+### 10.6 微波仪自动控制失败
 
 现象：
 
@@ -716,3 +724,30 @@ interval_time: 0
 - 先确认 `/control` 页面能连接并读取目标微波仪，串口号与现场设备一致。
 - 检查设备面板、炉门联锁、fault code、功率/电流和实验日志。
 - 按 [microwave_smoke_test.md](microwave_smoke_test.md) 记录真实设备行为。
+
+
+## MSP1-CX 注射泵动作与等待
+
+独立设备 ID 为 `syringe_pump1`、`syringe_pump2`。所有动作参数含 `device_id`；解析时检查设备类型、参数和程序语法，执行前再核对连接、Q状态及行程。泵2默认未配置，引用它的启用步骤使实验在任何运动前失败。
+
+| 动作前缀 `syringe_pump.` | 参数（除device_id） |
+| --- | --- |
+| initialize | direction: Z/Y；initialization_code: 0/1/2或10..40；confirm: true |
+| configure | settings对象：start_speed、speed或speed_code、stop_speed、acceleration、microstep、backlash、dead_volume |
+| move | position整数步数；speed默认100Hz |
+| aspirate / dispense | volume正数；unit: uL/mL/steps，默认uL；speed默认100Hz |
+| valve | valve: input/output/bypass |
+| stop / resume | 无额外必填参数；resume只继续已知硬件暂停或释放当前有限程序H等待，不重放动作 |
+| io | output: 0..7 |
+| program_load | program、可选name、显式timeout |
+| program_store | program、name、slot: 0..14、confirm: true、显式timeout |
+| program_run | 可选slot（省略运行已装载缓冲）、显式timeout |
+| repeat | 重新校验最后程序、显式timeout，不盲发X |
+
+动作timeout均为 `(0,3600]` 秒，普通默认120秒。普通运动和配置默认等待本动作完成，Q空闲及适用目标读回才完成，不把应答当完成。额外等待可写 `wait: {type: syringe_pump_complete, device_id: syringe_pump1, timeout: 120}`；它等待既有动作，不会启动设备。
+
+程序最多120 ASCII字节，支持A/P/D、I/O/B、v/V/c/L/S/K/k、g…G有限循环、M延时、H输入等待、J输出。最多4层循环、展开10000操作，禁止无限G0、递归EEPROM调用、初始化或N模式切换。H外部输入等待必须包含在具有显式执行超时的程序内。动作执行前仍按当前步进模式及当前位置校验。
+
+实验暂停不发送硬件h，不终止已下发动作/有限程序；停止下发后续动作，恢复不重放。完成或暂停期间持续监视故障，停止请求可中断等待。`syringe_pump.pause` 不用于YAML，手动硬件暂停在控制页使用。清理停止失败会保留设备占用并报告失败。
+
+示例见 [单泵水测试](../experiments/syringe_single_water.yaml)、[双泵顺序协作](../experiments/syringe_dual_water.yaml)。均须手动连接、完成现场验收后由用户明确启动，不改变现有实验配方。完整能力范围见 [功能覆盖表](syringe_pump_integration.md#命令参数返回与入口对应)。

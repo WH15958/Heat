@@ -1,39 +1,48 @@
 <template>
   <div class="experiment-page">
+    <div v-if="syringeData?.syringe_pumps" style="margin-bottom: 12px">
+      <el-tag v-for="(pump, id) in syringeData.syringe_pumps" :key="id" style="margin-right: 8px">
+        {{ pump.name }}：{{ !syringeConnected || !pump.read_ok ? '状态未知' : syringeResult[pump.action?.result || ''] || (pump.busy ? '运行中' : '空闲') }}
+        · 目标 {{ pump.action?.target ?? '—' }} 步
+      </el-tag>
+    </div>
+    <el-alert title="注射泵实验暂停：当前已下发动作/有限程序继续完成，不再下发后续动作；立即停止请使用停止或全局急停。" type="info" :closable="false" style="margin-bottom: 12px" />
     <el-row :gutter="20">
-      <el-col :span="8">
+      <el-col :xs="24" :md="8">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
               <span>可用实验</span>
+              <el-button size="small" type="primary" @click="router.push('/experiment/editor')">新建实验</el-button>
               <el-button size="small" :loading="experimentsLoading" @click="loadExperiments">
                 刷新
               </el-button>
             </div>
           </template>
           <div v-if="experiments.length === 0" style="color: #909399; text-align: center; padding: 20px">
-            暂无实验，请在 experiments/ 目录下添加 YAML 文件
+            暂无实验，点击“新建实验”编排，或在 experiments/ 目录下添加 YAML 文件
           </div>
-          <div
-            v-for="exp in experiments"
+          <button
+            v-for="(exp, index) in experiments"
             :key="exp.filename"
+            type="button"
             class="exp-item"
             :class="{ active: selectedFilename === exp.filename }"
-            @click="selectExperiment(exp.filename)"
+            @click="previewExperiment(exp.filename)"
           >
-            <div class="exp-name">{{ exp.name }}</div>
-            <div class="exp-desc">{{ exp.description || '无描述' }}</div>
-            <div class="exp-meta">{{ exp.steps_count }} 个步骤 · {{ exp.filename }}</div>
-          </div>
+            <span class="exp-number">{{ index + 1 }}</span>
+            <span class="exp-name">{{ exp.name }}</span>
+          </button>
         </el-card>
       </el-col>
 
-      <el-col :span="16">
+      <el-col :xs="24" :md="16">
         <el-card shadow="hover" v-if="selectedExp">
           <template #header>
             <div class="card-header">
               <span>{{ selectedExp.name }}</span>
               <div class="card-header-actions">
+                <el-button @click="router.push({ path: '/experiment/editor', query: { filename: selectedFilename } })">编辑此实验</el-button>
                 <el-switch
                   v-model="saveLog"
                   active-text="保存日志"
@@ -106,6 +115,33 @@
       </el-col>
     </el-row>
 
+    <el-dialog v-model="previewVisible" title="实验详情" class="experiment-preview" width="min(960px, 92vw)" top="5vh">
+      <div v-loading="previewLoading" class="preview-content">
+        <el-alert v-if="previewError" :title="previewError" type="error" :closable="false" />
+        <template v-if="previewExp">
+          <h2 class="preview-title">{{ previewExp.name }}</h2>
+          <p class="preview-filename">{{ previewFilename }} · {{ previewExp.steps.length }} 个步骤</p>
+          <p class="preview-description">{{ previewExp.description || '无描述' }}</p>
+          <el-descriptions v-if="Object.keys(previewExp.metadata || {}).length" :column="1" border size="small">
+            <el-descriptions-item v-for="(value, key) in previewExp.metadata" :key="key" :label="String(key)">{{ typeof value === 'object' ? JSON.stringify(value) : value }}</el-descriptions-item>
+          </el-descriptions>
+          <h3 class="preview-steps-title">实验步骤</h3>
+          <div class="preview-step-list">
+            <div v-for="(step, index) in previewExp.steps" :key="index" class="preview-step">
+              <div class="preview-step-heading"><span class="preview-step-number">{{ index + 1 }}</span><strong>{{ step.id }}</strong><el-tag v-if="step.enabled === false" type="info" size="small">已禁用</el-tag></div>
+              <div class="preview-step-details"><span>{{ step.type }}</span><span v-if="step.wait_type && step.wait_type !== 'none'">等待：{{ step.wait_type }}</span></div>
+              <pre v-if="Object.keys(step.params || {}).length" class="preview-params">{{ JSON.stringify(step.params, null, 2) }}</pre>
+            </div>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button :disabled="previewLoading" @click="router.push({ path: '/experiment/editor', query: { filename: previewFilename } })">编辑此实验</el-button>
+        <el-button @click="previewVisible = false">关闭</el-button>
+        <el-button type="primary" :disabled="!previewExp || previewLoading || isRunning || isPaused || starting" @click="choosePreviewExperiment">选择此实验</el-button>
+      </template>
+    </el-dialog>
+
     <el-card shadow="hover" style="margin-top: 20px" v-if="selectedFilename">
       <template #header>
         <div class="card-header">
@@ -148,8 +184,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useWebSocket } from '../composables/useWebSocket'
+import { syringeResult } from '../api/syringePumps'
+const { data: syringeData, connected: syringeConnected } = useWebSocket()
+const route = useRoute(), router = useRouter()
 
 interface ExperimentSummary {
   filename: string
@@ -182,6 +223,12 @@ interface LogEntry {
 }
 
 const experiments = ref<ExperimentSummary[]>([])
+const previewVisible = ref(false)
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewFilename = ref('')
+const previewExp = ref<ExperimentDetail | null>(null)
+let previewRequest = 0
 const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
 const experimentsLoading = ref(false)
@@ -431,6 +478,29 @@ async function loadExperiments() {
   }
 }
 
+async function previewExperiment(filename: string) {
+  const request = ++previewRequest
+  previewFilename.value = filename
+  previewExp.value = null
+  previewError.value = ''
+  previewLoading.value = true
+  previewVisible.value = true
+  try {
+    const res = await axios.get(`/api/experiments/${filename}`)
+    if (request === previewRequest) previewExp.value = res.data
+  } catch (e: any) {
+    if (request === previewRequest) previewError.value = `加载失败: ${e.response?.data?.detail || e.message}`
+  } finally {
+    if (request === previewRequest) previewLoading.value = false
+  }
+}
+
+async function choosePreviewExperiment() {
+  if (!previewExp.value || previewLoading.value || isRunning.value || isPaused.value || starting.value) return
+  await selectExperiment(previewFilename.value)
+  previewVisible.value = false
+}
+
 async function selectExperiment(filename: string) {
   selectedFilename.value = filename
   progress.value = null
@@ -543,6 +613,7 @@ function startPolling() {
 
 onMounted(() => {
   loadExperiments()
+  if (typeof route.query.filename === 'string') previewExperiment(route.query.filename)
   startPolling()
   connectWs()
 })
@@ -556,21 +627,45 @@ onUnmounted(() => {
 
 <style scoped>
 .experiment-page { padding: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.card-header-actions { display: flex; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .exp-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
   padding: 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  margin-bottom: 8px;
+  border: 0;
+  border-bottom: 1px solid #ebeef5;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
   cursor: pointer;
   transition: all 0.2s;
 }
 .exp-item:hover { border-color: #409eff; background: #f0f7ff; }
 .exp-item.active { border-color: #409eff; background: #ecf5ff; }
-.exp-name { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-.exp-desc { color: #909399; font-size: 13px; margin-bottom: 4px; }
-.exp-meta { color: #c0c4cc; font-size: 12px; }
+.exp-item:focus-visible { outline: 2px solid #409eff; outline-offset: -2px; }
+.exp-number { flex: 0 0 24px; color: #909399; font-size: 13px; }
+.exp-name { min-width: 0; font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.preview-content { min-height: 100px; }
+.preview-title { font-size: 20px; line-height: 1.5; margin: 0 0 8px; overflow-wrap: anywhere; }
+.preview-filename { font-size: 12px; color: #909399; overflow-wrap: anywhere; }
+.preview-description { white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere; }
+.preview-steps-title { font-size: 15px; margin: 18px 0 10px; }
+.preview-step-list { max-height: 50vh; overflow-y: auto; border-top: 1px solid var(--el-border-color-light); }
+.preview-step { padding: 12px 0; border-bottom: 1px solid var(--el-border-color-light); }
+.preview-step-heading, .preview-step-details { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.preview-step-number { flex: 0 0 22px; color: var(--el-text-color-secondary); font-size: 12px; }
+.preview-step-details { padding-left: 32px; color: var(--el-text-color-secondary); font-size: 13px; }
+.preview-params { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0 32px; color: var(--el-text-color-regular); font-size: 12px; }
+.experiment-page :deep(.experiment-preview .el-descriptions__content) { overflow-wrap: anywhere; }
+@media (max-width: 991px) {
+  .experiment-page > .el-row { row-gap: 16px; }
+  .step-item { flex-wrap: wrap; }
+  .card-header-actions :deep(.el-button + .el-button) { margin-left: 0; }
+}
 .progress-section { margin-bottom: 16px; }
 .progress-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .progress-text { font-size: 14px; color: #606266; }

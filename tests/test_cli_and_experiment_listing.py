@@ -39,6 +39,8 @@ def test_production_experiment_assets_are_reviewed_and_strict():
         "low_risk_all_devices_smoke_test.yaml",
         "mvp_water_loop_baseline.yaml",
         "pump_microwave_water_flow_test.yaml",
+        "syringe_single_water.yaml",
+        "syringe_dual_water.yaml",
     }
     assert {item["filename"] for item in list_experiments()} == expected
 

@@ -19,7 +19,7 @@ const navigation = [
   { path: '/campaigns', label: '智能实验', icon: 'campaign', caption: '探索与记录' },
   { path: '/history', label: '实验历史', icon: 'history', caption: '实验档案' },
 ]
-const currentPage = computed(() => navigation.find(item => item.path === route.path) || navigation[0]!)
+const currentPage = computed(() => route.path === '/experiment/editor' ? { label: '实验编排', caption: '实验编排' } : navigation.find(item => item.path === route.path) || navigation[0]!)
 watch(() => route.path, () => { menuOpen.value = false })
 </script>
 

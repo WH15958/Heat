@@ -31,6 +31,7 @@ class DeviceType(Enum):
     """设备类型枚举"""
     HEATER = "heater"
     PUMP = "pump"
+    SYRINGE_PUMP = "syringe_pump"
     SENSOR = "sensor"
     SPECTROMETER = "spectrometer"
     HPLC = "hplc"
