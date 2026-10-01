@@ -8,7 +8,7 @@
 
 | 原始文件 | SHA-256 | 代码/协议对应 | 当前配置中的设备身份与串口参数 | 版本/适配核验状态 |
 |---|---|---|---|---|
-| `宇电单回路测量控制仪表通讯协议说明(1).pdf` | `3C2141652DF4980F3F0042333C9561E5F714AD0F841500C945948594A6573172` | `src/protocols/aibus.py`、`parameters.py`；`src/devices/heater.py` | `heater1`: fallback `COM4`，VID/PID `6790/29987`，USB location `1-3.3`，9600/N/站号1；`heater2`: fallback `COM5`，同 VID/PID，location `1-3.4`，9600/N/站号1 | 协议标题指向宇电单回路仪表；具体 AI 型号、手册版次和两台仪表的序列号/固件未登记。COM 是绑定回退值，实际端口以指纹解析结果为准 |
+| `宇电单回路测量控制仪表通讯协议说明(1).pdf` | `3C2141652DF4980F3F0042333C9561E5F714AD0F841500C945948594A6573172` | `src/protocols/aibus.py`、`parameters.py`；`src/devices/heater.py` | `heater1`: fallback `COM10`，VID/PID `6790/29987`，USB location `1-3.2.2`，9600/N/站号1；`heater2`: fallback `COM11`，同 VID/PID，location `1-3.4.4`，9600/N/站号1 | 协议标题指向宇电单回路仪表；具体 AI 型号、手册版次和两台仪表的序列号/固件未登记。COM 是绑定回退值，实际端口以指纹解析结果为准 |
 | `LabSmart说明书（中文）.pdf` | `4F49B79858DBD57F1935AD0DFDB85ED59666B91AEBC53266261CC6CFD9CFC1C7` | `src/devices/peristaltic_pump.py`、`src/protocols/pump_params.py`；映射文档见下方转换协议 | `pump1`: fallback `COM3`，序列号 `CNDIB148313`，19200/8E1/站号1；泵头5，四通道软管配置11，最大流量18.75 mL/min | 文件名指向 LabSmart；具体型号、手册版次、实物固件/HMI 版本未登记 |
 | `申辰多通道独立控制 LabSmart.pdf` | `103143DAFB04FD1DCD3F866AD8704484042ECF08D0AF05808B16A80E1F2FDA5F` | 同上；`pump1` 设备级软管覆盖为写入 `11`、读回 `13` | 同 `pump1` 配置；该映射由 HMI 显示 `1.52 x 0.86` 确认，仅适用于配置中的 `pump1` | 文件名指向申辰 LabSmart 多通道系列；具体型号/版次及该手册与 `pump1` 实物的对应关系未登记 |
 | `多通道蠕动泵MODBUS通信协议.doc` | `997CEF5A096DBFA839B3FC68DFD47E300F9D4DE85B2FF7306CF408E67BE89541` | 转换稿 `多通道蠕动泵MODBUS通信协议.md`；寄存器实现 `src/protocols/modbus_rtu.py`、`pump_params.py` | 与 `pump1` 配置相同：序列号 `CNDIB148313`，19200/8E1/站号1 | 原件标题指向多通道蠕动泵；协议版次、适用型号/固件未登记，转换稿没有逐项签核记录 |
@@ -37,5 +37,5 @@
 - 文件：[MSP1-CX用户手册 2025.6.4.pdf](MSP1-CX用户手册%202025.6.4.pdf)，用户提供的原始扫描资料，保留原件。
 - SHA-256：`6BB9FE4189CD398EBBEF695BC54360BE96DA1A9BE599751EB33EDA94B46FAA5A`。
 - 对应 `src/protocols/syringe_pump.py`、`src/devices/syringe_pump.py`；印刷27–44页用于串口命令、程序、参数及查询，PDF页码与印刷页码不同。
-- 当前配置：两台2.5mL、三口Y型阀；泵1指纹DSCCG146B12、COM9、拨盘1、9600/8N1；泵2串口及指纹空、拨盘暂0。RS232与RS485必须匹配实际线束/拨码，不能依据DB9外形推断。
+- 当前配置：两台2.5mL、三口Y型阀；泵1指纹ASDNB2A7N12、COM12、拨盘0；泵2指纹A9BSB2A7N11、COM13、拨盘1；两台9600/8N1、RS232（2026-10-01用户确认）。RS232与RS485必须匹配实际线束/拨码，不能依据DB9外形推断。
 - 日期来自文件名，实际固件/铭牌与手册对应仍需现场核验。[功能覆盖表](../syringe_pump_integration.md) 与 [实机验收清单](../syringe_pump_acceptance.md) 区分软件实现和实物结论；软件验证不替代现场验收。
