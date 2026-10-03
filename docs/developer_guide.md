@@ -441,6 +441,8 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 
 ## MSP1-CX 注射泵架构
 
+全局急停 REST 接口与实验启动共用注册锁，先同步设置活动引擎的停止标志，再执行设备急停并等待实验清理。WS 注射泵读取超时的响应直接标记未知，不在事件循环中同步等待仍被读取线程占用的控制器锁。断开的加热器、蠕动泵和微波设备在重新连接前会重新解析 fingerprint；已连接设备保留当前串口绑定。
+
 新增独立 `syringe_pump` 类型，配置来自 `SystemConfig.syringe_pumps`。协议 `src/protocols/syringe_pump.py` 实现 OEM/DT、错误解码和有界程序校验；`src/devices/syringe_pump.py` 保持同步，复用 SerialPortManager，无驱动线程或队列。请求模型 `SyringeCommand` 同时供 REST/YAML 使用。
 
 `src/web/syringe_control.py` 按设备协调 REST、WS 和实验访问，使用实验所有权及停止世代号阻止手动插入/过期命令。串口等待不跨动作执行周期占锁；Web层监督动作超时，GET/WS读本身不控制硬件。DeviceManager统一注册、绑定刷新、急停和关闭清理。接口为 `/api/syringe_pump/{device_id}/connect|disconnect|status|diagnostics|programs|command`，方法、请求及状态字段详见 [注射泵接入说明](syringe_pump_integration.md#api-与状态)。

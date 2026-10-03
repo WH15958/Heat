@@ -236,9 +236,13 @@ class ExperimentEngine:
             self._exp_logger.resume_run()
             self._notify()
 
-    async def stop(self):
+    def request_stop(self):
+        """Prevent further steps before awaiting device shutdown."""
         self._stop_flag = True
         self._pause_event.set()
+
+    async def stop(self):
+        self.request_stop()
         running_task = self._task
         waited_for_running_task = running_task is not None and not running_task.done()
         if waited_for_running_task:

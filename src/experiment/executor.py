@@ -696,12 +696,15 @@ class StepExecutor:
                     data = await loop.run_in_executor(
                         None, self._dm.read_microwave_data, condition.device_id
                     )
+                    if data.get("fault_code"):
+                        self._last_error = f"Microwave fault: {data['fault_code']}"
+                        return False
                     if self._microwave_completion_confirmed(data):
                         logger.info(f"Microwave {condition.device_id} completed")
                         return True
                     if self._microwave_is_running(data):
                         seen_running = True
-                    elif seen_running:
+                    elif seen_running and data.get("stop_confirmed") is True and data.get("fault_code") == 0:
                         logger.info(
                             f"Microwave {condition.device_id} completed "
                             f"(running transitioned to false)"

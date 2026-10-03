@@ -329,7 +329,9 @@ class DeviceManager:
         device,
     ) -> Dict[str, Any]:
         binding = self._normalize_binding_info(info, self._binding_port(info))
-        if binding.get("binding_resolved"):
+        if binding.get("binding_resolved") and (
+            binding.get("connection_binding_mode") != "fingerprint" or device.is_connected()
+        ):
             return binding
         return self._update_binding_resolution(device_id, device_type, info, device)
 

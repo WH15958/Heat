@@ -247,8 +247,15 @@ async def build_realtime_payload(
             payload["syringe_pumps"][did] = await read_coordinator.read(
                 ("syringe_pump", did), controller.read, 10.0)
         except Exception as exc:
-            payload["syringe_pumps"][did] = {**controller.summary(),
-                **controller.device.unknown(str(exc))}
+            # A timed-out reader can still hold the controller lock. Do not
+            # synchronously wait for that lock on the event loop.
+            payload["syringe_pumps"][did] = {
+                "device_id": did, "name": controller.config.name,
+                "connected": controller.device.is_connected(),
+                "configured": bool(controller.config.connection.port or controller.config.connection.binding.serial_number),
+                "capacity_ml": controller.config.capacity_ml,
+                **controller.device.unknown(str(exc)),
+            }
     return payload
 
 

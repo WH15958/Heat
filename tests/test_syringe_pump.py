@@ -250,6 +250,17 @@ def test_read_does_not_stop_overdue_motion(pump):
     assert pump.device.action['result'] == 'failed'
 
 
+def test_supervisor_preserves_completed_motion_after_deadline(pump):
+    pump.command({"action": "move", "position": 300})
+    pump.device.protocol.busy = 0
+    pump.device.action['deadline'] = 0
+    pump.enforce_timeout()
+    assert pump.device.action['result'] == 'completed'
+    assert pump.device.snapshot['position'] == 300
+    assert pump.device.trusted
+    assert 'T' not in pump.device.protocol.calls
+
+
 def test_experiment_owner_blocks_manual_commands_but_not_stop(pump):
     pump.claim('experiment')
     with pytest.raises(RuntimeError): pump.command({'action': 'move', 'position': 10})
@@ -258,8 +269,9 @@ def test_experiment_owner_blocks_manual_commands_but_not_stop(pump):
 
 def test_placeholder_and_configuration():
     configs = ConfigManager().load().syringe_pumps
-    assert len(configs) == 2 and configs[1].connection.port == ''
-    c = SyringeController(configs[1])
+    assert len(configs) == 2
+    # A placeholder is an isolated configuration, not the lab's second pump.
+    c = SyringeController(SyringePumpConfig(device_id='placeholder'))
     with pytest.raises(ValueError): c.connect()
     assert not c.summary()['connected']
 

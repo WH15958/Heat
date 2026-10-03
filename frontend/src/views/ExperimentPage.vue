@@ -88,10 +88,10 @@
               :key="step.id"
               class="step-item"
               :class="{
-                active: progress && idx === progress.current_step,
-                completed: stepStatusMap[idx] === 'completed',
-                failed: stepStatusMap[idx] === 'failed',
-                skipped: stepStatusMap[idx] === 'skipped',
+                active: progress && ['running', 'paused'].includes(progress.state) && step.id === progress.step_id,
+                completed: stepStatusMap[step.id] === 'completed',
+                failed: stepStatusMap[step.id] === 'failed',
+                skipped: stepStatusMap[step.id] === 'skipped',
               }"
             >
               <span class="step-index">{{ idx + 1 }}</span>
@@ -100,8 +100,8 @@
               <el-tag v-if="step.wait_type !== 'none'" size="small" type="warning">
                 等待: {{ step.wait_type }}
               </el-tag>
-              <el-tag v-if="stepStatusMap[idx]" :type="stepTagType(stepStatusMap[idx])" size="small">
-                {{ stepStatusLabel(stepStatusMap[idx]) }}
+              <el-tag v-if="stepStatusMap[step.id]" :type="stepTagType(stepStatusMap[step.id])" size="small">
+                {{ stepStatusLabel(stepStatusMap[step.id]) }}
               </el-tag>
             </div>
           </div>
@@ -242,7 +242,7 @@ const currentRunId = ref('')
 const currentSampleId = ref('')
 const currentMetadata = ref<Record<string, any>>({})
 const logEntries = ref<LogEntry[]>([])
-const stepStatusMap = ref<Record<number, string>>({})
+const stepStatusMap = ref<Record<string, string>>({})
 const logContainer = ref<HTMLElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let ws: WebSocket | null = null
@@ -336,7 +336,7 @@ function addLog(level: string, label: string, message: string, detail?: string) 
 
 function normalizeProgress(data: any, fallback: ExperimentProgress | null = progress.value): ExperimentProgress {
   const state = String(data?.state ?? fallback?.state ?? 'idle')
-  const totalRaw = Number(data?.total_steps ?? fallback?.total_steps ?? selectedExp.value?.steps?.length ?? 0)
+  const totalRaw = Number(data?.total_steps ?? fallback?.total_steps ?? selectedExp.value?.steps.filter(step => step.enabled).length ?? 0)
   const totalSteps = Number.isFinite(totalRaw) ? Math.max(0, totalRaw) : 0
   const currentRaw = Number(data?.current_step ?? fallback?.current_step ?? 0)
   let currentStep = Number.isFinite(currentRaw) ? Math.max(0, currentRaw) : 0
@@ -399,16 +399,16 @@ function handleWsMessage(event: MessageEvent) {
         stepStatusMap.value = {}
         addLog('success', '实验启动', `${data.experiment_name} (${data.run_id})`, `共 ${data.total_steps} 个步骤`)
       } else if (evt === 'step_started') {
-        stepStatusMap.value[data.step_index] = 'running'
+        stepStatusMap.value[data.step_id] = 'running'
         addLog('info', '步骤开始', `[${data.step_index + 1}] ${data.step_id}`, `动作: ${data.action_type}`)
       } else if (evt === 'step_finished') {
-        stepStatusMap.value[data.step_index] = data.status
+        stepStatusMap.value[data.step_id] = data.status
         const level = data.status === 'completed' ? 'success' : 'error'
         const label = data.status === 'completed' ? '步骤完成' : '步骤失败'
         const dur = data.duration ? ` 耗时 ${data.duration.toFixed(1)}s` : ''
         addLog(level, label, `[${data.step_index + 1}] ${data.step_id}${dur}`, data.error || undefined)
       } else if (evt === 'step_skipped') {
-        stepStatusMap.value[data.step_index] = 'skipped'
+        stepStatusMap.value[data.step_id] = 'skipped'
         addLog('warning', '步骤跳过', `[${data.step_index + 1}] ${data.step_id}`, data.error || '')
       } else if (evt === 'run_paused') {
         addLog('warning', '实验暂停', `Run: ${data.run_id}`)
@@ -425,7 +425,7 @@ function handleWsMessage(event: MessageEvent) {
           persistenceFailed
             ? `持久化错误: ${(data.persistence_errors || []).join('; ') || 'unknown'}`
             : `完成: ${data.completed_steps} 失败: ${data.failed_steps}`)
-        const totalSteps = progress.value?.total_steps ?? selectedExp.value?.steps.length ?? 0
+        const totalSteps = progress.value?.total_steps ?? selectedExp.value?.steps.filter(step => step.enabled).length ?? 0
         progress.value = normalizeProgress({
           state: data.status,
           current_step: data.status === 'completed' ? totalSteps : progress.value?.current_step,

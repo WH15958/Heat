@@ -43,6 +43,7 @@ def _ensure_store() -> None:
     for path in (CAMPAIGNS_JSON, TRIALS_JSON, RECOMMENDATIONS_JSON, CHARACTERIZATIONS_JSON):
         if not path.exists():
             path.write_text("[]\n", encoding="utf-8")
+    _recover_recommendation()
 
 
 @_synchronized
@@ -65,10 +66,14 @@ def _read_list(path: Path) -> List[Dict[str, Any]]:
 @_synchronized
 def _write_list(path: Path, rows: List[Dict[str, Any]]) -> None:
     _ensure_store()
+    _write_json(path, rows)
+
+
+def _write_json(path: Path, value) -> None:
     temp_path = path.with_suffix(path.suffix + ".tmp")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(rows, f, ensure_ascii=False, indent=2)
+            json.dump(value, f, ensure_ascii=False, indent=2)
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
@@ -78,6 +83,28 @@ def _write_list(path: Path, rows: List[Dict[str, Any]]) -> None:
             temp_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _recover_recommendation() -> None:
+    """Roll back an interrupted pair of writes before exposing store contents."""
+    journal = CAMPAIGNS_DIR / "recommendation.pending.json"
+    if not journal.exists():
+        return
+    previous = json.loads(journal.read_text(encoding="utf-8"))
+    if not isinstance(previous.get("trials"), list) or not isinstance(previous.get("recommendations"), list):
+        raise ValueError("Invalid recommendation recovery journal")
+    _write_json(TRIALS_JSON, previous["trials"])
+    _write_json(RECOMMENDATIONS_JSON, previous["recommendations"])
+    journal.unlink()
+
+
+def _new_trials(campaign_id, recommendation_id, parameters_batch):
+    now = utc_now_iso()
+    return [Trial(
+        trial_id=_make_id("trial"), campaign_id=campaign_id,
+        parameters=parameters, status=TrialStatus.PLANNED.value,
+        recommendation_id=recommendation_id, created_at=now, updated_at=now,
+    ).to_dict() for parameters in parameters_batch]
 
 
 def _make_id(prefix: str) -> str:
@@ -138,21 +165,9 @@ class CampaignStore:
         recommendation_id: str,
         parameters_batch: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        now = utc_now_iso()
         trials = _read_list(TRIALS_JSON)
-        created = []
-        for parameters in parameters_batch:
-            trial = Trial(
-                trial_id=_make_id("trial"),
-                campaign_id=campaign_id,
-                parameters=parameters,
-                status=TrialStatus.PLANNED.value,
-                recommendation_id=recommendation_id,
-                created_at=now,
-                updated_at=now,
-            ).to_dict()
-            trials.append(trial)
-            created.append(trial)
+        created = _new_trials(campaign_id, recommendation_id, parameters_batch)
+        trials.extend(created)
         _write_list(TRIALS_JSON, trials)
         return created
 
@@ -185,11 +200,9 @@ class CampaignStore:
         notes: str = "",
     ) -> Dict[str, Any]:
         recommendation_id = _make_id("rec")
-        trials = self.create_trials(
-            campaign_id=campaign_id,
-            recommendation_id=recommendation_id,
-            parameters_batch=parameters_batch,
-        )
+        previous_trials = _read_list(TRIALS_JSON)
+        previous_recommendations = _read_list(RECOMMENDATIONS_JSON)
+        trials = _new_trials(campaign_id, recommendation_id, parameters_batch)
         recommendation = Recommendation(
             recommendation_id=recommendation_id,
             campaign_id=campaign_id,
@@ -198,9 +211,17 @@ class CampaignStore:
             parameters_batch=parameters_batch,
             notes=notes.strip(),
         ).to_dict()
-        rows = _read_list(RECOMMENDATIONS_JSON)
-        rows.append(recommendation)
-        _write_list(RECOMMENDATIONS_JSON, rows)
+        journal = CAMPAIGNS_DIR / "recommendation.pending.json"
+        _write_json(journal, {"trials": previous_trials, "recommendations": previous_recommendations})
+        try:
+            _write_json(TRIALS_JSON, previous_trials + trials)
+            _write_json(RECOMMENDATIONS_JSON, previous_recommendations + [recommendation])
+            journal.unlink()
+        except Exception:
+            # If rollback also fails, retain the journal and fail subsequent
+            # access until recovery succeeds; never return a partial pair.
+            _recover_recommendation()
+            raise
         return {"recommendation": recommendation, "trials": trials}
 
     def list_characterizations(self, campaign_id: str) -> List[Dict[str, Any]]:

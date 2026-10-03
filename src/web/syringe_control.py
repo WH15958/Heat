@@ -108,11 +108,18 @@ class SyringeController:
         with self.lock:
             action = self.device.action
             overdue = action and action.get("result") in ("accepted", "running", "paused", "unknown") and "deadline" in action and time.monotonic() > action["deadline"]
-        if overdue:
+            if not overdue:
+                return
+            # Confirm completion before stopping, and keep action replacement
+            # serialized with this decision.
+            self.read()
+            if self.device.action is not action or action.get("result") in ("completed", "sent_unverified", "stopped"):
+                return
+            failed = action.get("result") == "failed"
             stopped = self.stop()
-            with self.lock:
-                if self.device.action is action:
-                    action["result"] = "failed"
+            if self.device.action is action:
+                action["result"] = "failed"
+                if not failed:
                     action["error"] = "动作超时；" + ("停止已确认" if stopped else "停止未确认")
 
     def _record(self, request, result):

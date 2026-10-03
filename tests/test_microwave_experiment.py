@@ -330,7 +330,8 @@ def test_microwave_complete_success():
     dm = FakeMicrowaveExperimentManager()
     dm.read_payloads = [
         {"running": True, "power_percent": 20, "current": 1.2, "material_temperature": 80},
-        {"running": False, "power_percent": 0, "current": 0, "material_temperature": 80},
+        {"running": False, "power_percent": 0, "current": 0, "material_temperature": 80,
+         "stop_confirmed": True, "fault_code": 0},
     ]
     executor = StepExecutor(dm)
     step = ExperimentStep(

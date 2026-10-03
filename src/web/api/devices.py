@@ -529,7 +529,20 @@ async def emergency_stop(request: Request):
     """
     dm = get_dm(request)
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, dm.emergency_stop_all)
+    from src.web.api.experiments import _engines, _source_lock
+
+    # Block new experiment registration until existing runs and devices stop.
+    async with _source_lock:
+        engines = list(_engines.values())
+        for engine in engines:
+            engine.request_stop()
+        try:
+            result = await loop.run_in_executor(None, dm.emergency_stop_all)
+        finally:
+            stopped = await asyncio.gather(
+                *(engine.stop() for engine in engines), return_exceptions=True
+            )
+        result = result and all(value is True for value in stopped)
     get_report = getattr(dm, "get_last_emergency_stop_report", None)
     return {
         "success": bool(result),
