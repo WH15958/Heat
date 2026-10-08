@@ -3,6 +3,7 @@
     <header class="editor-top">
       <div><h2>实验编排</h2><span>{{ dirty ? '有未保存修改' : '已与打开的版本一致' }}</span></div>
       <div class="tools">
+        <el-button @click="router.push('/experiment/batch')">引导式实验</el-button>
         <el-button @click="router.push({ path: '/experiment', query: loadedFilename ? { filename: loadedFilename } : {} })">返回实验</el-button>
         <el-button :disabled="cursor === 0" @click="undo">撤销</el-button>
         <el-button :disabled="cursor >= history.length - 1" @click="redo">重做</el-button>

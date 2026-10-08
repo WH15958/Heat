@@ -14,6 +14,7 @@ from src.web.api.devices import router as devices_router
 from src.web.api.syringe_pumps import router as syringe_router
 from src.web.api.valves import router as valves_router
 from src.web.api.experiments import router as experiments_router
+from src.web.api.guided import router as guided_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
 
@@ -218,6 +219,7 @@ app.include_router(devices_router, prefix="/api")
 app.include_router(syringe_router, prefix="/api")
 app.include_router(valves_router, prefix="/api")
 app.include_router(experiments_router, prefix="/api")
+app.include_router(guided_router, prefix="/api")
 app.include_router(campaigns_router, prefix="/api")
 app.include_router(ws_router)
 

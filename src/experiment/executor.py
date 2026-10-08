@@ -41,6 +41,7 @@ class StepExecutor:
         self._last_error = None
         self._current_step = None
         self.last_device_result = None
+        self.release_resources_on_cleanup = True
 
     async def reserve_valves(self, steps):
         ids = {s.params["device_id"] for s in steps if s.enabled and s.type == ActionType.VALVE_SWITCH}
@@ -69,6 +70,8 @@ class StepExecutor:
                 continue
             if step.type.value.startswith("syringe_pump."):
                 ids.add(step.params["device_id"])
+            if step.type == ActionType.SYRINGE_PAIR_DISPENSE:
+                ids.update(feed["device_id"] for feed in step.params["feeds"])
             if step.wait.type == WaitType.SYRINGE_PUMP_COMPLETE:
                 ids.add(step.wait.device_id)
         try:
@@ -80,6 +83,8 @@ class StepExecutor:
             raise
 
     def release_unused_syringes(self):
+        if not self.release_resources_on_cleanup:
+            return
         for device_id in self._reserved_syringes - self._active_syringes:
             self._dm.syringe(device_id).release(self._syringe_owner)
         self._reserved_syringes.intersection_update(self._active_syringes)
@@ -157,8 +162,15 @@ class StepExecutor:
 
         try:
             loop = asyncio.get_event_loop()
+            if self._should_stop():
+                return False
 
-            if step.type.value.startswith("syringe_pump."):
+            if step.type == ActionType.SYRINGE_PAIR_DISPENSE:
+                if not await self._dispense_pair(step):
+                    return False
+            elif step.type.value.startswith("syringe_pump."):
+                if self._should_stop():
+                    return False
                 device_id = step.params["device_id"]
                 control = self._dm.syringe(device_id)
                 if device_id not in self._active_syringes:
@@ -166,6 +178,8 @@ class StepExecutor:
                     self._active_syringes.add(device_id)
                 params = {k: v for k, v in step.params.items() if k != "device_id"}
                 params["action"] = step.type.value.split(".", 1)[1]
+                if self._should_stop():
+                    return False
                 try:
                     result = await asyncio.to_thread(self._dm.syringe_command, device_id, params, self._syringe_owner)
                 finally:
@@ -421,9 +435,11 @@ class StepExecutor:
                          and state.get("action", {}).get("result") in ("completed", "sent_unverified"))
                 stopped = clean or await asyncio.to_thread(control.stop)
                 if stopped:
-                    control.release(self._syringe_owner)
+                    if self.release_resources_on_cleanup:
+                        control.release(self._syringe_owner)
                     self._active_syringes.discard(device_id)
-                    self._reserved_syringes.discard(device_id)
+                    if self.release_resources_on_cleanup:
+                        self._reserved_syringes.discard(device_id)
                 else:
                     success = False
             except Exception as exc:
@@ -472,10 +488,55 @@ class StepExecutor:
             else:
                 success = False
 
-        if success:
+        if success and self.release_resources_on_cleanup:
             await self.release_valves()
 
         return success
+
+    async def _dispense_pair(self, step):
+        """Upper-layer coordination; each synchronous controller retains its own lock."""
+        abort = False
+        children = []
+        tasks = []
+        feeds = step.params["feeds"]
+        if self._should_stop() or await self._wait_for_resume() is None:
+            return False
+        for feed in feeds:
+            child = StepExecutor(self._dm)
+            child._syringe_owner = self._syringe_owner
+            child._active_syringes = self._active_syringes
+            child.set_stop_checker(lambda: abort or self._should_stop())
+            # The pair is one action boundary: a pause lets both issued actions finish.
+            child.set_pause_checker(lambda: False)
+            children.append(child)
+            tasks.append(asyncio.create_task(child.execute(ExperimentStep(
+                id=step.id + "_" + feed["device_id"], type=ActionType.SYRINGE_DISPENSE,
+                params=feed,
+            ))))
+        pending = set(tasks)
+        success = True
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            if any(not task.result() for task in done):
+                abort = True
+                success = False
+                # Stop both immediately, even if the other is still dispatching/finishing.
+                stopped = await asyncio.gather(*(
+                    asyncio.to_thread(self._dm.syringe(feed["device_id"]).stop)
+                    for feed in feeds
+                ), return_exceptions=True)
+                if any(result is not True for result in stopped):
+                    self._last_error = "Parallel feed failed; STOP UNCONFIRMED"
+                break
+        await asyncio.gather(*tasks)
+        self.last_device_result = {"device_type": "syringe_pair", "pumps": {
+            feed["device_id"]: {"action_result": child.last_device_result,
+                                "final_state": self._dm.syringe(feed["device_id"]).summary()}
+            for feed, child in zip(feeds, children)
+        }}
+        if not success and "STOP UNCONFIRMED" not in (self._last_error or ""):
+            self._last_error = "; ".join(child.last_error or "" for child in children)
+        return success and not self._should_stop()
 
     async def _wait_syringe(self, device_id, timeout):
         deadline = time.monotonic() + timeout
@@ -602,6 +663,7 @@ class StepExecutor:
         elif condition.type in {
             WaitType.TEMPERATURE_REACHED,
             WaitType.MICROWAVE_TEMPERATURE_REACHED,
+            WaitType.MICROWAVE_TEMPERATURE_BELOW,
             WaitType.MICROWAVE_COMPLETE,
             WaitType.PUMP_COMPLETE,
         }:
@@ -616,7 +678,7 @@ class StepExecutor:
             logger.error(f"Invalid wait tolerance: {condition.tolerance}")
             return False
         if (
-            condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED
+            condition.type in {WaitType.MICROWAVE_TEMPERATURE_REACHED, WaitType.MICROWAVE_TEMPERATURE_BELOW}
             and not _is_nonnegative_finite_number(condition.target_temperature)
         ):
             logger.error(
@@ -672,7 +734,8 @@ class StepExecutor:
                     return False
                 start_time += paused_duration
 
-        elif condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED:
+        elif condition.type in {WaitType.MICROWAVE_TEMPERATURE_REACHED, WaitType.MICROWAVE_TEMPERATURE_BELOW}:
+            cooling = condition.type == WaitType.MICROWAVE_TEMPERATURE_BELOW
             target_temperature = condition.target_temperature
             logger.info(
                 f"Waiting for microwave {condition.device_id} to reach "
@@ -696,7 +759,23 @@ class StepExecutor:
                         None, self._dm.read_microwave_data, condition.device_id
                     )
                     material_temperature = data.get("material_temperature")
-                    if material_temperature is not None and abs(
+                    if cooling:
+                        if data.get("read_ok") is False or data.get("fault_code", 0) != 0 or data.get("output_active") is True:
+                            self._last_error = "Cooling wait failed: microwave read/fault/output state"
+                            return False
+                        if not _is_nonnegative_finite_number(material_temperature):
+                            logger.error("Cooling wait failed: invalid material temperature")
+                            return False
+                        if self._should_stop():
+                            return False
+                        if self._is_paused():
+                            continue
+                        if time.time() - start_time > condition.timeout:
+                            return False
+                        if material_temperature <= target_temperature:
+                            logger.info(f"Cooling complete: {material_temperature}C <= {target_temperature}C")
+                            return True
+                    if not cooling and material_temperature is not None and abs(
                         float(material_temperature) - float(target_temperature)
                     ) <= condition.tolerance:
                         logger.info(
@@ -710,6 +789,8 @@ class StepExecutor:
                         f"Microwave temperature wait read failed for "
                         f"{condition.device_id}: {e}"
                     )
+                    if cooling:
+                        return False
                 paused_duration = await self._pause_aware_sleep(0.2)
                 if paused_duration is None:
                     return False

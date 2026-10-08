@@ -12,6 +12,7 @@ import flowers from './assets/theme/flowers.webp'
 
 const route = useRoute()
 const menuOpen = ref(false)
+const experimentOpen = ref(route.path.startsWith('/experiment'))
 const navigation = [
   { path: '/', label: '实时仪表盘', icon: 'dashboard', caption: '运行概览' },
   { path: '/control', label: '设备控制', icon: 'control', caption: '设备工作台' },
@@ -19,8 +20,8 @@ const navigation = [
   { path: '/campaigns', label: '智能实验', icon: 'campaign', caption: '探索与记录' },
   { path: '/history', label: '实验历史', icon: 'history', caption: '实验档案' },
 ]
-const currentPage = computed(() => route.path === '/experiment/editor' ? { label: '实验编排', caption: '实验编排' } : navigation.find(item => item.path === route.path) || navigation[0]!)
-watch(() => route.path, () => { menuOpen.value = false })
+const currentPage = computed(() => route.path === '/experiment/batch' ? { label: '引导式实验', caption: '实验条件与固定流程' } : route.path === '/experiment/editor' ? { label: '实验编排', caption: '实验编排' } : navigation.find(item => item.path === route.path) || navigation[0]!)
+watch(() => route.path, () => { menuOpen.value = false; if (route.path.startsWith('/experiment')) experimentOpen.value = true })
 </script>
 
 <template>
@@ -45,9 +46,20 @@ watch(() => route.path, () => { menuOpen.value = false })
     <aside class="app-sidebar" :class="{ 'is-open': menuOpen }">
       <span class="nav-caption">WORKSPACE</span>
       <nav id="main-navigation" aria-label="主导航">
-        <RouterLink v-for="item in navigation" :key="item.path" :to="item.path" :title="item.label" class="nav-item" :class="{ active: route.path === item.path }">
-          <svg class="nav-icon" aria-hidden="true"><use :href="`#${item.icon}`" /></svg><span>{{ item.label }}</span><img v-if="route.path === item.path" :src="star" class="nav-star decoration" alt="" />
-        </RouterLink>
+        <template v-for="item in navigation" :key="item.path">
+          <template v-if="item.path === '/experiment'">
+            <button class="nav-item experiment-toggle" :class="{ active: route.path.startsWith('/experiment') }" type="button" :aria-expanded="experimentOpen" aria-controls="experiment-navigation" @click="experimentOpen = !experimentOpen">
+              <svg class="nav-icon" aria-hidden="true"><use href="#experiment" /></svg><span class="experiment-label">实验自动化</span><svg class="nav-chevron" :class="{ expanded: experimentOpen }" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+            </button>
+            <div v-if="experimentOpen" id="experiment-navigation" class="experiment-subnav">
+              <RouterLink to="/experiment/batch" :class="{active: route.path.startsWith('/experiment/batch')}" :aria-current="route.path.startsWith('/experiment/batch') ? 'page' : undefined">引导式</RouterLink>
+              <RouterLink to="/experiment/editor" :class="{active: route.path === '/experiment/editor' || route.path === '/experiment'}" :aria-current="route.path === '/experiment/editor' ? 'page' : undefined">搭建式</RouterLink>
+            </div>
+          </template>
+          <RouterLink v-else :to="item.path" :title="item.label" class="nav-item" :class="{ active: route.path === item.path }">
+            <svg class="nav-icon" aria-hidden="true"><use :href="`#${item.icon}`" /></svg><span>{{ item.label }}</span><img v-if="route.path === item.path" :src="star" class="nav-star decoration" alt="" />
+          </RouterLink>
+        </template>
       </nav>
       <div class="sidebar-garden" aria-hidden="true"><img :src="flowers" class="decoration" alt="" /></div>
       <div class="sidebar-foot"><img :src="planet" class="sidebar-planet decoration" alt="" /><span>HEAT LAB<br /><small>探索 · 控制 · 记录</small></span></div>
@@ -59,3 +71,14 @@ watch(() => route.path, () => { menuOpen.value = false })
     </main>
   </div>
 </template>
+
+<style scoped>
+.experiment-toggle { box-sizing: border-box; width: 100%; background: transparent; font-family: inherit; font-size: inherit; text-align: left; cursor: pointer; padding-right: 10px; gap: 10px; }
+.experiment-label { white-space: nowrap; flex-shrink: 0; }
+.nav-chevron { margin-left: auto; width: 12px; height: 12px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.nav-chevron.expanded { transform: rotate(180deg); }
+.experiment-subnav { display: grid; gap: 4px; padding: 0 12px 12px 44px; }
+.experiment-subnav a { padding: 10px 14px; border-radius: 8px; color: #56738f; text-decoration: none; font-size: 14px; }
+.experiment-subnav a:hover, .experiment-subnav a.active { color: #147bc4; background: #e6f3ff; }
+@media (min-width: 769px) and (max-width: 1199px) { .nav-chevron { display: none; } .experiment-subnav { padding: 0 0 8px; } .experiment-subnav a { padding: 8px 2px; text-align: center; font-size: 12px; } }
+</style>

@@ -74,7 +74,7 @@ export const settingsFields: Field[] = [
   num('start_speed', '启动速度', 50, 1000, false, true), num('speed', '运行速度', 5, 5000, false, true), num('stop_speed', '停止速度', 50, 2700, false, true), num('acceleration', '加速度代码', 1, 20, false, true), num('speed_code', '速度代码（不与运行速度同时设置）', 0, 40, false, true), select('microstep', '步进模式', [{ value: 0, label: '3000 步' }, { value: 1, label: '48000 步' }, { value: 2, label: '24000 步' }]), num('backlash', '回退间隙', 0, 31, false, true), num('dead_volume', '死区步数', 0, 80, false, true),
 ]
 export const waitOptions = [
-  { value: 'none', label: '不附加等待' }, { value: 'duration', label: '等待时长' }, { value: 'temperature_reached', label: '等待加热器到温' }, { value: 'pump_complete', label: '等待泵通道完成' }, { value: 'microwave_temperature_reached', label: '等待微波到温' }, { value: 'microwave_complete', label: '等待微波完成（需实机确认）' }, { value: 'syringe_pump_complete', label: '等待注射泵完成' },
+  { value: 'none', label: '不附加等待' }, { value: 'duration', label: '等待时长' }, { value: 'temperature_reached', label: '等待加热器到温' }, { value: 'pump_complete', label: '等待泵通道完成' }, { value: 'microwave_temperature_reached', label: '等待微波到温' }, { value: 'microwave_temperature_below', label: '等待微波反应液降至温度上限' }, { value: 'microwave_complete', label: '等待微波完成（需实机确认）' }, { value: 'syringe_pump_complete', label: '等待注射泵完成' },
 ]
 export function waitFields(type = 'none'): Field[] {
   if (type === 'none') return []
@@ -82,7 +82,7 @@ export function waitFields(type = 'none'): Field[] {
   const fields: Field[] = [device, num('timeout', '等待超时（秒，默认 3600）', type === 'syringe_pump_complete' ? 0.001 : 0, type === 'syringe_pump_complete' ? 3600 : undefined)]
   if (type === 'pump_complete') fields.push(channel)
   if (type.includes('temperature')) fields.push(num('tolerance', '温度容差（°C，默认 1）', 0))
-  if (type === 'microwave_temperature_reached') fields.push(num('target_temperature', '目标温度（°C）', 0, undefined, true))
+  if (['microwave_temperature_reached', 'microwave_temperature_below'].includes(type)) fields.push(num('target_temperature', '目标温度（°C）', 0, undefined, true))
   return fields
 }
 export function segmentFields(type: string): Field[] {

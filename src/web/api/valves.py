@@ -1,9 +1,11 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, StrictBool
 
-router = APIRouter(prefix="/valve", tags=["valve"])
+from src.web.api.devices import protect_guided_devices
+
+router = APIRouter(prefix="/valve", tags=["valve"], dependencies=[Depends(protect_guided_devices)])
 
 
 class ValveSwitchRequest(BaseModel):

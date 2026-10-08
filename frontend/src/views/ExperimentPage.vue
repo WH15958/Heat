@@ -1,6 +1,7 @@
 <template>
   <div class="experiment-page">
     <ExperimentGuide />
+    <el-button style="margin-bottom: 12px" type="primary" @click="router.push('/experiment/batch')">引导式实验</el-button>
     <el-row :gutter="20">
       <el-col :xs="24" :md="8">
         <el-card shadow="hover">
