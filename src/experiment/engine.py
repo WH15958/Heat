@@ -267,6 +267,19 @@ class ExperimentEngine:
             self._notify_complete()
         return self._stop_result
 
+    async def wait_finished(self):
+        """Wait for execution and terminal cleanup without cancelling device work."""
+        if self._task is not None:
+            try:
+                await self._task
+            except Exception:
+                self.request_stop()
+                cleanup_ok = await self._cleanup_active_devices()
+                self._stop_result = cleanup_ok
+                self._finish_terminal_run(ExperimentState.FAILED, RunStatus.FAILED.value,
+                                          cleanup_complete=cleanup_ok)
+                raise
+
     async def _finish_stopped_run(self) -> bool:
         cleanup_ok = await self._cleanup_active_devices()
         if not cleanup_ok:

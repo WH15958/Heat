@@ -157,3 +157,7 @@ npm run build -- --mode production
 ```powershell
 python -m pytest tests\test_campaigns.py -q
 ```
+
+批量条件设计 Demo（`/experiment/batch/template`）独立于 Campaign：从现有 YAML 生成参数组合，使用既有 batch_id、condition_id、sample_index 标记另存的单组文件，不创建 Trial，不注入 recommendation，不启动实验或实验队列。具体操作见用户指南“批量条件设计 Demo”。
+
+引导式完整批次执行（/experiment/batch）复用现有实验引擎和单组 run_id/sample_id，记录 batch_id、condition_id、sample_index 及本组参数。它不创建 Campaign Trial，不注入 recommendation，也不授权 planner 启动设备。模板参数设计入口仍为独立的另存工具。

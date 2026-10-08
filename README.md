@@ -16,8 +16,9 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 - 协议：AIBUS、MODBUS RTU
 - 实验定义：YAML，支持图形编排与 YAML 双模式编辑
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
-- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/campaigns`、`/history`
-- API 前缀：设备 `/api`、实验 `/api/experiments`、Campaign `/api/campaigns`
+- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/experiment/batch`、`/campaigns`、`/history`
+- API 前缀：设备 `/api`、实验 `/api/experiments`、引导式批次 `/api/guided`、Campaign `/api/campaigns`
+- 引导式批次：固定装置条件组合、双泵协调、45℃降温后自动从产物出口收取、收取清洗和逐组记录；复用真实设备接口，软件验证不替代设备验收。操作见 [用户指南](docs/user_guide.md#引导式批次实验)。
 
 ## 适用人群
 

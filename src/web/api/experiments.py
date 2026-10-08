@@ -119,6 +119,9 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
 
 
 async def _start_experiment_locked(filename: str, body: StartExperimentRequest, request: Request):
+    from src.web.api.guided import records
+    if any(r.get("recovery_required") for r in records()):
+        raise HTTPException(409, "存在中断的引导式批次，须先现场确认设备停止")
     dm = request.app.state.device_manager
     try:
         _validate_filename(filename)
@@ -147,6 +150,13 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
     for step in data["steps"]:
         if not step.enabled:
             continue
+        if step.type.value == "syringe_pair.dispense":
+            for feed in step.params["feeds"]:
+                try:
+                    if not dm.syringe(feed["device_id"]).device.is_connected():
+                        raise ValueError(f"{feed['device_id']} 未连接")
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from exc
         if step.type.value == "valve.switch":
             device_id = step.params["device_id"]
             valve = getattr(dm, "valves", {}).get(device_id)

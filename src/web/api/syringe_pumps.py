@@ -1,8 +1,9 @@
 import asyncio
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from src.devices.syringe_commands import SyringeCommand
+from src.web.api.devices import protect_guided_devices
 
-router = APIRouter(prefix="/syringe_pump", tags=["syringe_pump"])
+router = APIRouter(prefix="/syringe_pump", tags=["syringe_pump"], dependencies=[Depends(protect_guided_devices)])
 
 
 def controller(request, device_id):

@@ -771,3 +771,36 @@ interval_time: 0
 ```
 
 切换写入后读回继电器寄存器，不代表实物流路传感反馈。失败策略必须为 stop，禁止 skip。需要稳定等待时使用现有 duration；示例时长不是硬件保证。启动时占用阀门，暂停、停止、完成和失败都保持阀位，只在显式步骤中切换；恢复不会重放已完成步骤。两位置均有流路，不能用本动作关闭所有出口。
+
+
+### 降温等待：microwave_temperature_below
+
+用于微波停止后、产物阀切换与抽液之前的降温门槛。读取微波仪物料温度，只有有效有限非负数值 ≤ target_temperature 才通过，不使用 tolerance 放宽上限。已低于上限时可立即通过；读取异常、无效温度或超时均失败，暂停期间不放行，停止可中断。步骤必须启用且 on_error 为 stop，timeout 必须大于零。此等待不主动启动冷却设备，也不保证任意其他 YAML 流程自动带有保护，必须放在抽液前。
+
+```yaml
+- id: cool_before_collection
+  type: wait
+  on_error: stop
+  wait:
+    type: microwave_temperature_below
+    device_id: microwave1
+    target_temperature: 45
+    timeout: 3600
+```
+
+引导式片段使用 45℃门槛；60 分钟仅为暂定超时上限，须由实验室验证。引导式完整批次会在收取前复查降温条件，再切换产物阀并抽液。
+
+
+### 双泵排液
+
+新增 `syringe_pair.dispense`，params.feeds 必须为两个不同已配置注射泵的排液参数对象，仅允许 device_id、volume、unit、speed、timeout；每路复用 SyringeCommand 的 dispense 校验与行程确认。动作必须 enabled=true、on_error=stop。已有同步驱动不变，由上层并行下发并等待两路完成，一路失败停止两路。暂停只在整对动作边界生效，不能保证精确硬件同步启动。
+
+```yaml
+- id: feed_both
+  type: syringe_pair.dispense
+  on_error: stop
+  params:
+    feeds:
+      - {device_id: syringe_pump1, volume: 0.1, unit: mL, speed: 100, timeout: 120}
+      - {device_id: syringe_pump2, volume: 0.1, unit: mL, speed: 100, timeout: 120}
+```

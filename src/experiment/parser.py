@@ -69,6 +69,7 @@ ACTION_MAP = {
 }
 
 ACTION_MAP.update({a.value: a for a in ActionType if a.value.startswith("syringe_pump.")})
+ACTION_MAP.update({a.value: a for a in (ActionType.SYRINGE_PAIR_DISPENSE,)})
 
 WAIT_MAP = {
     "syringe_pump_complete": WaitType.SYRINGE_PUMP_COMPLETE,
@@ -76,6 +77,7 @@ WAIT_MAP = {
     "duration": WaitType.DURATION,
     "temperature_reached": WaitType.TEMPERATURE_REACHED,
     "microwave_temperature_reached": WaitType.MICROWAVE_TEMPERATURE_REACHED,
+    "microwave_temperature_below": WaitType.MICROWAVE_TEMPERATURE_BELOW,
     "microwave_complete": WaitType.MICROWAVE_COMPLETE,
     "pump_complete": WaitType.PUMP_COMPLETE,
 }
@@ -154,7 +156,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
             tolerance = _validate_nonnegative_finite_number(
                 tolerance, "wait.tolerance", step_label
             )
-        if wait_type_name == "microwave_temperature_reached":
+        if wait_type_name in {"microwave_temperature_reached", "microwave_temperature_below"}:
             target_temperature = _validate_nonnegative_finite_number(
                 target_temperature, "wait.target_temperature", step_label
             )
@@ -187,8 +189,39 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         step_ids.add(step_id)
 
         on_error = s.get("on_error", "stop")
+        if wait_type_name == "microwave_temperature_below":
+            if on_error != "stop" or s.get("enabled", True) is not True:
+                raise ValueError("Cooling wait must be enabled and requires on_error=stop")
+            if not isinstance(wait.device_id, str) or not wait.device_id.strip():
+                raise ValueError("Cooling wait requires wait.device_id")
+            if timeout <= 0:
+                raise ValueError("Cooling wait requires a positive timeout")
         if on_error not in {"stop", "skip"}:
             raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
+
+        if action_type in (ActionType.SYRINGE_PAIR_DISPENSE,):
+            if on_error != "stop" or enabled is not True:
+                raise ValueError("Coordinated steps must be enabled and require on_error=stop")
+        if action_type == ActionType.SYRINGE_PAIR_DISPENSE:
+            from src.devices.syringe_commands import SyringeCommand
+            feeds = params.get("feeds")
+            if set(params) != {"feeds"} or not isinstance(feeds, list) or len(feeds) != 2:
+                raise ValueError("syringe_pair.dispense requires two feeds")
+            ids = []
+            for feed in feeds:
+                if not isinstance(feed, dict) or not isinstance(feed.get("device_id"), str) or not feed["device_id"].strip():
+                    raise ValueError("Each feed requires device_id")
+                if set(feed) - {"device_id", "volume", "unit", "speed", "timeout"}:
+                    raise ValueError("Unsupported parallel feed parameter")
+                SyringeCommand.model_validate({"action": "dispense", **{k: v for k, v in feed.items() if k != "device_id"}})
+                ids.append(feed["device_id"])
+            if len(set(ids)) != 2:
+                raise ValueError("Parallel feeds require distinct syringe pumps")
+            if validate_devices:
+                from src.utils.config import ConfigManager
+                configured = {c.device_id for c in ConfigManager().load().syringe_pumps if c.enabled}
+                if any(did not in configured for did in ids):
+                    raise ValueError("Device is not a configured syringe_pump type")
 
         if action_type == ActionType.VALVE_SWITCH:
             if set(params) != {"device_id", "position"}:

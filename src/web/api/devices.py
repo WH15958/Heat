@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import List
 
 from src.devices.microwave import MicrowaveSegment
@@ -12,7 +12,29 @@ from src.experiment.parameter_models import (
     MicrowaveSegmentRequest, MicrowaveConfigureRequest, MicrowaveStartRequest,
 )
 
-router = APIRouter(tags=["devices"])
+async def protect_guided_devices(request: Request):
+    # Serialize manual writes with batch registration. Reads never take this lock.
+    if request.method not in ("POST", "PUT", "DELETE") or request.url.path.endswith("/emergency_stop"):
+        yield
+        return
+    from src.web.api.experiments import _engines, _source_lock
+    from src.experiment.guided import GuidedBatch
+    async with _source_lock:
+        batches = [b for b in _engines.values() if isinstance(b, GuidedBatch)
+                   and (b.state.value in ("running", "paused") or b.cleanup_pending)]
+        if batches:
+            is_stop = request.url.path.endswith("/stop")
+            if request.url.path.endswith("/command"):
+                is_stop = (await request.json()).get("action") == "stop"
+            if is_stop:
+                for batch in batches:
+                    batch.request_stop()
+            else:
+                raise HTTPException(409, "引导式批次占用装置；请先停止批次再手动操作")
+        yield
+
+
+router = APIRouter(tags=["devices"], dependencies=[Depends(protect_guided_devices)])
 
 
 def get_dm(request: Request) -> "DeviceManager":

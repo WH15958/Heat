@@ -462,3 +462,26 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 断开和服务关闭保持阀位；未确认安全流路时全局急停保留阀位、返回未确认报告，不宣称流路全部关闭。软件驱动读回只确认继电器寄存器，不能确认管路实态。提供手动控制与 valve.switch YAML 动作；执行器在启动时占用阀门，清理成功后释放。停止世代号及停止检查取消排队切换，不自动复位。WebSocket 通过现有读取协调器发送 valves，读取失败或超时表示未知。实验记录 steps[].device_result 与 sensor_data.valves；physical_route_confirmed 始终为 false。
 
 软件检查：`python -m unittest tests.test_relay_valve -v`，覆盖只读连接/刷新、超时不重试、读回不一致、失败状态失信、API错误与全局停止；实机切换和流路检查由现场验收。
+### 批量条件设计前端
+
+`/experiment/batch/template` 使用现有实验列表、source、validate 和 source PUT 接口，无新增后端接口或硬件调用。`frontend/src/experiment/batch.ts` 从真实模板发现有限类型的数值参数，通过现有文档树局部修改生成组合。最多 200 组，校验逐组调用原后端，保存传空 revision 仅创建新文件。来源为加载时的文件快照，页面显示来源摘要；修改模板后需要重新加载。
+
+每组沿用 metadata 的既有 batch_id、condition_id、sample_index 字段，并移除模板的 sample_id，使原运行链重新生成样品身份。未实现持久化批次队列和自动启动；与 Campaign/planner 无自动连接。测试：`cd frontend; npx tsx --test tests/batch.test.ts tests/experimentDocument.test.ts`。
+
+### 引导式完整后端
+
+`src/experiment/guided.py` 定义严格请求模型、后端条件组合、固定液路完整 recipe 和 GuidedBatch。调用原 parser、StepExecutor、ExperimentEngine 和 ExperimentLogger，每组一个真实运行及 sample_id；不用另建驱动或后台串口线程。最多 200 组、每组最多 10 次清洗；加热温度及剂量以当前设备配置范围校验。
+
+`/api/guided/preview` POST 只生成校验完整流程，返回 rows、recipes、yaml 和 total_groups，无硬件访问。请求 axes 是六个非空且不含重复数值的数值列表，依次为 A/B 温度、A/B 剂量、反应温度和保温分钟。repeats、speed_a/b、product_port、drain_flow、clean_volume、clean_flow、clean_dwell、clean_cycles 配置组合及固定操作；clean_direction、drain_direction 指定现场泵向，plumbing_confirmed 在开始时必须为 true。默认 heating_timeout=600、syringe_timeout=120、cooling_timeout=3600，均可在模型范围内调整。
+
+`/api/guided/start` POST 使用同一请求，读设备就绪状态、预留注射泵和阀、原子保存计划，然后启动后台批次任务。注册到原 experiments._engines 并使用 _source_lock，整批占用期间阻止其他实验启动。设备 REST 写入与批次注册串行；引导批次占用时拒绝手动配置/启动/断开，手动停止会同时请求停止整批。注射泵及阀保持既有所有权，跨组保留直到最终清理，普通实验默认清理行为不变。
+
+GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返回状态、当前组、进度和单组 run_id/sample_id。POST `/{batch_id}/pause|resume|stop` 控制整批；stop 的 success=false 代表清理或保存未确认成功。逐组收取自动执行，没有换瓶确认接口或等待步骤。
+
+双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，初始化必须事前完成，不会隐式回零。
+
+微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃；温度读取失败、微波故障或仍输出不放行。收取前重复此检查，再切换产物出口及抽液。pump.start 使用已有 TIME_QUANTITY、pump_complete 和显式 stop_channel，理论流量不冒充实际排空传感器。
+
+启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
+
+前端仅在显式按钮操作时发控制请求；定时读取状态及页面/WebSocket生命周期不启动或停止硬件。Campaign/planner 无自动连接。软件验证不替代设备验收。

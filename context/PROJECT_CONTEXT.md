@@ -41,10 +41,13 @@
   - `/control`
   - `/experiment`
   - `/experiment/editor`（图形编排 / YAML 编辑）
+  - `/experiment/batch`（中文引导式固定装置条件组合与完整后端批次执行）
+  - `/experiment/batch/template`（已有模板参数设计与单组另存）
   - `/campaigns`
   - `/history`
 - 设备接口前缀：`/api`
 - 实验接口前缀：`/api/experiments`
+- 引导式批次接口前缀：`/api/guided`
 - Campaign 接口前缀：`/api/campaigns`
 - WebSocket：`/ws`
 
@@ -60,6 +63,8 @@
 - `pump.start`
 - `pump.stop`
 - `pump.stop_channel`
+- `valve.switch`
+- `syringe_pair.dispense`
 - `microwave.configure_manual`
 - `microwave.configure_auto_power`
 - `microwave.configure_constant_rate`
@@ -76,6 +81,7 @@
 - `temperature_reached`
 - `pump_complete`
 - `microwave_temperature_reached`
+- `microwave_temperature_below`
 - `microwave_complete`
 
 不要在文档或代码里编造当前不存在的动作名。
@@ -366,3 +372,9 @@ AI 不应做的是：
 - 保持寄存器0，0x06写0/1、0x03读回；驱动纯同步、复用串口管理、写入不自动重试。启动/页面/状态读取不控制阀位。
 - `/api/valve/{id}` 提供 connect/disconnect/status/switch；控制页新增三通阀，按继电器通电/断电位置显示，不冒充实际流路反馈。新增 valve.switch YAML动作（position 为 NO/NC），仪表盘、实时状态、图形编排和历史记录已接入。实验占用期间禁止手动切换/断开；暂停、停止、完成及失败保持当前阀位，恢复不重放已完成切换。
 - 三通阀断电不等于流路全部关闭。安全流路未由现场确认，因此断开与清理保持阀位，全局急停保持阀位并明确报告停止未确认，取消过期排队切换。实际切换、阀体T版本、电压、线圈极性、出口映射均需现场验收。
+
+### 引导式产物收集边界（2026-10-08）
+
+- 引导式 Demo 不包含圆盘或自动收液装置，也不设置收集位置。产物从三通阀产物出口排出，由现场安排产物瓶更换，程序不等待换瓶确认。完整后端现已接通，降温达标并在收取前复查后自动切阀、抽液。
+
+引导式完整后端已接通：guided.py 固定流程编译及 GuidedBatch 复用既有引擎、记录和设备接口，/api/guided 提供 preview/start/status/pause/resume/stop。双泵 syringe_pair.dispense 由上层并行下发各自完成，一路失败停止两路。45℃降温判断和收取前温度复查串联产物阀及抽液；泵液使用真实定时定量模式及完成读回。跨组保留泵/阀所有权，注册到 _engines 并与普通实验互斥。批次原子记录位于 output/guided_batches，完整流程快照位于其 plans 子目录，每组仍有 run_id/sample_id。服务重启不自动续跑，中断/待清理记录阻止所有实验启动，须人工确认设备停止解除。页面生命周期不控制硬件，启动不自动连接或初始化。仅通过软件验证，液路、流量、停止及温度行为待实验室验收。
