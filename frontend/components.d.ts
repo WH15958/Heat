@@ -37,6 +37,7 @@ declare module 'vue' {
     ElTabPane: typeof import('element-plus/es')['ElTabPane']
     ElTabs: typeof import('element-plus/es')['ElTabs']
     ElTag: typeof import('element-plus/es')['ElTag']
+    ExperimentGuide: typeof import('./src/components/ExperimentGuide.vue')['default']
     HeaterControl: typeof import('./src/components/HeaterControl.vue')['default']
     MicrowaveControl: typeof import('./src/components/MicrowaveControl.vue')['default']
     ParameterFields: typeof import('./src/components/experiment/ParameterFields.vue')['default']
