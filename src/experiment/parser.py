@@ -62,6 +62,7 @@ ACTION_MAP = {
     "pump.start": ActionType.PUMP_START,
     "pump.stop": ActionType.PUMP_STOP,
     "pump.stop_channel": ActionType.PUMP_STOP_CHANNEL,
+    "valve.switch": ActionType.VALVE_SWITCH,
     "wait": ActionType.WAIT,
     "emergency_stop": ActionType.EMERGENCY_STOP,
     "log": ActionType.LOG,
@@ -189,6 +190,20 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         if on_error not in {"stop", "skip"}:
             raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
 
+        if action_type == ActionType.VALVE_SWITCH:
+            if set(params) != {"device_id", "position"}:
+                raise ValueError("valve.switch requires only device_id and position")
+            if not isinstance(params["device_id"], str) or not params["device_id"].strip():
+                raise ValueError("valve.switch requires a non-empty device_id")
+            if params["position"] not in ("NO", "NC"):
+                raise ValueError("valve position must be NO or NC")
+            if on_error != "stop":
+                raise ValueError("valve.switch requires on_error=stop; unknown flow route cannot be skipped")
+            if validate_devices:
+                from src.utils.config import ConfigManager
+                valve_ids = {c.device_id for c in ConfigManager().load().valves if c.enabled}
+                if params["device_id"] not in valve_ids:
+                    raise ValueError("Device is not a configured valve type")
         if action_type.value.startswith("syringe_pump."):
             from src.devices.syringe_commands import SyringeCommand
             if not isinstance(params.get("device_id"), str) or not params["device_id"]:

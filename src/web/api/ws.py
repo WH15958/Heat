@@ -241,6 +241,21 @@ async def build_realtime_payload(
                     "error": "read_failed",
                 }, dm.get_microwave_binding(did))
 
+    payload["valves"] = {}
+    for did, valve in getattr(dm, "valves", {}).items():
+        if not valve.is_connected():
+            continue
+        try:
+            payload["valves"][did] = await read_coordinator.read(
+                ("valve", did), lambda did=did: dm.valve_operation(did, "status"), 5.0)
+        except Exception as exc:
+            # Do not synchronously wait for a reader that timed out holding a lock.
+            payload["valves"][did] = {
+                "connected": valve.is_connected(), "read_ok": False,
+                "relay_energized": None, "physical_route_confirmed": False,
+                "connection_port": valve.config.connection_params.get("port"),
+                "error": str(exc),
+            }
     payload["syringe_pumps"] = {}
     for did, controller in getattr(dm, "syringe_pumps", {}).items():
         try:

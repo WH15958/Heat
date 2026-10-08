@@ -56,6 +56,9 @@
           @stop-channel="stopPumpChannel"
           @stop-all="stopPumpAll"
         />
+        <section v-show="selectedDevice === 'valve'" aria-label="三通阀设备">
+          <ValveControl v-for="(valve, id) in valves" :key="id" :valve-id="id" :state="valve" @update="updateValve" />
+        </section>
         <div v-show="selectedDevice === 'syringe'">
           <SyringePumpGroup @devices="syringeDevices = $event" />
         </div>
@@ -70,6 +73,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { devicesApi, FLOW_UNITS, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type MicrowaveSegmentPayload, type PumpMode } from '../api/devices'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket, type MicrowaveRealtimeData } from '../composables/useWebSocket'
+import ValveControl from '../components/ValveControl.vue'
+import type { ValveState } from '../api/devices'
 import HeaterControl from '../components/HeaterControl.vue'
 import PumpControl from '../components/PumpControl.vue'
 import MicrowaveControl from '../components/MicrowaveControl.vue'
@@ -77,9 +82,23 @@ import SyringePumpGroup from '../components/SyringePumpGroup.vue'
 import type { SyringeState } from '../api/syringePumps'
 import { normalizeTubeSegmentLengths } from '../utils/pumpCalculations'
 
+const valves = reactive<Record<string, ValveState>>({})
+function updateValve(id: string, state: ValveState) { valves[id] = state }
+
 const STORAGE_KEY = 'heat_control_params'
 
-const { data: realtimeData } = useWebSocket()
+const { data: realtimeData, connected: wsConnected } = useWebSocket()
+watch(realtimeData, payload => {
+  for (const [id, state] of Object.entries(payload?.valves || {})) {
+    if (valves[id]) valves[id] = { ...valves[id], ...state }
+  }
+})
+watch(wsConnected, online => {
+  if (!online) for (const state of Object.values(valves)) {
+    state.read_ok = false
+    state.relay_energized = null
+  }
+})
 
 interface ChannelConfig {
   flowRate: number
@@ -173,6 +192,7 @@ const selectedDevice = ref('')
 let initialSelectionReady = false
 const syringeDevices = ref<Record<string, SyringeState>>({})
 const controlDeviceEntries = computed(() => [
+  ...Object.entries(valves).map(([id, device]) => ({ key: `valve:${id}`, name: '三通阀', port: device.connection_port, connected: device.connected, status: !device.connected ? '未连接' : device.read_ok ? '已连接' : '状态未知' })),
   ...Object.entries(devices.heaters).map(([id, device], index) => ({ key: `heater:${id}`, name: `加热器${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.disconnectFailed ? '连接异常' : device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.pumps).map(([id, device], index) => ({ key: `pump:${id}`, name: `蠕动泵${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.microwaves).map(([id, device], index) => ({ key: `microwave:${id}`, name: `微波仪${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
@@ -183,6 +203,7 @@ const controlDevices = computed(() => [
   { key: 'pump', name: '蠕动泵' },
   { key: 'microwave', name: '微波仪' },
   { key: 'syringe', name: '注射泵' },
+  { key: 'valve', name: '三通阀' },
 ].map(group => {
   const members = controlDeviceEntries.value.filter(device => device.key.startsWith(group.key + ':'))
   const connectedCount = members.filter(device => device.connected).length
@@ -390,6 +411,8 @@ function hasUnresolvedBinding(data: any): boolean {
 }
 
 function applyDeviceData(data: any) {
+  for (const id of Object.keys(valves)) if (!data.valves?.[id]) delete valves[id]
+  Object.assign(valves, data.valves || {})
   for (const [id, info] of Object.entries(data.heaters || {})) {
     if (!devices.heaters[id]) {
       devices.heaters[id] = { connected: false, disconnectFailed: false, loading: false, targetTemp: 25.0, starting: false, stopping: false, bindingResolved: true }

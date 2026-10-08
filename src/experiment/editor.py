@@ -167,6 +167,7 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
                 'pump': {d.device_id for d in config.pumps if d.enabled},
                 'microwave': {d.device_id for d in config.microwaves if d.enabled},
                 'syringe_pump': {d.device_id for d in config.syringe_pumps if d.enabled},
+                'valve': {d.device_id for d in config.valves if d.enabled},
             }
             for index, step in enumerate(data['steps']):
                 group = step['type'].split('.')[0]

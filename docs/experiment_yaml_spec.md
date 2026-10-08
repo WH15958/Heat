@@ -752,3 +752,22 @@ interval_time: 0
 实验暂停不发送硬件h，不终止已下发动作/有限程序；停止下发后续动作，恢复不重放。完成或暂停期间持续监视故障，停止请求可中断等待。`syringe_pump.pause` 不用于YAML，手动硬件暂停在控制页使用。清理停止失败会保留设备占用并报告失败。
 
 示例见 [单泵水测试](../experiments/syringe_single_water.yaml)、[双泵顺序协作](../experiments/syringe_dual_water.yaml)。均须手动连接、完成现场验收后由用户明确启动，不改变现有实验配方。完整能力范围见 [功能覆盖表](syringe_pump_integration.md#命令参数返回与入口对应)。
+
+
+## 三通阀动作 valve.switch
+
+只接受 device_id 与 position（大写 NO 或 NC），设备必须是已启用配置中的阀门，运行前手动连接。当前 COM–NO 继电器接线下，NO 表示断电公共口通流体 NO，NC 表示通电公共口通流体 NC。需现场确认阀体为 0127 T 及实际出口。
+
+```yaml
+- id: select_no
+  type: valve.switch
+  params:
+    device_id: valve1
+    position: NO
+  wait:
+    type: duration
+    seconds: 0.2
+  on_error: stop
+```
+
+切换写入后读回继电器寄存器，不代表实物流路传感反馈。失败策略必须为 stop，禁止 skip。需要稳定等待时使用现有 duration；示例时长不是硬件保证。启动时占用阀门，暂停、停止、完成和失败都保持阀位，只在显式步骤中切换；恢复不会重放已完成步骤。两位置均有流路，不能用本动作关闭所有出口。

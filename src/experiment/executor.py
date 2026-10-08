@@ -36,9 +36,31 @@ class StepExecutor:
         self._active_syringes = set()
         self._reserved_syringes = set()
         self._syringe_owner = object()
+        self._reserved_valves = set()
+        self._valve_owner = object()
         self._last_error = None
         self._current_step = None
         self.last_device_result = None
+
+    async def reserve_valves(self, steps):
+        ids = {s.params["device_id"] for s in steps if s.enabled and s.type == ActionType.VALVE_SWITCH}
+        try:
+            for device_id in sorted(ids):
+                await asyncio.to_thread(self._dm.claim_valve, device_id, self._valve_owner)
+                self._reserved_valves.add(device_id)
+        except Exception:
+            await self.release_valves()
+            raise
+
+    async def release_valves(self):
+        for device_id in list(self._reserved_valves):
+            await asyncio.to_thread(self._dm.release_valve, device_id, self._valve_owner)
+            self._reserved_valves.discard(device_id)
+
+    def cancel_pending_valve_operations(self):
+        cancel = getattr(self._dm, "cancel_valve_operations", None)
+        if callable(cancel):
+            cancel(self._reserved_valves)
 
     async def reserve_syringes(self, steps):
         ids = set()
@@ -153,6 +175,22 @@ class StepExecutor:
                 if params["action"] in ("initialize", "configure", "move", "aspirate", "dispense", "valve", "program_run", "repeat"):
                     if not await self._wait_syringe(device_id, params.get("timeout", 120)):
                         return False
+
+            elif step.type == ActionType.VALVE_SWITCH:
+                if self._should_stop() or await self._wait_for_resume() is None:
+                    return False
+                device_id = step.params["device_id"]
+                position = step.params["position"]
+                try:
+                    result = await asyncio.to_thread(self._dm.valve_operation, device_id, "switch",
+                                                     position == "NC", self._valve_owner, self._should_stop)
+                    self.last_device_result = {"device_type": "valve", "target_position": position, **result}
+                    if not result.get("read_ok") or result.get("relay_energized") is not (position == "NC"):
+                        return False
+                except Exception:
+                    state = await asyncio.to_thread(self._dm.valve_status, device_id)
+                    self.last_device_result = {"device_type": "valve", "target_position": position, **state}
+                    raise
 
             elif step.type == ActionType.HEATER_SET_TEMP:
                 result = await loop.run_in_executor(
@@ -433,6 +471,9 @@ class StepExecutor:
                 self._active_microwaves.discard(device_id)
             else:
                 success = False
+
+        if success:
+            await self.release_valves()
 
         return success
 

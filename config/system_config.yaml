@@ -149,6 +149,21 @@ syringe_pumps:
         serial_number: "A9BSB2A7N11"
         fallback_to_port: false
 
+valves:
+  - device_id: "valve1"
+    name: "三通阀"
+    enabled: true
+    connection:
+      port: "COM7"
+      baudrate: 38400
+      address: 1
+      parity: "N"
+      timeout: 1.0
+      binding:
+        mode: "fingerprint"
+        serial_number: "DU0ER6Y3A"
+        fallback_to_port: false
+
 monitor:
   enabled: true
   log_interval: 1.0

@@ -84,6 +84,13 @@
 
         <h4 style="margin: 12px 0 8px">步骤详情</h4>
         <SyringeHistory :series="detailData.sensor_data?.syringe_pumps" />
+        <div v-for="(states, id) in detailData.sensor_data?.valves || {}" :key="id">
+          <h4>三通阀 {{ id }} 状态记录（继电器读回）</h4>
+          <el-table :data="states" size="small" max-height="200">
+            <el-table-column prop="t" label="时间（秒）" />
+            <el-table-column label="流路位置"><template #default="{ row }">{{ row.read_ok ? row.position : '未知 / 读取失败' }}</template></el-table-column>
+          </el-table>
+        </div>
         <el-table :data="detailData.steps || []" stripe size="small" max-height="400">
           <el-table-column prop="step_index" label="#" width="50" />
           <el-table-column prop="step_id" label="步骤ID" width="150" />
@@ -106,6 +113,12 @@
           <el-table-column prop="error" label="错误">
             <template #default="{ row }">
               <span v-if="row.error" style="color: #f56c6c">{{ row.error }}</span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="设备结果" min-width="220">
+            <template #default="{ row }">
+              <span v-if="row.device_result">{{ JSON.stringify(row.device_result) }}</span>
               <span v-else style="color: #c0c4cc">-</span>
             </template>
           </el-table-column>
@@ -182,6 +195,7 @@ interface MicrowaveSensorData {
 }
 
 interface SensorData {
+  valves?: Record<string, { t: number; read_ok: boolean; position: string | null }[]>
   syringe_pumps?: Record<string, { position?: TimePoint[]; theoretical_volume_ul?: TimePoint[]; states?: unknown[] }>
   heaters: Record<string, HeaterSensorData>
   pumps: Record<string, Record<string, ChannelSensorData>>
@@ -641,8 +655,9 @@ function exportRunText(data: RunData): string {
     lines.push(`[${step.step_index + 1}] ${step.step_id} | ${step.action_type} | ${statusLabel(step.status)} | 耗时: ${step.duration?.toFixed(1) || '-'}s${step.error ? ' | 错误: ' + step.error : ''}`)
   }
   for (const step of data.steps || []) {
-    if (step.device_result) lines.push(`注射泵步骤 ${step.step_id}: ${JSON.stringify(step.device_result)}`)
+    if (step.device_result) lines.push(`设备步骤 ${step.step_id}: ${JSON.stringify(step.device_result)}`)
   }
+  if (data.sensor_data?.valves) lines.push(`三通阀状态（继电器读回）: ${JSON.stringify(data.sensor_data.valves)}`)
   if (data.sensor_data?.syringe_pumps) lines.push(`注射泵采样（理论体积）: ${JSON.stringify(data.sensor_data.syringe_pumps)}`)
   return lines.join('\n')
 }

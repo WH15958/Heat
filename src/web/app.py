@@ -12,6 +12,7 @@ from src.utils.serial_binding import resolve_connection
 from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
 from src.web.api.syringe_pumps import router as syringe_router
+from src.web.api.valves import router as valves_router
 from src.web.api.experiments import router as experiments_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
@@ -142,6 +143,9 @@ def create_device_manager() -> DeviceManager:
             binding_info=binding_info,
         )
         logger.info(f"Registered microwave: {m_cfg.device_id}")
+    for cfg in config.valves:
+        if cfg.enabled:
+            dm.add_valve(cfg, _resolve_registered_port(cfg.device_id, cfg.connection))
     for cfg in config.syringe_pumps:
         if cfg.enabled:
             dm.add_syringe_pump(cfg)
@@ -212,6 +216,7 @@ app.add_middleware(
 
 app.include_router(devices_router, prefix="/api")
 app.include_router(syringe_router, prefix="/api")
+app.include_router(valves_router, prefix="/api")
 app.include_router(experiments_router, prefix="/api")
 app.include_router(campaigns_router, prefix="/api")
 app.include_router(ws_router)

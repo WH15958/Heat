@@ -77,7 +77,21 @@ const MICROWAVE_CONFIG_PATH: Record<MicrowaveMode, string> = {
   constant_rate: 'constant_rate',
 }
 
+export interface ValveState {
+  connected: boolean
+  status: string
+  connection_port: string
+  binding_label: string
+  binding_resolved: boolean
+  read_ok: boolean
+  relay_energized: boolean | null
+  physical_route_confirmed: boolean
+  experiment_owned?: boolean
+}
+
 export const devicesApi = {
+  valveOperation: (id: string, action: 'connect' | 'disconnect' | 'status' | 'switch', energized?: boolean) =>
+    action === 'status' ? api.get(`/valve/${id}/status`) : api.post(`/valve/${id}/${action}`, action === 'switch' ? { energized } : undefined),
   list: () => api.get('/devices'),
   refreshBindings: () => api.post('/devices/refresh_bindings'),
 

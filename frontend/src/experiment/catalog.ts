@@ -2,6 +2,7 @@ import { FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, PUMP_MODES, TUBE_MODELS, MICROWAV
 import heater from '../assets/theme/heater.webp'
 import pump from '../assets/theme/pump.webp'
 import microwave from '../assets/theme/microwave.webp'
+import valve from '../assets/theme/valve.webp'
 import syringe from '../assets/theme/syringe-pump.webp'
 import type { Step } from './document'
 
@@ -10,12 +11,13 @@ export interface Field {
   required?: boolean; min?: number; max?: number; integer?: boolean
   options?: readonly { value: string | number; label: string }[]
 }
-export interface Action { type: string; label: string; group: string }
+export interface Action { type: string; label: string; group: string; position?: string }
 export const groups = [
   { key: 'heater', label: '加热器', image: heater, devices: 'heaters' },
   { key: 'pump', label: '蠕动泵', image: pump, devices: 'pumps' },
   { key: 'microwave', label: '微波仪', image: microwave, devices: 'microwaves' },
   { key: 'syringe_pump', label: '注射泵', image: syringe, devices: 'syringe_pumps' },
+  { key: 'valve', label: '三通阀', image: valve, devices: 'valves' },
   { key: 'general', label: '通用', image: '', devices: '' },
 ]
 const names: Record<string, Record<string, string>> = {
@@ -23,10 +25,16 @@ const names: Record<string, Record<string, string>> = {
   pump: { start: '启动泵通道', stop: '停止整台泵', stop_channel: '停止泵通道' },
   microwave: { configure_manual: '配置手动功率', configure_auto_power: '配置自动功率', configure_constant_rate: '配置恒速率', start: '启动微波', stop: '停止微波' },
   syringe_pump: { initialize: '初始化（会运动）', configure: '配置运动参数', move: '绝对定位', aspirate: '吸取', dispense: '排出', valve: '切换阀位', stop: '停止注射泵', resume: '继续 / 释放输入等待', io: '数字输出', program_load: '装载程序', program_store: '存储 EEPROM', program_run: '执行程序', repeat: '重复上次程序' },
+  valve: { switch: '选择出液口（NO / NC）' },
   general: { wait: '等待', log: '记录日志', emergency_stop: '紧急停止' },
 }
-export const actions: Action[] = Object.entries(names).flatMap(([group, entries]) => Object.entries(entries).map(([key, label]) => ({ group, label, type: group === 'general' ? key : `${group}.${key}` })))
-export const actionLabel = (type: string) => actions.find(a => a.type === type)?.label || type
+export const actions: Action[] = Object.entries(names).flatMap(([group, entries]) => Object.entries(entries).flatMap(([key, label]) => group === 'valve' ? [
+  { group, label: '切到 NO 出口（断电）', type: 'valve.switch', position: 'NO' },
+  { group, label: '切到 NC 出口（通电）', type: 'valve.switch', position: 'NC' },
+] : [{ group, label, type: group === 'general' ? key : `${group}.${key}` }]))
+export const actionLabel = (type: string, params?: Step['params']) => type === 'valve.switch'
+  ? params?.position === 'NO' ? '公共口 → NO（断电）' : params?.position === 'NC' ? '公共口 → NC（通电）' : '三通阀：请选择目标出口'
+  : actions.find(a => a.type === type)?.label || type
 const num = (key: string, label: string, min?: number, max?: number, required = false, integer = false): Field => ({ key, label, kind: 'number', min, max, required, integer })
 const select = (key: string, label: string, values: readonly { value: string | number; label: string }[], required = false): Field => ({ key, label, kind: 'select', options: values, required })
 const options = (...values: string[]) => values.map(value => ({ value, label: value }))
@@ -36,6 +44,7 @@ const timeout = num('timeout', '动作超时（秒，默认 120）', 0.001, 3600
 export function parameterFields(step: Step): Field[] {
   const type = step.type, p = step.params || {}
   const fields: Field[] = type.includes('.') ? [device] : []
+  if (type === 'valve.switch') fields.push(select('position', '目标流路（保持至下次切换）', [{ value: 'NO', label: '公共口 → NO（断电）' }, { value: 'NC', label: '公共口 → NC（通电）' }], true))
   if (type === 'heater.set_temperature') fields.push(num('temperature', '目标温度（°C）', undefined, undefined, true))
   if (type === 'pump.stop_channel') fields.push(channel)
   if (type === 'pump.start') {
@@ -86,6 +95,7 @@ export function segmentFields(type: string): Field[] {
   return fields
 }
 export function executionHint(step: Step) {
+  if (step.type === 'valve.switch') return '选择公共入口通向 NO 或 NC 出口：NO 断电，NC 通电；切换后保持该位置，直到下次明确切换。此动作不启动泵，实际出口需现场确认。'
   if (step.type.startsWith('syringe_pump.') && ['initialize', 'configure', 'move', 'aspirate', 'dispense', 'valve', 'program_run', 'repeat'].includes(step.type.split('.')[1]!)) return '动作完成后继续；暂停实验不打断已下发动作'
   if (['heater.start', 'pump.start', 'microwave.start'].includes(step.type)) return step.wait?.type && step.wait.type !== 'none' ? '启动后按附加等待条件继续' : '确认启动后继续，设备可能持续运行'
   return step.wait?.type && step.wait.type !== 'none' ? '动作后等待条件满足再继续' : '动作返回后继续'

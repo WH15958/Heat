@@ -543,6 +543,24 @@ class SyringePumpConfig(BaseConfig):
 
 
 @dataclass
+class ValveDeviceConfig(BaseConfig):
+    device_id: str = "valve1"
+    name: str = "三通阀"
+    enabled: bool = True
+    connection: DeviceConnectionConfig = field(default_factory=DeviceConnectionConfig)
+
+    def validate(self):
+        errors = self.connection.validate()
+        if not self.device_id:
+            errors.append("设备ID不能为空")
+        if not _is_strict_bool(self.enabled):
+            errors.append("enabled 必须为布尔值")
+        if self.connection.address != 1:
+            errors.append("当前阀门驱动仅支持站号1")
+        return errors
+
+
+@dataclass
 class SystemConfig(BaseConfig):
     """系统主配置"""
     name: str = "自动化控制系统"
@@ -551,6 +569,7 @@ class SystemConfig(BaseConfig):
     pumps: List[PumpDeviceConfig] = field(default_factory=list)
     microwaves: List[MicrowaveDeviceConfig] = field(default_factory=list)
     syringe_pumps: List[SyringePumpConfig] = field(default_factory=list)
+    valves: List[ValveDeviceConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -601,6 +620,11 @@ class SystemConfig(BaseConfig):
             if pump.device_id in seen:
                 errors.append(f"重复设备ID: {pump.device_id}")
             seen.add(pump.device_id)
+        for valve in self.valves:
+            errors.extend(f"阀门{valve.device_id}: {e}" for e in valve.validate())
+            if valve.device_id in seen:
+                errors.append(f"重复设备ID: {valve.device_id}")
+            seen.add(valve.device_id)
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
         errors.extend(self.logging.validate())
@@ -718,6 +742,10 @@ class ConfigManager:
                 **{k: v for k, v in item.items() if k != "connection"},
                 connection=self._parse_connection_config({"port": "", **item.get("connection", {})}),
             ) for item in data.get("syringe_pumps", [])],
+            valves=[ValveDeviceConfig(
+                **{k: v for k, v in item.items() if k != "connection"},
+                connection=self._parse_connection_config(item.get("connection", {})),
+            ) for item in data.get("valves", [])],
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),
