@@ -41,14 +41,14 @@
         <h3>动作库</h3><p>点击添加，再拖动排序</p>
         <section v-for="group in groups" :key="group.key">
           <h4><img v-if="group.image" :src="group.image" alt="" />{{ group.label }}</h4>
-          <button v-for="action in actions.filter(a => a.group === group.key)" :key="action.type" @click="add(action.type)">＋ {{ action.label }}</button>
+          <button v-for="action in actions.filter(a => a.group === group.key)" :key="action.type + (action.position || '')" @click="add(action.type, action.position)">＋ {{ action.label }}</button>
         </section>
       </aside>
       <main class="step-canvas" aria-label="实验步骤">
         <div v-if="!steps.length" class="empty">从左侧添加第一个动作<br /><small>按从上到下的顺序执行</small></div>
         <article v-for="(step, index) in steps" :key="index" class="step-card" :class="{ selected: selected === index, disabled: step.enabled === false }" draggable="true" @dragstart="dragged = index" @dragend="dragged = null" @dragover.prevent @drop.prevent="drop(index)">
           <button class="step-select" @click="selected = index">
-            <span class="number">{{ index + 1 }}</span><strong>{{ actionLabel(step.type) }}</strong><span v-if="step.enabled === false">已禁用</span>
+            <span class="number">{{ index + 1 }}</span><strong>{{ actionLabel(step.type, step.params) }}</strong><span v-if="step.enabled === false">已禁用</span>
             <small>{{ step.id || '缺少 ID' }} · {{ step.params?.device_id || '通用动作' }}</small>
             <small>{{ summary(step) }}</small>
             <small>{{ executionHint(step) }}</small>
@@ -64,7 +64,7 @@
         </article>
       </main>
       <aside class="inspector" v-if="step">
-        <h3>{{ actionLabel(step.type) }}</h3>
+        <h3>{{ actionLabel(step.type, step.params) }}</h3>
         <label>步骤 ID<input :value="step.id" @change="set(['steps', selected, 'id'], inputText($event))" /></label>
         <p class="hint">{{ executionHint(step) }}</p>
         <ParameterFields :fields="parameterFields(step)" :values="step.params || {}" :devices="devicesFor(step.type.split('.')[0]!)" @change="(k, v) => set(['steps', selected, 'params', k], v)" />
@@ -142,8 +142,8 @@ function mutate(change: (doc: Document) => void) {
   try { changeSource(editSource(source.value, change)) } catch (e) { ElMessage.error(String(e)) }
 }
 function set(path: Path, value: unknown) { mutate(doc => setValue(doc, path, value)) }
-function add(type: string) {
-  mutate(doc => doc.addIn(['steps'], { id: uniqueId(doc, type), type, params: {}, enabled: true, on_error: 'stop' }))
+function add(type: string, position?: string) {
+  mutate(doc => doc.addIn(['steps'], { id: uniqueId(doc, type), type, params: position ? { position } : {}, enabled: true, on_error: 'stop' }))
   selected.value = stepsFrom(inspection.value.doc).length - 1
 }
 function move(from: number, to: number) { mutate(doc => moveStep(doc, from, to)); selected.value = to }

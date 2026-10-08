@@ -1,4 +1,5 @@
 import { ref, onMounted, onUnmounted } from 'vue'
+import type { ValveState } from '../api/devices'
 import type { SyringeState } from '../api/syringePumps'
 
 export interface HeaterRealtimeData {
@@ -73,6 +74,7 @@ export interface MicrowaveRealtimeData {
 }
 
 export interface RealtimeData {
+  valves: Record<string, ValveState>
   syringe_pumps: Record<string, SyringeState>
   type: string
   heaters: Record<string, HeaterRealtimeData>
@@ -121,6 +123,7 @@ function connect() {
         pumps: parsed.pumps ?? {},
         microwaves: parsed.microwaves ?? {},
         syringe_pumps: parsed.syringe_pumps ?? {},
+        valves: parsed.valves ?? {},
       }
     } catch (e) {
       console.error('[WS] parse error:', e)

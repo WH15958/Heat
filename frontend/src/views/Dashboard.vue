@@ -10,6 +10,22 @@
         <el-empty v-if="!dashboardDevices.length" description="暂无设备" :image-size="48" />
       </nav>
       <div class="device-detail">
+      <div v-for="(valve, id) in dashboardValves" v-show="selectedDevice === 'valves'" :key="'v-' + id">
+        <el-card class="device-card" shadow="hover">
+          <template #header><div class="card-header">
+            <div class="device-heading"><img :src="valveArtwork" alt="" /><div><h2>三通阀</h2><span>{{ id }} 监测</span></div></div>
+            <el-tag :type="valve.read_ok ? 'success' : 'info'">{{ deviceInfo('valves', id)?.status }}</el-tag>
+          </div></template>
+          <div class="valve-status-grid">
+            <div class="valve-status-item"><span class="status-light" :class="valve.connected && valve.read_ok ? 'is-online' : 'is-unknown'" /><div><small>通信</small><strong>{{ valve.connected && valve.read_ok ? '正常' : '未知' }}</strong></div></div>
+            <div class="valve-status-item"><span class="status-light" :class="valve.read_ok ? (valve.relay_energized ? 'is-energized' : 'is-deenergized') : 'is-unknown'" /><div><small>继电器</small><strong>{{ !valve.read_ok ? '未知' : valve.relay_energized ? '通电' : '断电' }}</strong></div></div>
+            <div class="valve-status-item"><span class="status-light" :class="valve.read_ok ? 'is-route' : 'is-unknown'" /><div><small>当前流路</small><strong>{{ !valve.read_ok ? '未知' : valve.relay_energized ? '公共口 → NC' : '公共口 → NO' }}</strong></div></div>
+            <div class="valve-status-item"><span class="status-light" :class="valve.experiment_owned ? 'is-busy' : 'is-ready'" /><div><small>控制权</small><strong>{{ valve.experiment_owned ? '实验占用' : '手动可用' }}</strong></div></div>
+          </div>
+          <div class="valve-meta"><span>串口 {{ valve.connection_port || '--' }}</span><span>继电器读回</span></div>
+          <p class="valve-note">流路按 T 型阀和继电器 NO 接线推定；实际出口需要现场确认。</p>
+        </el-card>
+      </div>
       <div v-for="(pump, id) in dashboardSyringes" v-show="selectedDevice === 'syringe_pumps'" :key="id">
         <el-card class="device-card" shadow="hover">
           <template #header>
@@ -203,6 +219,7 @@ import type { SyringeState } from '../api/syringePumps'
 import heaterArtwork from '../assets/theme/heater.webp'
 import pumpArtwork from '../assets/theme/pump.webp'
 import syringePumpArtwork from '../assets/theme/syringe-pump.webp'
+import valveArtwork from '../assets/theme/valve.webp'
 import microwaveArtwork from '../assets/theme/microwave.webp'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
@@ -257,7 +274,7 @@ let initialSelectionReady = false
 const registeredDevices = ref<Record<string, Record<string, { connected: boolean; connection_port?: string; name?: string; configured?: boolean; channels?: Record<string, unknown> }>>>({})
 const registeredSyringes = ref<Record<string, SyringeState>>({})
 const dashboardDevices = computed(() => {
-  const groups = [ ['heaters', '加热器'], ['pumps', '蠕动泵'], ['microwaves', '微波仪'], ['syringe_pumps', '注射泵'] ] as const
+  const groups = [ ['heaters', '加热器'], ['pumps', '蠕动泵'], ['microwaves', '微波仪'], ['syringe_pumps', '注射泵'], ['valves', '三通阀'] ] as const
   return groups.flatMap(([kind, label]) => {
     const liveDevices = realtimeData.value?.[kind] || {}
     const registered = registeredDevices.value[kind] || {}
@@ -283,6 +300,7 @@ const deviceGroups = computed(() => [
   { key: 'pumps', name: '蠕动泵' },
   { key: 'microwaves', name: '微波仪' },
   { key: 'syringe_pumps', name: '注射泵' },
+  { key: 'valves', name: '三通阀' },
 ].map(group => {
   const members = dashboardDevices.value.filter(device => device.key.startsWith(group.key + ':'))
   const connectedCount = members.filter(device => device.online).length
@@ -308,6 +326,12 @@ const dashboardPumps = computed<Record<string, Partial<PumpRealtimeData>>>(() =>
       }])
     )
     return [id, { connection_port: item.port, channels, ...(item.hasData ? realtimeData.value?.pumps[id] : {}) }]
+  })
+))
+const dashboardValves = computed(() => Object.fromEntries(
+  dashboardDevices.value.filter(item => item.key.startsWith('valves:')).map(item => {
+    const id = item.key.slice(7)
+    return [id, { connection_port: item.port, ...(item.hasData ? realtimeData.value?.valves[id] : {}), read_ok: item.hasData }]
   })
 ))
 const dashboardSyringes = computed(() => Object.fromEntries(
@@ -675,7 +699,19 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
   font-size: 16px;
   word-break: break-word;
 }
+.valve-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.valve-status-item { display: flex; align-items: center; gap: 14px; padding: 20px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: var(--el-fill-color-extra-light); }
+.valve-status-item small { display: block; margin-bottom: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
+.valve-status-item strong { display: block; font-size: 17px; color: var(--el-text-color-primary); }
+.status-light { --light-color: #a8abb2; display: block; width: 16px; height: 16px; flex: 0 0 16px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff9, transparent 55%), var(--light-color); box-shadow: 0 0 0 5px color-mix(in srgb, var(--light-color) 12%, transparent), 0 0 12px color-mix(in srgb, var(--light-color) 28%, transparent); }
+.status-light.is-online, .status-light.is-ready { --light-color: #52b788; }
+.status-light.is-energized, .status-light.is-route { --light-color: #409eff; }
+.status-light.is-deenergized { --light-color: #7892ac; }
+.status-light.is-busy { --light-color: #e6a23c; }
+.valve-meta { display: flex; justify-content: space-between; margin-top: 18px; color: var(--el-text-color-secondary); font-size: 13px; }
+.valve-note { margin: 14px 0 0; padding-top: 14px; border-top: 1px solid var(--el-border-color-lighter); color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
 @media (max-width: 900px) {
+  .valve-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .device-workspace, .chart-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .device-selector { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--el-border-color-light); }
   .selector-heading { grid-column: 1 / -1; padding: 0 2px 4px; }

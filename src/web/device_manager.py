@@ -3,6 +3,8 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+from src.devices.relay_valve import RelayValveDevice
+from src.devices.base_device import DeviceConfig
 from src.devices.heater import AIHeaterDevice, HeaterConfig
 from src.devices.microwave import MicrowaveConfig, MicrowaveDevice
 from src.devices.peristaltic_pump import (
@@ -42,6 +44,90 @@ class DeviceManager:
         self._global_stop_depth = 0
         self._last_emergency_stop_report: list[dict] = []
         self.syringe_pumps: Dict[str, SyringeController] = {}
+        self.valves = {}
+        self._valve_bindings = {}
+        self._valve_locks = {}
+        self._valve_stop_generations = {}
+        self._valve_owners = {}
+
+    def add_valve(self, cfg, binding):
+        self.valves[cfg.device_id] = RelayValveDevice(DeviceConfig(
+            device_id=cfg.device_id, connection_params={
+                "port": binding["resolved_port"], "baudrate": cfg.connection.baudrate,
+                "parity": cfg.connection.parity, "bytesize": cfg.connection.bytesize,
+                "stopbits": cfg.connection.stopbits, "timeout": cfg.connection.timeout,
+            }))
+        self._valve_bindings[cfg.device_id] = binding
+        self._valve_locks[cfg.device_id] = threading.Lock()
+        self._valve_stop_generations[cfg.device_id] = 0
+
+    def claim_valve(self, device_id, owner):
+        if device_id not in self.valves:
+            raise ValueError("阀门不存在")
+        with self._valve_locks[device_id]:
+            current = self._valve_owners.get(device_id)
+            if current is not None and current is not owner:
+                raise RuntimeError("阀门已被其他实验占用")
+            if not self.valves[device_id].is_connected():
+                raise RuntimeError("实验阀门未连接")
+            self._valve_owners[device_id] = owner
+            with self._lock:
+                self._valve_stop_generations[device_id] += 1
+
+    def release_valve(self, device_id, owner):
+        with self._valve_locks[device_id]:
+            if self._valve_owners.get(device_id) is owner:
+                del self._valve_owners[device_id]
+                with self._lock:
+                    self._valve_stop_generations[device_id] += 1
+
+    def cancel_valve_operations(self, device_ids=None):
+        """Invalidate queued valve writes without touching hardware."""
+        ids = device_ids if device_ids is not None else self.valves.keys()
+        with self._lock:
+            for device_id in ids:
+                if device_id in self._valve_stop_generations:
+                    self._valve_stop_generations[device_id] += 1
+
+    def valve_status(self, device_id):
+        v = self.valves[device_id]
+        with v._lock:
+            return self._binding_enriched_payload({
+                "connected": v.is_connected(), "status": v.status.name,
+                "relay_energized": v.relay_energized, "read_ok": v.read_ok,
+                "physical_route_confirmed": False,
+                "experiment_owned": device_id in self._valve_owners,
+            }, self._valve_bindings[device_id], v.config.connection_params.get("port"))
+
+    def valve_operation(self, device_id, action, energized=None, owner=None, should_stop=None):
+        if device_id not in self.valves:
+            raise ValueError("阀门不存在")
+        generation = self._start_generation(self._valve_stop_generations, device_id)
+        with self._valve_locks[device_id]:
+            v = self.valves[device_id]
+            current_owner = self._valve_owners.get(device_id)
+            if action in ("switch", "disconnect", "connect") and current_owner is not None and current_owner is not owner:
+                raise RuntimeError("实验正在占用阀门，禁止手动切换或断开")
+            if action == "switch":
+                if should_stop is not None and should_stop():
+                    raise RuntimeError("实验已停止，取消阀门切换")
+                with self._lock:
+                    if self._global_stop_depth or generation != self._valve_stop_generations[device_id]:
+                        raise RuntimeError("全局停止中或切换请求已取消")
+                v.set_energized(energized)
+            elif action == "connect":
+                self._refresh_binding_if_needed(device_id, "Valve", self._valve_bindings[device_id], v)
+                self._require_binding_resolved(device_id, "Valve", self._valve_bindings[device_id])
+                if not v.connect():
+                    raise IOError("阀门连接失败")
+            elif action == "disconnect":
+                if not v.disconnect():
+                    raise IOError("阀门断开失败")
+            elif action == "status":
+                v.read_data()
+            else:
+                raise ValueError("不支持的阀门操作")
+            return self.valve_status(device_id)
 
     def add_syringe_pump(self, config):
         controller = SyringeController(config)
@@ -336,6 +422,10 @@ class DeviceManager:
         return self._update_binding_resolution(device_id, device_type, info, device)
 
     def refresh_bindings(self) -> dict:
+        for did, valve in self.valves.items():
+            with self._valve_locks[did]:
+                if not valve.is_connected():
+                    self._update_binding_resolution(did, "Valve", self._valve_bindings[did], valve)
         for controller in self.syringe_pumps.values():
             controller.refresh_binding()
         for did, heater in self._heaters.items():
@@ -672,7 +762,14 @@ class DeviceManager:
         success = True
         attempted = False
         report = []
-        registered = bool(self._heaters or self._pumps or self._microwaves or self.syringe_pumps)
+        registered = bool(self._heaters or self._pumps or self._microwaves or self.syringe_pumps or self.valves)
+        for device_id in self.valves:
+            with self._valve_locks[device_id]:
+                success = False
+                item = self._stop_report("valve", device_id, False, None,
+                                         "尚未确认安全流路；保持当前阀位，不能关闭所有出口")
+                item["connected"] = self.valves[device_id].is_connected()
+                report.append(item)
         for device_id, controller in self.syringe_pumps.items():
             if not controller.device.is_connected():
                 report.append(self._stop_report("syringe_pump", device_id, False, None, "not_connected"))
@@ -847,7 +944,8 @@ class DeviceManager:
                     getattr(m.config, "enable_control_writes", False)
                 ),
             }, self._microwave_bindings.get(did), m.config.connection_params.get("port"))
-        return {"heaters": heaters, "pumps": pumps, "microwaves": microwaves,
+        return {"valves": {did: self.valve_status(did) for did in self.valves},
+                "heaters": heaters, "pumps": pumps, "microwaves": microwaves,
                 "syringe_pumps": {did: c.summary() for did, c in self.syringe_pumps.items()}}
 
     def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
@@ -1603,6 +1701,9 @@ class DeviceManager:
     def _cleanup_devices(self) -> bool:
         """Stop and disconnect every registered device."""
         success = True
+        for did, valve in self.valves.items():
+            with self._valve_locks[did]:
+                success = valve.disconnect() and success
         for controller in self.syringe_pumps.values():
             try:
                 if controller.device.is_connected():
@@ -1688,6 +1789,8 @@ class DeviceManager:
     def _begin_global_stop(self) -> None:
         with self._lock:
             self._global_stop_depth += 1
+            for did in self.valves:
+                self._valve_stop_generations[did] += 1
             for controller in self.syringe_pumps.values():
                 controller.invalidate_pending()
             for device_id in self._heaters:

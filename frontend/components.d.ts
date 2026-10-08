@@ -46,6 +46,7 @@ declare module 'vue' {
     SyringeHistory: typeof import('./src/components/SyringeHistory.vue')['default']
     SyringePumpControl: typeof import('./src/components/SyringePumpControl.vue')['default']
     SyringePumpGroup: typeof import('./src/components/SyringePumpGroup.vue')['default']
+    ValveControl: typeof import('./src/components/ValveControl.vue')['default']
     YamlEditor: typeof import('./src/components/experiment/YamlEditor.vue')['default']
   }
   export interface GlobalDirectives {

@@ -147,6 +147,11 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
     for step in data["steps"]:
         if not step.enabled:
             continue
+        if step.type.value == "valve.switch":
+            device_id = step.params["device_id"]
+            valve = getattr(dm, "valves", {}).get(device_id)
+            if valve is None or not valve.is_connected():
+                raise HTTPException(409, f"阀门 {device_id} 未配置或未连接")
         if step.type.value.startswith("syringe_pump.") or step.wait.type.value == "syringe_pump_complete":
             ids = set()
             if step.type.value.startswith("syringe_pump."):

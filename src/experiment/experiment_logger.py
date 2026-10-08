@@ -101,6 +101,15 @@ class ExperimentLogger:
             start = datetime.fromisoformat(self._active_run.started_at)
             elapsed = (datetime.now() - start).total_seconds()
         point = {"t": round(elapsed, 1)}
+        valve_series = self._active_run.sensor_data.setdefault("valves", {})
+        for did, data in (realtime_payload.get("valves") or {}).items():
+            known = data.get("read_ok") is True and type(data.get("relay_energized")) is bool
+            valve_series.setdefault(did, []).append({
+                "t": point["t"], "read_ok": known,
+                "relay_energized": data.get("relay_energized") if known else None,
+                "position": ("NC" if data["relay_energized"] else "NO") if known else None,
+                "physical_route_confirmed": False,
+            })
         syringe_series = self._active_run.sensor_data.setdefault("syringe_pumps", {})
         for did, data in (realtime_payload.get("syringe_pumps") or {}).items():
             series = syringe_series.setdefault(did, {"position": [], "theoretical_volume_ul": [],

@@ -450,3 +450,15 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 实验日志新增可选 `steps[].device_result` 及 `sensor_data.syringe_pumps`，保留旧记录兼容。EEPROM登记位于忽略目录 `data/syringe_programs/`，原子替换文件；设备不能可靠读回的内容标记未验证，重连撤销槽位执行资格。Campaign/planner边界不变。
 
 相关软件测试为 `tests/test_syringe_pump.py`；禁止测试打开真实COM。真实时序、液路和停机需 [实机验收](syringe_pump_acceptance.md)。
+
+## 继电器三通阀接入
+
+`src/devices/relay_valve.py` 是同步驱动，复用 ModbusRTUProtocol 和 SerialPortManager。依据中盛《数字量输入输出系列使用手册（RS485/RS232版）》V3.0 的保持寄存器定义，当前只支持站号1、第1通道（协议地址0）：0x06写0/1，核对响应回显后用0x03读取0/1。参数为38400、8N1；阀系列依据 Bürkert 0127 数据表，实际阀型号、电压、流路仍按现场铭牌确认。
+
+配置 `valves[]` 使用现有 DeviceConnectionConfig，唯一序列号 DU0ER6Y3A 绑定，禁止指纹失配后回退 COM7。启动只注册，手动连接后只读确认。Web DeviceManager 协调每设备操作锁及全局停止世代号，阻止急停期间及急停前排队的切换。驱动没有轮询线程或写入重试。
+
+接口：POST `/api/valve/{id}/connect|disconnect`，GET `/api/valve/{id}/status`，POST `/api/valve/{id}/switch`，请求为 `{"energized": true/false}`（严格布尔）。设备不存在返回404、参数非法422、全局停止冲突409、通信或读回失败503。成功载荷包含 `connected`、`read_ok`、`relay_energized`、串口绑定信息和 `physical_route_confirmed=false`。GET `/api/devices` 的 `valves` 仅返回缓存摘要，不访问串口。
+
+断开和服务关闭保持阀位；未确认安全流路时全局急停保留阀位、返回未确认报告，不宣称流路全部关闭。软件驱动读回只确认继电器寄存器，不能确认管路实态。提供手动控制与 valve.switch YAML 动作；执行器在启动时占用阀门，清理成功后释放。停止世代号及停止检查取消排队切换，不自动复位。WebSocket 通过现有读取协调器发送 valves，读取失败或超时表示未知。实验记录 steps[].device_result 与 sensor_data.valves；physical_route_confirmed 始终为 false。
+
+软件检查：`python -m unittest tests.test_relay_valve -v`，覆盖只读连接/刷新、超时不重试、读回不一致、失败状态失信、API错误与全局停止；实机切换和流路检查由现场验收。

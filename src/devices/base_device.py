@@ -36,6 +36,7 @@ class DeviceType(Enum):
     SPECTROMETER = "spectrometer"
     HPLC = "hplc"
     MICROWAVE = "microwave"
+    VALVE = "valve"
     OTHER = "other"
 
 

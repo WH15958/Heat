@@ -113,7 +113,12 @@ class ExperimentEngine:
         self._completion_notified = False
         self._pause_event.set()
         if isinstance(self._executor, StepExecutor):
-            await self._executor.reserve_syringes(self._steps)
+            try:
+                await self._executor.reserve_valves(self._steps)
+                await self._executor.reserve_syringes(self._steps)
+            except Exception:
+                await self._executor.release_valves()
+                raise
         try:
             self._exp_logger.start_run(
                 experiment_name=self._experiment_name,
@@ -124,6 +129,7 @@ class ExperimentEngine:
         except Exception:
             if isinstance(self._executor, StepExecutor):
                 self._executor.release_unused_syringes()
+                await self._executor.release_valves()
             raise
         self._state = ExperimentState.RUNNING
         self._start_time = time.time()
@@ -240,6 +246,9 @@ class ExperimentEngine:
         """Prevent further steps before awaiting device shutdown."""
         self._stop_flag = True
         self._pause_event.set()
+        cancel_valves = getattr(self._executor, "cancel_pending_valve_operations", None)
+        if callable(cancel_valves):
+            cancel_valves()
 
     async def stop(self):
         self.request_stop()

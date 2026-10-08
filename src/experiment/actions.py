@@ -30,6 +30,7 @@ class ActionType(Enum):
     SYRINGE_PROGRAM_STORE = "syringe_pump.program_store"
     SYRINGE_PROGRAM_RUN = "syringe_pump.program_run"
     SYRINGE_REPEAT = "syringe_pump.repeat"
+    VALVE_SWITCH = "valve.switch"
     WAIT = "wait"
     EMERGENCY_STOP = "emergency_stop"
     LOG = "log"

@@ -359,3 +359,10 @@ AI 不应做的是：
 - 新API前缀 `/api/syringe_pump/{device_id}`。新增 `syringe_pump.initialize/configure/move/aspirate/dispense/valve/stop/resume/io/program_load/program_store/program_run/repeat` YAML动作和 `syringe_pump_complete` 等待；h硬件暂停为手动入口。
 - `steps[].device_result`记录短动作终态，历史采样增加 `sensor_data.syringe_pumps`，复用run_id/sample_id及原持久化失败报告。Planner仍不能直接控制泵。
 - 本轮仅软件验证，无实机通信/运动验收。不能可靠读回的配置/EEPROM标记已发送待验证；程序槽位重新连接后须重新登记。详见 `docs/syringe_pump_integration.md` 与 `docs/syringe_pump_acceptance.md`。
+
+## 12. 继电器三通阀手动控制（2026-10-07）
+
+- 独立 valve 设备类型，valve1 通过中盛继电器第1通道控制；配置 fingerprint 序列号 DU0ER6Y3A，fallback COM7、38400/8N1、站号1，禁止失配回退。
+- 保持寄存器0，0x06写0/1、0x03读回；驱动纯同步、复用串口管理、写入不自动重试。启动/页面/状态读取不控制阀位。
+- `/api/valve/{id}` 提供 connect/disconnect/status/switch；控制页新增三通阀，按继电器通电/断电位置显示，不冒充实际流路反馈。新增 valve.switch YAML动作（position 为 NO/NC），仪表盘、实时状态、图形编排和历史记录已接入。实验占用期间禁止手动切换/断开；暂停、停止、完成及失败保持当前阀位，恢复不重放已完成切换。
+- 三通阀断电不等于流路全部关闭。安全流路未由现场确认，因此断开与清理保持阀位，全局急停保持阀位并明确报告停止未确认，取消过期排队切换。实际切换、阀体T版本、电压、线圈极性、出口映射均需现场验收。

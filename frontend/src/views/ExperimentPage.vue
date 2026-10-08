@@ -1,5 +1,12 @@
 <template>
   <div class="experiment-page">
+    <div v-if="syringeData?.valves" style="margin-bottom: 12px">
+      <el-tag v-for="(valve, id) in syringeData.valves" :key="id" style="margin-right: 8px">
+        {{ id }}：{{ !syringeConnected || !valve.read_ok ? '状态未知' : valve.relay_energized ? '公共口 → NC（通电）' : '公共口 → NO（断电）' }}
+        {{ valve.experiment_owned ? ' · 实验占用' : '' }}
+      </el-tag>
+    </div>
+    <el-alert title="三通阀在暂停、停止、结束或失败时保持当前阀位；仅由明确的阀门步骤切换。显示位置来自继电器读回，实际流路仍需实物确认。" type="info" :closable="false" style="margin-bottom: 12px" />
     <div v-if="syringeData?.syringe_pumps" style="margin-bottom: 12px">
       <el-tag v-for="(pump, id) in syringeData.syringe_pumps" :key="id" style="margin-right: 8px">
         {{ pump.name }}：{{ !syringeConnected || !pump.read_ok ? '状态未知' : syringeResult[pump.action?.result || ''] || (pump.busy ? '运行中' : '空闲') }}
