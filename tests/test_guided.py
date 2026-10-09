@@ -21,7 +21,9 @@ from src.web.api import devices, valves, syringe_pumps
 def spec(**kwargs):
     values = dict(axes=[[30], [30], [0.1], [0.2], [30], [0]],
         product_port="NO", drain_flow=1, clean_volume=1, clean_flow=1,
-        clean_dwell=0, clean_cycles=1, plumbing_confirmed=True)
+        clean_dwell=0, clean_cycles=1, plumbing_confirmed=True, priming_confirmed=True,
+        reactor_available_ml=20, source_available_a_ml=100, source_available_b_ml=100, waste_available_ml=500,
+        prime_drain_seconds=480, prime_drain_flow=1)
     return guided.GuidedRequest(**{**values, **kwargs})
 
 
@@ -87,7 +89,8 @@ class FakeManager:
         self.calls.append((params["action"], did))
         if params["action"] == "dispense":
             # Both commands must be dispatched before either can finish.
-            self.barrier.wait(timeout=2)
+            if params["volume"] < 1:
+                self.barrier.wait(timeout=2)
             if self.fail_feed and did == "syringe_pump1":
                 raise IOError("dose failed")
             self.syringes[did].position = 0
@@ -216,6 +219,266 @@ class GuidedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_experiment_data(data)
 
+    def test_priming_recipe_units_order_and_capacity(self):
+        request = spec(prime_volume_a=1.5, prime_volume_b=2, prime_cycles=3,
+                       prime_drain_seconds=123, prime_drain_flow=2, drain_flow=3)
+        data = guided.priming_recipe(request, "test")
+        motions = [s for s in data["steps"] if s["type"].startswith("syringe_pump.")]
+        self.assertEqual([s["params"]["device_id"] for s in motions],
+                         ["syringe_pump1"]*6+["syringe_pump2"]*6)
+        self.assertEqual([s["type"].split(".")[1] for s in motions], ["aspirate", "dispense"]*6)
+        drain = next(s for s in data["steps"] if s["id"] == "prime_drain")
+        self.assertEqual(drain["params"]["run_time"], 123)
+        self.assertEqual(drain["params"]["flow_rate"], 2)
+        self.assertEqual(drain["params"]["dispense_volume"], 4.1)
+        self.assertEqual(drain["wait"]["timeout"], 183)
+        product = next(s for s in guided.recipe(request.rows()[0], request, "test", 0)["steps"]
+                       if s["id"] == "collect_product")
+        self.assertEqual(product["params"]["flow_rate"], 3)
+        self.assertEqual(data["metadata"]["theoretical_volume_ml"], 10.5)
+        self.assertEqual(data["metadata"]["waste_port"], "NC")
+        self.assertFalse(any(s["type"] in ("heater.start", "microwave.start") for s in data["steps"]))
+        for changes in (dict(reactor_available_ml=7), dict(source_available_a_ml=3),
+                        dict(waste_available_ml=8), dict(prime_cycles=0), dict(prime_drain_seconds=0), dict(prime_drain_flow=0),
+                        dict(prime_drain_seconds=10000), dict(prime_drain_flow=float("inf"))):
+            with self.assertRaises(ValidationError):
+                spec(**changes)
+        with self.assertRaises(ValueError):
+            guided.compile_plan(spec(prime_volume_a=3))
+
+    def test_prime_then_explicit_start_and_signature(self):
+        async def scenario():
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            await batch.start(prime_only=True)
+            await batch.task
+            self.assertEqual(batch.record["phase"], "ready")
+            self.assertEqual(batch.record["priming"]["completed_cycles"], [2, 2])
+            self.assertTrue(batch.cleanup_pending)
+            self.assertEqual(batch.record["groups"], [])
+            self.assertFalse(any(c[0] in ("heat", "microwave_start") for c in dm.calls))
+            prime_calls = [c for c in dm.calls if c[0] in ("aspirate", "dispense")]
+            self.assertEqual(prime_calls, [(action, did) for did in ("syringe_pump1", "syringe_pump2")
+                                          for _ in range(2) for action in ("aspirate", "dispense")])
+            with self.assertRaises(ValueError):
+                await batch.resume()
+            with self.assertRaises(ValueError):
+                await batch.begin_experiments(spec(prime_drain_seconds=485))
+            await batch.begin_experiments(spec())
+            with self.assertRaises(ValueError):
+                await batch.begin_experiments(spec())
+            await batch.task
+            self.assertEqual(batch.state.value, "completed")
+            self.assertEqual(sum(c == ("pump_start", 4) for c in dm.calls), 3)
+            self.assertFalse(batch.cleanup_pending)
+        asyncio.run(scenario())
+
+    def test_changed_device_state_invalidates_precharge(self):
+        async def scenario():
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            await batch.start(prime_only=True)
+            await batch.task
+            dm.syringes["syringe_pump2"].position = 100
+            with self.assertRaises(ValueError):
+                await batch.begin_experiments(spec())
+            self.assertEqual(batch.record["priming"]["status"], "invalidated")
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertFalse(any(c[0] == "microwave_start" for c in dm.calls))
+            await batch.stop()
+        asyncio.run(scenario())
+
+    def test_priming_failure_recovery_and_duplicate_api(self):
+        import time
+        app = FastAPI()
+        dm = FakeManager()
+        app.state.device_manager = dm
+        app.include_router(api.router, prefix="/api")
+        with TestClient(app) as client:
+            started = client.post("/api/guided/prime", json=spec().model_dump())
+            self.assertEqual(started.status_code, 200, started.text)
+            bid = started.json()["batch_id"]
+            for _ in range(200):
+                if client.get(f"/api/guided/{bid}").json()["phase"] == "ready":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(client.get(f"/api/guided/{bid}").json()["phase"], "ready")
+            calls = list(dm.calls)
+            body = spec(priming_batch_id=bid).model_dump()
+            self.assertEqual(client.post("/api/guided/prime", json=body).status_code, 200)
+            self.assertEqual(dm.calls, calls)
+            self.assertEqual(client.post("/api/guided/start", json=spec().model_dump()).status_code, 409)
+            self.assertEqual(client.post("/api/guided/start", json=body).status_code, 200)
+            client.post(f"/api/guided/{bid}/stop")
+
+    def test_priming_failure_requires_explicit_recovery(self):
+        async def scenario():
+            dm = FakeManager()
+            dm.fail_feed = True
+            batch = guided.GuidedBatch(dm, spec())
+            await batch.start(prime_only=True)
+            await batch.task
+            self.assertEqual(batch.record["priming"]["status"], "failed")
+            self.assertEqual(batch.record["groups"], [])
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertIn(("syringe_stop", "syringe_pump2"), dm.calls)
+            self.assertIn(("pump_stop", 4), dm.calls)
+            with self.assertRaises(ValueError):
+                await batch.begin_experiments(spec())
+            self.assertFalse(any(c[0] in ("heat", "microwave_start", "pump_start") for c in dm.calls))
+        asyncio.run(scenario())
+
+    def test_priming_valve_and_drain_failures_never_enter_experiments(self):
+        async def scenario(failing_method):
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            with patch.object(dm, failing_method, side_effect=IOError("hardware failure")):
+                await batch.start(prime_only=True)
+                await batch.task
+            self.assertEqual(batch.record["priming"]["status"], "failed")
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertEqual(batch.record["groups"], [])
+            self.assertFalse(any(c[0] in ("heat", "microwave_start") for c in dm.calls))
+            self.assertIn(("syringe_stop", "syringe_pump1"), dm.calls)
+            self.assertIn(("syringe_stop", "syringe_pump2"), dm.calls)
+            self.assertIn(("pump_stop", 4), dm.calls)
+        for method in ("valve_operation", "start_pump_channel"):
+            with self.subTest(method=method):
+                asyncio.run(scenario(method))
+
+    def test_priming_stop_and_checkpoint_failure_lock(self):
+        async def scenario():
+            dm = FakeManager()
+            dm.temperature = 60
+            batch = guided.GuidedBatch(dm, spec(cooling_timeout=1))
+            await batch.start(prime_only=True)
+            await until(lambda: batch.record.get("last_step") == "prime_temperature")
+            await batch.pause()
+            self.assertEqual(batch.state.value, "paused")
+            self.assertTrue(await batch.stop())
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertEqual(batch.record["groups"], [])
+            self.assertFalse(any(c[0] in ("aspirate", "dispense", "pump_start") for c in dm.calls))
+        asyncio.run(scenario())
+
+    def test_priming_checkpoint_failure_dispatches_no_movement(self):
+        async def scenario():
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            original = guided.atomic_record
+            def save(record, directory=None):
+                if record.get("last_step") == "prime_1_1_aspirate":
+                    raise OSError("disk full during priming")
+                return original(record, directory)
+            with patch.object(guided, "atomic_record", side_effect=save):
+                await batch.start(prime_only=True)
+                await batch.task
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertEqual(batch.record["persistence_status"], "error")
+            self.assertFalse(any(c[0] in ("aspirate", "dispense", "pump_start") for c in dm.calls))
+        asyncio.run(scenario())
+
+    def test_ready_persistence_failure_never_leaves_reusable_priming(self):
+        async def scenario():
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            original = guided.atomic_record
+            def save(record, directory=None):
+                if record.get("phase") == "ready":
+                    raise OSError("disk full at ready")
+                return original(record, directory)
+            with patch.object(guided, "atomic_record", side_effect=save):
+                await batch.start(prime_only=True)
+                await batch.task
+            self.assertEqual(batch.state.value, "failed")
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertEqual(batch.record["priming"]["status"], "failed")
+            self.assertTrue(all(p.owner is None for p in dm.syringes.values()))
+            with self.assertRaises(ValueError):
+                await batch.begin_experiments(spec())
+        asyncio.run(scenario())
+
+    def test_ready_restart_requires_recovery(self):
+        async def scenario():
+            batch = guided.GuidedBatch(FakeManager(), spec())
+            await batch.start(prime_only=True)
+            await batch.task
+            restored = api.read_record(batch.batch_id)
+            self.assertEqual(restored["state"], "interrupted")
+            self.assertTrue(restored["recovery_required"])
+            self.assertEqual(restored["priming"]["status"], "completed")
+            await batch.stop()
+        asyncio.run(scenario())
+
+    def test_device_configuration_changes_signature(self):
+        import copy
+        from src.utils.config import ConfigManager
+        request = spec()
+        original = guided.priming_signature(request)
+        changed = copy.deepcopy(ConfigManager().load())
+        changed.syringe_pumps[0].capacity_ml = 1
+        with patch.object(ConfigManager, "load", return_value=changed):
+            self.assertNotEqual(original, guided.priming_signature(request))
+
+    def test_explicit_priming_time_and_flow_are_signed_and_required(self):
+        original = guided.priming_signature(spec())
+        self.assertNotEqual(original, guided.priming_signature(spec(prime_drain_seconds=123)))
+        self.assertNotEqual(original, guided.priming_signature(spec(prime_drain_flow=2)))
+        body = spec().model_dump()
+        for field in ("prime_drain_seconds", "prime_drain_flow", "reactor_available_ml",
+                      "source_available_a_ml", "source_available_b_ml", "waste_available_ml"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                guided.GuidedRequest.model_validate({k: v for k, v in body.items() if k != field})
+        legacy = dict(body, prime_drain_factor=1.2, prime_extra_seconds=0)
+        del legacy["prime_drain_seconds"]
+        del legacy["prime_drain_flow"]
+        with self.assertRaises(ValidationError):
+            guided.GuidedRequest.model_validate(legacy)
+
+    def test_legacy_records_remain_readable_without_reusable_execution(self):
+        app = FastAPI()
+        app.state.device_manager = FakeManager()
+        app.include_router(api.router, prefix="/api")
+        batch_id = "guided_" + "a"*32
+        request = spec().model_dump()
+        del request["prime_drain_seconds"]
+        del request["prime_drain_flow"]
+        request.update(prime_drain_factor=1.5, prime_extra_seconds=10)
+        record = dict(batch_id=batch_id, request=request, state="paused", phase="ready",
+                      created_at="2026-10-09T00:00:00+00:00", priming={"status": "completed"})
+        guided.atomic_record(record)
+        with TestClient(app) as client:
+            response = client.get("/api/guided/current")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["request"], request)
+            self.assertTrue(response.json()["recovery_required"])
+            self.assertEqual(client.post("/api/guided/start",
+                json=spec(priming_batch_id=batch_id).model_dump()).status_code, 409)
+
+    def test_api_live_priming_failure_acknowledgement(self):
+        import time
+        app = FastAPI()
+        dm = FakeManager()
+        dm.fail_feed = True
+        app.state.device_manager = dm
+        app.include_router(api.router, prefix="/api")
+        with TestClient(app) as client:
+            response = client.post("/api/guided/prime", json=spec().model_dump())
+            self.assertEqual(response.status_code, 200, response.text)
+            bid = response.json()["batch_id"]
+            for _ in range(200):
+                record = client.get(f"/api/guided/{bid}").json()
+                if record["state"] == "failed":
+                    break
+                time.sleep(0.01)
+            self.assertTrue(record["recovery_required"])
+            self.assertEqual(client.post("/api/guided/prime", json=spec().model_dump()).status_code, 409)
+            path = f"/api/guided/{bid}/acknowledge-interrupted"
+            self.assertEqual(client.post(path, json={"devices_stopped_confirmed": False}).status_code, 409)
+            self.assertEqual(client.post(path, json={"devices_stopped_confirmed": True}).status_code, 200)
+            self.assertFalse(client.get(f"/api/guided/{bid}").json()["recovery_required"])
+            self.assertEqual(client.post("/api/guided/start", json=spec(priming_batch_id=bid).model_dump()).status_code, 409)
+
     def test_two_groups_complete_without_bottle_confirmation(self):
         async def scenario():
             dm = FakeManager()
@@ -225,7 +488,7 @@ class GuidedTests(unittest.TestCase):
             await batch.task
             self.assertEqual(batch.state.value, "completed")
             self.assertEqual(len(batch.record["groups"]), 2)
-            self.assertEqual(sum(c == ("pump_start", 4) for c in dm.calls), 4)
+            self.assertEqual(sum(c == ("pump_start", 4) for c in dm.calls), 5)
             self.assertEqual(sum(c == ("pump_start", 3) for c in dm.calls), 2)
             self.assertTrue(all(step["type"] != "operator.confirm"
                                 for recipe in batch.recipes for step in recipe["steps"]))
@@ -250,12 +513,12 @@ class GuidedTests(unittest.TestCase):
             dm.temperature = 40
             await asyncio.sleep(0.1)
             self.assertEqual(batch.state.value, "paused")
-            self.assertFalse(any(c[0] == "pump_start" for c in dm.calls))
+            self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
             dm.temperature = 60
             await batch.resume()
             self.assertTrue(await batch.stop())
             self.assertEqual(batch.state.value, "stopped")
-            self.assertFalse(any(c[0] == "pump_start" for c in dm.calls))
+            self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
             self.assertEqual(len(batch.record["groups"]), 1)
         asyncio.run(scenario())
 
@@ -291,7 +554,8 @@ class GuidedTests(unittest.TestCase):
             await batch.start()
             await batch.task
             self.assertEqual(batch.state.value, "failed")
-            self.assertFalse(any(c[0] in ("pump_start", "valve") for c in dm.calls))
+            self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
+            self.assertEqual([c for c in dm.calls if c[0] == "valve"], [("valve", True)])
         asyncio.run(scenario())
 
     def test_checkpoint_save_failure_prevents_collection_and_next_group(self):
@@ -307,7 +571,7 @@ class GuidedTests(unittest.TestCase):
                 await batch.start()
                 await batch.task
             self.assertEqual(batch.state.value, "failed")
-            self.assertFalse(any(c[0] == "pump_start" for c in dm.calls))
+            self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
             self.assertEqual(len(batch.record["groups"]), 1)
             self.assertEqual(batch.record["persistence_status"], "error")
         asyncio.run(scenario())
@@ -323,6 +587,8 @@ class GuidedTests(unittest.TestCase):
             self.assertTrue(batch.cleanup_pending)
             dm.stop_failure = False
             self.assertTrue(await batch.stop())
+            self.assertTrue(batch.record["recovery_required"])
+            batch.record["recovery_required"] = False
             self.assertFalse(batch.cleanup_pending)
         asyncio.run(scenario())
 
@@ -372,7 +638,8 @@ class GuidedTests(unittest.TestCase):
         for router in (api.router, devices.router, valves.router, syringe_pumps.router):
             app.include_router(router, prefix="/api")
         with TestClient(app) as client:
-            started = client.post("/api/guided/start", json=spec().model_dump())
+            self.assertEqual(client.post("/api/guided/start", json=spec().model_dump()).status_code, 409)
+            started = client.post("/api/guided/prime", json=spec().model_dump())
             self.assertEqual(started.status_code, 200, started.text)
             batch_id = started.json()["batch_id"]
             saved = client.get(f"/api/guided/{batch_id}/plan")
