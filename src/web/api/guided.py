@@ -52,6 +52,7 @@ async def preview(spec: guided.GuidedRequest):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return dict(total_groups=len(recipes), rows=spec.rows(), recipes=recipes,
+                priming=guided.priming_recipe(spec, "preview"),
                 yaml=[yaml.safe_dump(r, allow_unicode=True, sort_keys=False) for r in recipes])
 
 
@@ -76,6 +77,26 @@ async def history():
 @router.post("/start")
 async def start(spec: guided.GuidedRequest, request: Request):
     async with _source_lock:
+        if not spec.priming_batch_id:
+            raise HTTPException(409, "须先执行本批次预充")
+        batch = active_batch(spec.priming_batch_id)
+        try:
+            await batch.begin_experiments(spec)
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return batch.snapshot()
+
+
+@router.post("/prime")
+async def prime(spec: guided.GuidedRequest, request: Request):
+    async with _source_lock:
+        if spec.priming_batch_id:
+            existing = active_batch(spec.priming_batch_id)
+            if (not existing.stopping and existing.record["phase"] in ("priming", "ready")
+                    and not existing.record["recovery_required"]
+                    and guided.priming_signature(spec) == existing.record["priming"]["signature"]):
+                return existing.snapshot()
+            raise HTTPException(409, "原预充批次不可重复执行，请先停止并处理现场状态")
         if _get_active_engine()[1] is not None:
             raise HTTPException(409, "已有实验正在执行或停机尚未确认")
         if any(r.get("recovery_required") for r in records()):
@@ -85,7 +106,7 @@ async def start(spec: guided.GuidedRequest, request: Request):
             await guided.preflight(batch.dm, spec)
             _batches[batch.batch_id] = batch
             _engines[batch.batch_id] = batch
-            await batch.start()
+            await batch.start(prime_only=True)
         except (ValueError, OSError, RuntimeError) as exc:
             if "batch" in locals():
                 _engines.pop(batch.batch_id, None)
@@ -139,6 +160,15 @@ async def acknowledge_interrupted(batch_id: str, body: RecoveryConfirmation):
         record = read_record(batch_id)
         if not record.get("recovery_required") or not body.devices_stopped_confirmed:
             raise HTTPException(409, "须现场确认所有设备已停止，且仅可解除中断批次锁定")
+        live = _batches.get(batch_id)
+        if live:
+            if live.task and not live.task.done():
+                raise HTTPException(409, "请先停止仍在执行的批次")
+            if not await live.stop():
+                raise HTTPException(409, "设备停机或记录保存仍未确认，不可解除锁定")
+            live.record["recovery_required"] = False
+            live.save()
+            record = dict(live.record)
         record["recovery_required"] = False
         record["cleanup_required"] = False
         record["error"] = "服务中断；人工确认设备停止，未自动恢复执行"

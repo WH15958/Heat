@@ -161,3 +161,6 @@ python -m pytest tests\test_campaigns.py -q
 批量条件设计 Demo（`/experiment/batch/template`）独立于 Campaign：从现有 YAML 生成参数组合，使用既有 batch_id、condition_id、sample_index 标记另存的单组文件，不创建 Trial，不注入 recommendation，不启动实验或实验队列。具体操作见用户指南“批量条件设计 Demo”。
 
 引导式完整批次执行（/experiment/batch）复用现有实验引擎和单组 run_id/sample_id，记录 batch_id、condition_id、sample_index 及本组参数。它不创建 Campaign Trial，不注入 recommendation，也不授权 planner 启动设备。模板参数设计入口仍为独立的另存工具。
+
+
+引导批次预充有独立维护 run_id，日志 metadata 使用 `run_kind=priming`、`condition_id=PRIMING`，notes 明确标注“非正式样品”。沿用现有实验追踪机制，维护运行也会产生 samples.csv 记录，但不进入批次 groups，不创建 Trial，不得作为正式样品表征或 planner 反馈。正式样品仍从第 1 组开始计数。查看预充历史时应根据维护标记和 notes 区分。
