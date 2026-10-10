@@ -446,6 +446,11 @@ class GuidedBatch:
                     self.state = ExperimentState.PAUSED
                     self.save()
                     return
+                if self.stopping:
+                    raise RuntimeError("预充后批次已停止")
+                if priming_signature(self.spec) != self.record["priming"]["signature"]:
+                    raise RuntimeError("预充后设备配置变化，禁止开始正式实验")
+                await preflight(self.dm, self.spec, owner=self.executor._syringe_owner)
             self.record["phase"] = "experiments"
             for i, data in enumerate(self.recipes):
                 if self.stopping:

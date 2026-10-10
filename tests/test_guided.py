@@ -642,6 +642,34 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(client.post(path, json={"devices_stopped_confirmed": True}).status_code, 200)
             self.assertEqual(client.get("/api/guided/../bad").status_code, 404)
 
+    def test_api_start_automatically_primes_then_runs_all_groups(self):
+        import time
+        app = FastAPI()
+        dm = FakeManager()
+        app.state.device_manager = dm
+        app.include_router(api.router, prefix="/api")
+        with TestClient(app) as client:
+            response = client.post("/api/guided/start", json=spec(repeats=2).model_dump())
+            self.assertEqual(response.status_code, 200, response.text)
+            bid = response.json()["batch_id"]
+            for _ in range(2000):
+                result = client.get(f"/api/guided/{bid}").json()
+                if result["state"] in guided.TERMINAL:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(result["state"], "completed", result.get("error"))
+            self.assertEqual(result["priming"]["status"], "completed")
+            self.assertEqual(len(result["groups"]), 2)
+            self.assertEqual(dm.calls.count(("initialize", "syringe_pump1")), 1)
+            self.assertEqual(dm.calls.count(("initialize", "syringe_pump2")), 1)
+            self.assertEqual(dm.calls.count(("aspirate", "syringe_pump1")), 4)
+            prime_drain = dm.calls.index(("pump_start", 4))
+            self.assertLess(prime_drain, dm.calls.index(("heat", "heater1")))
+            calls = list(dm.calls)
+            client.get("/api/guided/current")
+            client.get(f"/api/guided/{bid}")
+            self.assertEqual(dm.calls, calls)
+
     def test_api_real_start_mutual_exclusion_and_manual_write_protection(self):
         app = FastAPI()
         dm = FakeManager()
@@ -649,8 +677,7 @@ class GuidedTests(unittest.TestCase):
         for router in (api.router, devices.router, valves.router, syringe_pumps.router):
             app.include_router(router, prefix="/api")
         with TestClient(app) as client:
-            self.assertEqual(client.post("/api/guided/start", json=spec().model_dump()).status_code, 409)
-            started = client.post("/api/guided/prime", json=spec().model_dump())
+            started = client.post("/api/guided/start", json=spec().model_dump())
             self.assertEqual(started.status_code, 200, started.text)
             batch_id = started.json()["batch_id"]
             saved = client.get(f"/api/guided/{batch_id}/plan")

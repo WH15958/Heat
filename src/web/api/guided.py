@@ -80,7 +80,7 @@ async def history():
 async def start(spec: guided.GuidedRequest, request: Request):
     async with _source_lock:
         if not spec.priming_batch_id:
-            raise HTTPException(409, "须先执行本批次预充")
+            return await create_batch(spec, request, prime_only=False)
         batch = active_batch(spec.priming_batch_id)
         try:
             await batch.begin_experiments(spec)
@@ -99,22 +99,27 @@ async def prime(spec: guided.GuidedRequest, request: Request):
                     and guided.priming_signature(spec) == existing.record["priming"]["signature"]):
                 return existing.snapshot()
             raise HTTPException(409, "原预充批次不可重复执行，请先停止并处理现场状态")
-        if _get_active_engine()[1] is not None:
-            raise HTTPException(409, "已有实验正在执行或停机尚未确认")
-        if any(r.get("recovery_required") for r in records()):
-            raise HTTPException(409, "存在服务中断批次，请先现场确认设备停止并解除中断锁定")
-        try:
-            batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
-            await guided.preflight(batch.dm, spec, before_initialization=True)
-            _batches[batch.batch_id] = batch
-            _engines[batch.batch_id] = batch
-            await batch.start(prime_only=True)
-        except (ValueError, OSError, RuntimeError) as exc:
-            if "batch" in locals():
-                _engines.pop(batch.batch_id, None)
-                _batches.pop(batch.batch_id, None)
-            raise HTTPException(409, str(exc)) from exc
-        return batch.snapshot()
+        return await create_batch(spec, request, prime_only=True)
+
+
+async def create_batch(spec, request, *, prime_only):
+    # Both callers hold _source_lock across readiness checks and registration.
+    if _get_active_engine()[1] is not None:
+        raise HTTPException(409, "已有实验正在执行或停机尚未确认")
+    if any(r.get("recovery_required") for r in records()):
+        raise HTTPException(409, "存在服务中断批次，请先现场确认设备停止并解除中断锁定")
+    try:
+        batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
+        await guided.preflight(batch.dm, spec, before_initialization=True)
+        _batches[batch.batch_id] = batch
+        _engines[batch.batch_id] = batch
+        await batch.start(prime_only=prime_only)
+    except (ValueError, OSError, RuntimeError) as exc:
+        if "batch" in locals():
+            _engines.pop(batch.batch_id, None)
+            _batches.pop(batch.batch_id, None)
+        raise HTTPException(409, str(exc)) from exc
+    return batch.snapshot()
 
 
 @router.get("/{batch_id}")

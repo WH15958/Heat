@@ -198,7 +198,8 @@ def test_stability_failure_blocks_formal_feed_in_real_batch(prepared_env, monkey
 
 @pytest.mark.parametrize('failed_pump', ['syringe_pump1', 'syringe_pump2'])
 @pytest.mark.parametrize('failure', ['exception', 'bad_zero'])
-def test_initialization_failure_prevents_aspiration(prepared_env, failed_pump, failure):
+@pytest.mark.parametrize('prime_only', [True, False])
+def test_initialization_failure_prevents_aspiration(prepared_env, failed_pump, failure, prime_only):
     async def run():
         dm = FakeManager()
         command = dm.syringe_command
@@ -211,12 +212,49 @@ def test_initialization_failure_prevents_aspiration(prepared_env, failed_pump, f
             return result
         dm.syringe_command = fail
         batch = guided.GuidedBatch(dm, spec())
-        await batch.start(prime_only=True)
+        await batch.start(prime_only=prime_only)
         await batch.task
         assert batch.state.value == 'failed'
         assert batch.record['recovery_required']
-        assert not any(c[0] in ('aspirate', 'dispense', 'microwave_start') for c in dm.calls)
+        assert not any(c[0] in ('aspirate', 'dispense', 'heat', 'microwave_start') for c in dm.calls)
         assert all(('syringe_stop', did) in dm.calls for did in dm.syringes)
+    asyncio.run(run())
+
+
+def test_automatic_start_rechecks_trusted_zero_after_priming(prepared_env):
+    async def run():
+        dm = FakeManager()
+        stop = dm.stop_pump_channel
+        def changed_zero(did, channel):
+            result = stop(did, channel)
+            dm.syringes['syringe_pump1'].position = 100
+            return result
+        dm.stop_pump_channel = changed_zero
+        batch = guided.GuidedBatch(dm, spec())
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'failed'
+        assert batch.record['recovery_required']
+        assert not batch.record['groups']
+        assert not any(c[0] in ('heat', 'microwave_start') for c in dm.calls)
+    asyncio.run(run())
+
+
+def test_stop_during_automatic_priming_never_starts_formal_experiment(prepared_env):
+    async def run():
+        dm = FakeManager()
+        command = dm.syringe_command
+        batch = guided.GuidedBatch(dm, spec())
+        def stop_after_initialization(did, params, owner):
+            result = command(did, params, owner)
+            batch.request_stop()
+            return result
+        dm.syringe_command = stop_after_initialization
+        await batch.start()
+        await batch.task
+        assert batch.record['recovery_required']
+        assert not batch.record['groups']
+        assert not any(c[0] in ('aspirate', 'heat', 'microwave_start') for c in dm.calls)
     asyncio.run(run())
 
 
