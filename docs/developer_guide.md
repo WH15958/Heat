@@ -238,6 +238,15 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 后端在绑定未解析时会阻止 `connect_*`，避免把设备误连到不确定串口。
 - 绑定刷新：`POST /api/devices/refresh_bindings` 会重新运行串口解析并更新已注册设备实例的最终端口；控制页发现“未匹配”时会自动调用一次，用于处理设备晚于后端启动才被 Windows 枚举出来的情况。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置请求必须包含 1-5 段，数值字段拒绝布尔值；请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
+
+手动页默认 1 个逻辑段，可添加至 5 段，只能移除末段。草稿段数不持久化，页面刷新恢复 1 段并只读恢复后端托管进度。`hostedMicrowavePayload` 校验所有使用段并转换时分秒为保温整秒；只支持 `auto_power` / `manual_power`。`configuredProgramKey` 是当前会话的预检查证据，模式、使用段参数、段数或连接变化即失效；迟到的校验响应不能恢复失效证据。预检查不访问硬件，启动后消费证据；网络重试沿用 `request_id` 防重放，重新检查产生新标识。
+
+电脑托管 API 前缀为 `/api/microwave-program/{device_id}`：`POST /preview` 仅编译校验；`POST /start` 接收 `request_id`（32位小写十六进制）、`mode`、`stages`（1–5个 `{temperature, hold_seconds, power_percent}`）、可选 `heating_timeout`（默认600，1–3600秒）及显式 `hardware_confirmed=true`；`GET /current` 返回状态、逻辑段、阶段、错误和恢复/清理锁；`POST /stop` 停止本服务中的执行；`POST /acknowledge-interrupted` 要求 `{devices_stopped_confirmed: true}`，只解除现场确认后的锁，不重放。重复标识和相同请求返回原记录，参数不同返回409；旧标识即使完成、停止或解除锁定也不能再次执行。连接、有限非负温度、无故障、控制位清除和输出停止均需后端只读检查，不自动连接。
+
+`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段以原有 configure/start/monitored_hold/stop 动作编译四步，到目标 ±1℃ 后才开始保温；确认停止后才切换下一目标。每次配置五个硬件段为同一目标及 `heating_timeout + hold_seconds + 60` 秒保温，最大99时59分59秒。只写已知参数寄存器，不写未知起止段地址或将零秒解释为跳段；设备启动范围/方案与参数映射、计时重置仍待实机验收。段间停机，原始 REST/YAML/引导流程不改为此托管模式。
+
+完整程序注册在共享 `_engines`，与普通/引导实验互斥，运行和清理期间保留占用，阻止手动写控制和断开；手动停止及全局急停先禁止后续步骤。托管不暴露暂停/恢复，通用实验暂停/恢复端点对此返回409，避免冻结电脑计时而固件仍加热。原子记录位于 `output/microwave_programs/mwprogram_<request_id>.json`，启动意图必须先落盘，每步先保存进度；存储失败停止并保留锁，日志保存失败也显式报告。重启后未完成或待清理记录视为中断，锁住实验和手动运动控制；可连接、读取、停止后人工确认解除，解除记录保存失败仍锁定。页面/WS生命周期只读，服务正常关闭等待托管停机；进程崩溃无法保证立即停机，长硬件计时不能替代独立联锁。
+
 - WebSocket：实时 payload 包含 `microwaves`；各类设备读取超时（包括 Python 3.10 中不同的 `asyncio.TimeoutError` 与内置 `TimeoutError`）写入 `{"error": "read_timeout"}`，其他读取失败写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
 - 泵实时 payload 的每个通道包含 `running` 和 `read_ok`。历史 `flow_rate` 是设备设定/报告值，只有读取有效且确认运行的区间才表示软件确认的输运区间，不等价于外部流量计实测。
 - 全局急停 `POST /api/devices/emergency_stop` 保留顶层 `success`，并返回 `devices` 明细；每项包含 `device_type`、`device_id`、`connected`、`attempted`、`command_result`、`final_state`、`success` 和 `reason`。已注册但未连接、命令失败或最终状态未确认都会使总体结果失败。

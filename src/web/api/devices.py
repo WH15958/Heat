@@ -19,18 +19,22 @@ async def protect_guided_devices(request: Request):
         return
     from src.web.api.experiments import _engines, _source_lock
     from src.experiment.guided import GuidedBatch
+    from src.experiment.microwave_program import MicrowaveProgramRun
     async with _source_lock:
-        batches = [b for b in _engines.values() if isinstance(b, GuidedBatch)
+        is_stop = request.url.path.endswith("/stop")
+        if request.url.path.endswith("/command"):
+            is_stop = (await request.json()).get("action") == "stop"
+        batches = [b for b in _engines.values() if isinstance(b, (GuidedBatch, MicrowaveProgramRun))
                    and (b.state.value in ("running", "paused") or b.cleanup_pending)]
         if batches:
-            is_stop = request.url.path.endswith("/stop")
-            if request.url.path.endswith("/command"):
-                is_stop = (await request.json()).get("action") == "stop"
             if is_stop:
                 for batch in batches:
                     batch.request_stop()
             else:
-                raise HTTPException(409, "引导式批次占用装置；请先停止批次再手动操作")
+                raise HTTPException(409, "批次或微波托管程序占用装置；请先停止再手动操作")
+        if not is_stop and not request.url.path.endswith(("/connect", "/disconnect", "/refresh_bindings")):
+            from src.web.api.microwave_program import require_recovered
+            require_recovered()
         yield
 
 

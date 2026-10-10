@@ -54,65 +54,81 @@
       </el-form-item>
 
       <el-form-item label="模式">
-        <el-select v-model="microwave.mode" style="width: 160px">
-          <el-option v-for="mode in MICROWAVE_MODES" :key="mode.value" :label="mode.label" :value="mode.value" />
+        <el-select v-model="microwave.mode" :disabled="settingsDisabled" style="width: 160px">
+          <el-option v-for="mode in MICROWAVE_MODES.filter(m => m.value !== 'constant_rate')" :key="mode.value" :label="mode.label" :value="mode.value" />
         </el-select>
       </el-form-item>
 
-      <el-form-item label="配置段">
-        <el-select v-model="microwave.selectedSegment" style="width: 120px">
-          <el-option v-for="segment in [1, 2, 3, 4, 5]" :key="segment" :label="`第 ${segment} 段`" :value="segment" />
-        </el-select>
+      <el-form-item label="程序段">
+        <span>本次共 {{ microwave.usedSegments }} 段</span>
+        <el-button :disabled="settingsDisabled || microwave.usedSegments >= 5" @click="addSegment">添加一段</el-button>
+        <span class="unit-label">最多 5 段</span>
       </el-form-item>
-
-      <el-form-item label="温度">
-        <el-input-number
-          v-model="currentSegment.temperature"
-          :min="0"
-          :max="300"
-          :step="1"
-          :precision="1"
-          style="width: 140px"
-        />
-        <span class="unit-label">°C</span>
-      </el-form-item>
-
-      <el-form-item v-if="microwave.mode === 'manual_power'" label="功率">
-        <el-input-number
-          v-model="currentSegment.powerPercent"
-          :min="0"
-          :max="100"
-          :step="1"
-          style="width: 140px"
-        />
-        <span class="unit-label">%</span>
-      </el-form-item>
-
-      <el-form-item label="时间">
-        <div class="time-row">
-          <el-input-number v-model="currentSegment.hours" :min="0" :max="99" :step="1" size="small" style="width: 86px" />
-          <span class="unit-label">时</span>
-          <el-input-number v-model="currentSegment.minutes" :min="0" :max="59" :step="1" size="small" style="width: 86px" />
-          <span class="unit-label">分</span>
-          <el-input-number v-model="currentSegment.seconds" :min="0" :max="59" :step="1" size="small" style="width: 86px" />
-          <span class="unit-label">秒</span>
+      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：每段到温后计时保温，确认停止后进入下一段。无需设置触摸屏执行范围，段间会短暂停机；运行期间须保持后端服务运行并现场看护。" />
+      <div v-if="hostProgram && (hostProgram.state !== 'idle' || hostProgram.status_error || hostProgram.recovery_required)" class="program-notice">
+        <p>托管状态：{{ hostStateLabel }} · 逻辑段 {{ hostProgram.current_stage || 0 }}/{{ hostProgram.total_stages || 0 }} · {{ phaseLabel }}</p>
+        <el-alert v-if="hostProgram.error || hostProgram.status_error" :title="hostProgram.error || hostProgram.status_error" type="error" :closable="false" />
+        <el-button v-if="hostProgram.recovery_required" type="warning" @click="$emit('recover', microwaveId)">现场确认停止后解除锁定</el-button>
+      </div>
+      <section v-for="segment in activeSegments" :key="segment.segment" class="program-segment">
+        <div class="segment-heading">
+          <h4>第 {{ segment.segment }} 段</h4>
+          <el-button v-if="segment.segment === microwave.usedSegments && microwave.usedSegments > 1" :disabled="settingsDisabled" @click="removeSegment">移除本段</el-button>
         </div>
-      </el-form-item>
+        <el-form-item label="温度">
+          <el-input-number
+            v-model="segment.temperature"
+            :disabled="settingsDisabled"
+            :min="0"
+            :max="300"
+            :step="1"
+            :precision="1"
+            style="width: 140px"
+          />
+          <span class="unit-label">°C</span>
+        </el-form-item>
+
+        <el-form-item v-if="microwave.mode === 'manual_power'" label="功率">
+          <el-input-number
+            v-model="segment.powerPercent"
+            :disabled="settingsDisabled"
+            :min="0"
+            :max="100"
+            :step="1"
+            style="width: 140px"
+          />
+          <span class="unit-label">%</span>
+        </el-form-item>
+
+        <el-form-item label="保温时间">
+          <div class="time-row">
+            <el-input-number v-model="segment.hours" :disabled="settingsDisabled" :min="0" :max="99" :step="1" size="small" style="width: 86px" />
+            <span class="unit-label">时</span>
+            <el-input-number v-model="segment.minutes" :disabled="settingsDisabled" :min="0" :max="59" :step="1" size="small" style="width: 86px" />
+            <span class="unit-label">分</span>
+            <el-input-number v-model="segment.seconds" :disabled="settingsDisabled" :min="0" :max="59" :step="1" size="small" style="width: 86px" />
+            <span class="unit-label">秒</span>
+          </div>
+        </el-form-item>
+
+      </section>
 
       <el-form-item label="运行控制">
         <el-button
           type="primary"
           @click="$emit('configure', microwaveId)"
           :loading="microwave.configuring"
+          :disabled="settingsDisabled || !microwave.connected"
         >
-          配置
+          检查程序
         </el-button>
         <el-button
           type="success"
           @click="$emit('start', microwaveId)"
           :loading="microwave.starting"
+          :disabled="settingsDisabled || !microwave.connected || !programConfigured || !hostProgram || hostProgram.status_error || hostProgram.recovery_required"
         >
-          启动
+          启动托管程序
         </el-button>
         <el-button
           type="warning"
@@ -121,6 +137,7 @@
         >
           停止
         </el-button>
+        <span class="unit-label">{{ programConfigured ? '程序已检查，启动后由后端逐段执行' : '请先检查程序；修改参数后重新检查' }}</span>
       </el-form-item>
     </el-form>
 
@@ -142,7 +159,7 @@
         <span class="metric-value">{{ formatRuntime(realtime?.runtime_seconds) }}</span>
       </div>
       <div class="metric">
-        <span class="metric-label">当前段</span>
+        <span class="metric-label">硬件当前段</span>
         <span class="metric-value">{{ realtime?.current_segment ?? '--' }}</span>
       </div>
       <div class="metric">
@@ -167,19 +184,11 @@ import deviceArtwork from '../assets/theme/microwave.webp'
 import { computed } from 'vue'
 import { MICROWAVE_MODES, type MicrowaveMode } from '../api/devices'
 import type { MicrowaveRealtimeData } from '../composables/useWebSocket'
+import { microwaveProgramConfigured, type MicrowaveProgram } from '../utils/microwaveProgram'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 
-interface MicrowaveSegmentConfig {
-  segment: number
-  temperature: number
-  powerPercent: number
-  hours: number
-  minutes: number
-  seconds: number
-}
-
-interface MicrowaveDeviceState {
+interface MicrowaveDeviceState extends MicrowaveProgram {
   connected: boolean
   loading: boolean
   connectionError?: string | null
@@ -188,7 +197,6 @@ interface MicrowaveDeviceState {
   starting: boolean
   stopping: boolean
   mode: MicrowaveMode
-  selectedSegment: number
   connectionPort?: string
   bindingMode?: string
   bindingLabel?: string
@@ -197,13 +205,14 @@ interface MicrowaveDeviceState {
   allowExperimentControl: boolean
   allowRealHardwareWrites: boolean
   enableControlWrites: boolean
-  segments: Record<number, MicrowaveSegmentConfig>
 }
 
 const props = defineProps<{
   microwaveId: string
   microwave: MicrowaveDeviceState
   realtime: MicrowaveRealtimeData | null
+  hostProgram?: { state: string; current_stage?: number; total_stages?: number; phase?: string;
+    recovery_required?: boolean; cleanup_pending?: boolean; status_error?: string; error?: string }
 }>()
 
 defineEmits<{
@@ -213,9 +222,26 @@ defineEmits<{
   configure: [id: string]
   start: [id: string]
   stop: [id: string]
+  recover: [id: string]
 }>()
 
-const currentSegment = computed(() => props.microwave.segments[props.microwave.selectedSegment] ?? props.microwave.segments[1])
+const activeSegments = computed(() => Array.from({ length: props.microwave.usedSegments }, (_, index) => props.microwave.segments[index + 1]!))
+const programConfigured = computed(() => microwaveProgramConfigured(props.microwave))
+const settingsDisabled = computed(() => props.microwave.configuring || props.microwave.starting
+  || Boolean(props.realtime?.control_active || props.realtime?.output_active)
+  || props.hostProgram?.state === 'running' || props.hostProgram?.state === 'paused')
+const hostStateLabel = computed(() => ({ running: '运行中', completed: '完成', failed: '失败',
+  stopped: '已停止', interrupted: '服务中断，需恢复确认' }[props.hostProgram?.state || ''] || props.hostProgram?.state))
+const phaseLabel = computed(() => ({ configure: '配置当前逻辑段', heat: '等待到温', hold: '计时保温', stop: '确认停止',
+  completed: '全部段完成', failed: '失败', stopped: '已停止', acknowledged: '已人工解除锁定' }[props.hostProgram?.phase || ''] || '等待确认'))
+function addSegment() {
+  if (!settingsDisabled.value && props.microwave.usedSegments < 5) props.microwave.usedSegments++
+}
+
+function removeSegment() {
+  if (!settingsDisabled.value && props.microwave.usedSegments > 1) props.microwave.usedSegments--
+}
+
 const connectionPort = computed(() => props.realtime?.connection_port ?? props.microwave.connectionPort ?? '--')
 const bindingMode = computed(() => props.realtime?.connection_binding_mode ?? props.microwave.bindingMode ?? 'fixed_port')
 const bindingLabel = computed(() => props.realtime?.binding_label ?? props.microwave.bindingLabel ?? '未配置绑定')
@@ -277,6 +303,10 @@ function formatRuntime(seconds: number | null | undefined): string {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .connection-feedback { margin-bottom: 12px; }
+.program-notice { margin-bottom: 18px; }
+.program-segment { padding: 16px; margin-bottom: 16px; border: 1px solid var(--el-border-color-light); border-radius: 8px; }
+.segment-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.segment-heading h4 { margin: 0; }
 .header-tags,
 .status-tags,
 .time-row,

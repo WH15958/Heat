@@ -79,6 +79,8 @@ async def history():
 @router.post("/start")
 async def start(spec: guided.GuidedRequest, request: Request):
     async with _source_lock:
+        from src.web.api.microwave_program import require_recovered
+        require_recovered()
         if not spec.priming_batch_id:
             return await create_batch(spec, request, prime_only=False)
         batch = active_batch(spec.priming_batch_id)
@@ -103,6 +105,8 @@ async def prime(spec: guided.GuidedRequest, request: Request):
 
 
 async def create_batch(spec, request, *, prime_only):
+    from src.web.api.microwave_program import require_recovered
+    require_recovered()
     # Both callers hold _source_lock across readiness checks and registration.
     if _get_active_engine()[1] is not None:
         raise HTTPException(409, "已有实验正在执行或停机尚未确认")

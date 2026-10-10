@@ -121,6 +121,8 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
 
 
 async def _start_experiment_locked(filename: str, body: StartExperimentRequest, request: Request):
+    from src.web.api.microwave_program import require_recovered
+    require_recovered()
     from src.web.api.guided import records
     if any(r.get("recovery_required") for r in records()):
         raise HTTPException(409, "存在中断的引导式批次，须先现场确认设备停止")
@@ -244,6 +246,8 @@ async def pause_experiment(filename: str):
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
+    if not hasattr(engine, "pause"):
+        raise HTTPException(409, "微波托管程序不支持暂停，请使用停止")
     await engine.pause()
     return {"success": True}
 
@@ -253,6 +257,8 @@ async def resume_experiment(filename: str):
     engine = _engines.get(filename)
     if engine is None:
         raise HTTPException(status_code=404, detail="Experiment not running")
+    if not hasattr(engine, "resume"):
+        raise HTTPException(409, "微波托管程序不支持恢复，请重新检查程序")
     await engine.resume()
     return {"success": True}
 
