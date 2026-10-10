@@ -71,6 +71,10 @@ class GuidedRequest(BaseModel):
                 raise ValueError("整批最多 200 组")
         if max(self.axes[5]) > 1440:
             raise ValueError("单组保温时间最多 1440 分钟")
+        for minutes in self.axes[5]:
+            hold_seconds(minutes)
+        if self.clean_volume > self.reactor_available_ml:
+            raise ValueError("每次清洗液量超出反应仪现场确认的可用容积")
         total = self.prime_cycles * (self.prime_volume_a + self.prime_volume_b)
         if total > self.reactor_available_ml:
             raise ValueError("累计预充量超出反应仪现场确认的可用容积")
@@ -87,6 +91,13 @@ class GuidedRequest(BaseModel):
 
     def rows(self):
         return [list(row) for row in itertools.product(*self.axes) for _ in range(self.repeats)]
+
+
+def hold_seconds(minutes):
+    seconds = minutes * 60
+    if not math.isclose(seconds, round(seconds), rel_tol=0, abs_tol=1e-9):
+        raise ValueError("保温分钟必须能转换为整秒，不能截断小数秒")
+    return int(round(seconds))
 
 
 def drain_seconds(volume, flow):
@@ -173,12 +184,14 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     add("feed_both", "syringe_pair.dispense", dict(feeds=feeds))
     for n in (1, 2):
         add(f"heater{n}_stop", "heater.stop", dict(device_id=f"heater{n}"))
+    seconds = hold_seconds(row[5])
     add("microwave_config", "microwave.configure_auto_power", dict(device_id="microwave1",
-        segments=[dict(segment=1, heating_temperature=row[4], holding_temperature=row[4])]))
+        segments=[dict(segment=1, heating_temperature=row[4], holding_temperature=row[4],
+                       hours=seconds//3600, minutes=seconds%3600//60, seconds=seconds%60)]))
     add("microwave_start", "microwave.start", dict(device_id="microwave1", mode="auto_power"),
         dict(type="microwave_temperature_reached", device_id="microwave1",
              target_temperature=row[4], tolerance=1, timeout=spec.heating_timeout))
-    add("hold", "wait", wait=dict(type="duration", seconds=row[5]*60))
+    add("hold", "wait", wait=dict(type="microwave_monitored_hold", device_id="microwave1", seconds=seconds))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
     cool = dict(type="microwave_temperature_below", device_id="microwave1",
                 target_temperature=45, timeout=spec.cooling_timeout)
@@ -201,6 +214,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
 def compile_plan(spec, batch_id="preview"):
     from src.utils.config import ConfigManager
     config = ConfigManager().load()
+    validate_fixed_channels(config, spec)
     for i, did in enumerate(("heater1", "heater2")):
         heater = next((h for h in config.heaters if h.device_id == did and h.enabled), None)
         if heater is None or any(not heater.min_temperature <= t <= heater.max_temperature for t in spec.axes[i]):
@@ -218,6 +232,19 @@ def compile_plan(spec, batch_id="preview"):
         if not result["valid"]:
             raise ValueError("；".join(e["message"] for e in result["errors"]))
     return recipes
+
+
+def validate_fixed_channels(config, spec):
+    pump = next((p for p in config.pumps if p.device_id == "pump1" and p.enabled), None)
+    valve = next((v for v in config.valves if v.device_id == "valve1" and v.enabled), None)
+    if pump is None or valve is None:
+        raise ValueError("固定蠕动泵 pump1 或三通阀 valve1 未配置或未启用")
+    for number, flows in ((3, (spec.clean_flow,)), (4, (spec.drain_flow, spec.prime_drain_flow))):
+        channel = next((c for c in pump.channels if c.channel == number and c.enabled), None)
+        if channel is None:
+            raise ValueError(f"蠕动泵通道 {number} 未配置或未启用")
+        if any(flow > channel.max_flow_rate for flow in flows):
+            raise ValueError(f"蠕动泵通道 {number} 流量超出配置上限 {channel.max_flow_rate} mL/min")
 
 
 def atomic_record(record, directory=None):
@@ -276,6 +303,7 @@ class GuidedBatch:
 
     def save(self):
         self.record["state"] = self.state.value
+        self.record["pause_pending"] = bool(self.engine and self.engine.pause_pending)
         self.record["cleanup_required"] = bool(self.engine and self.engine.cleanup_pending)
         try:
             self.record["persistence_status"] = "ok"
@@ -288,6 +316,7 @@ class GuidedBatch:
     def snapshot(self):
         result = dict(self.record)
         result["state"] = self.state.value
+        result["pause_pending"] = bool(self.engine and self.engine.pause_pending)
         result["cleanup_pending"] = self.cleanup_pending
         p = self.progress
         result["progress"] = dict(current_step=p.current_step, total_steps=p.total_steps,
@@ -387,7 +416,8 @@ class GuidedBatch:
                     break
                 self.record["current_group"] = i+1
                 executor = self.executor
-                self.engine = ExperimentEngine(executor, ExperimentLogger(save_log=True))
+                self.engine = ExperimentEngine(executor, ExperimentLogger(save_log=True),
+                                               finish_reaction_before_pause=True)
                 parsed = parse_experiment_data(data)
                 self.engine.load_steps(parsed["steps"], data["name"],
                     filename=self.batch_id + f"_{i+1}.yaml", metadata=data["metadata"])
@@ -449,6 +479,8 @@ class GuidedBatch:
                     self.record["error"] = str(exc)
 
     def checkpoint(self, progress):
+        if progress.state in (ExperimentState.RUNNING, ExperimentState.PAUSED):
+            self.state = progress.state
         self.record["last_step"] = progress.step_id
         if self.record["phase"] == "priming" and self.engine:
             run = self.engine.exp_logger.active_run
@@ -466,15 +498,18 @@ class GuidedBatch:
     async def pause(self):
         if self.stopping or self.state != ExperimentState.RUNNING:
             raise ValueError("批次当前不可暂停")
-        self.state = ExperimentState.PAUSED
-        if self.engine:
+        if self.engine and self.engine.state == ExperimentState.RUNNING:
             await self.engine.pause()
+            self.state = self.engine.state
+        else:
+            # No running engine yet (or a group just ended): pause the batch boundary.
+            self.state = ExperimentState.PAUSED
         self.save()
 
     async def resume(self):
         if self.record["phase"] == "ready":
             raise ValueError("请在批次确认页启动正式实验，不能通过继续跳过签名检查")
-        if self.stopping or self.state != ExperimentState.PAUSED:
+        if self.stopping or (self.state != ExperimentState.PAUSED and not (self.engine and self.engine.pause_pending)):
             raise ValueError("批次当前不可继续")
         self.state = ExperimentState.RUNNING
         try:
@@ -549,6 +584,7 @@ class GuidedBatch:
 
 async def preflight(dm, spec, owner=None):
     """Read-only device readiness check. Never connect or initialize implicitly."""
+    compile_plan(spec)  # Recheck current configuration before any reagent-consuming write.
     if not spec.plumbing_confirmed:
         raise ValueError("请确认进液、排液方向及三通阀实际出口接管")
     if not spec.priming_confirmed:

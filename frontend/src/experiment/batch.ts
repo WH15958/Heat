@@ -4,6 +4,14 @@ export interface Variable { key: string; label: string; paths: Path[]; value: nu
 export interface Axis extends Variable { mode: 'fixed' | 'range' | 'list'; start: number; end: number; interval: number; list: string }
 export const MAX_RUNS = 200
 
+export function microwaveHoldSeconds(minutes: number): number {
+  const seconds = minutes * 60
+  if (!Number.isFinite(seconds) || minutes < 0 || minutes > 1440 || Math.abs(seconds - Math.round(seconds)) > 1e-9) {
+    throw new Error('保温时间须为 0–1440 分钟，且必须能转换为整秒，不能截断小数秒')
+  }
+  return Math.round(seconds)
+}
+
 // Only expose quantities with understood semantics; never infer a new device action.
 export function variablesFrom(source: string): Variable[] {
   const state = inspectSource(source)

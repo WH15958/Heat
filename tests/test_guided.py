@@ -169,7 +169,7 @@ class FakeManager:
             running = channel in self.pump_reads and self.pump_reads[channel] == 0
             if channel in self.pump_reads:
                 self.pump_reads[channel] += 1
-            channels[channel] = {"read_ok": True, "running": running}
+            channels[channel] = {"read_ok": True, "running": running, "run_status": "START" if running else "STOP"}
         return {"channels": channels}
 
 

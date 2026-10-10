@@ -498,3 +498,15 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 预充复用同步设备驱动、现有 StepExecutor、ExperimentEngine、资源预留和日志；不新增设备动作或 YAML 动作类型。预充成功后批次处于 paused/ready，保留所有权；普通 resume 被拒绝，必须调用 start。失败会停止两台注射泵（含未启动那台）及排液通道；任何 False 或停机异常保留未确认状态，并可再次停止重试。恢复锁必须人工确认后通过现有 acknowledge-interrupted 接口解除，此接口也处理本服务中的预充失败。服务重启后 ready 不可自动复用或恢复。
 
 预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗继续使用 drain_flow。旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，估算按钮只在明确点击时填入无额外余量的理论时间；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
+
+### 自动化保护等待与计时
+
+同步驱动及设备管理器保持原接口。`StepExecutor` 在编排层实现 `microwave_monitored_hold`：每秒同步读取经线程桥接的微波状态，校验有限非负物料温度、fault_code=0、可靠控制状态，保温控制提前结束超过 1 秒失败。到温等待也校验故障与控制。失败返回 False，由引擎停止已启动设备、记录失败，不进入收取或下一组。硬件保温时、分、秒寄存器由引导编译器根据整秒时长生成。
+
+引导式正式单组启用 `finish_reaction_before_pause`。微波启动至显式停止之间设置 `pause_pending`，不清除运行事件；停止成功后才真正暂停。停止请求清除 pending 并中断等待，恢复不重放。`GET /api/guided/current`、批次状态及普通实验 progress 响应增加布尔 `pause_pending`（普通实验默认 false）；路径不变。页面显示 pending 与 paused 两种状态，pending 时 resume 取消暂停请求。
+
+固定等待和通用条件超时使用单调时钟。实际暂停起止由引擎通知执行器，等待时钟扣除真实暂停累计值；微波阶段 pending 不是实际暂停，持续计时。注射泵已发动作仍完成并持续读 Q。短蠕动泵动作的本次启动读回证据按设备及通道保存，等待消费一次；有效 STOP 才完成，未知或 PAUSE 不通过，新启动/停止/清理清除证据。
+
+`compile_plan` 检查固定设备启用、通道启用和流量上限，模型检查预充、单组和每次清洗的反应器容量及源液/废液总量。`preflight` 在预充与正式启动前重做编译校验，再执行只读就绪检查；不隐式连接或初始化。保存 YAML 的覆盖保护只检查文件实验注册键，批次标识不作为文件路径解析。预充维护 sample_id 由 logger 使用 batch_id 和 run_id 生成，CSV 保留 PRIMING 标记及维护 notes；历史编号不迁移。
+
+软件回归入口：`tests/test_automation_safety_fixes.py`（时钟、状态联锁、暂停/停止、容量/流量、真实临时 CSV、文件保存），并执行既有后端和前端回归。实机验收按微波和注射泵验收文档回填，不用模拟器结果标记实机通过。

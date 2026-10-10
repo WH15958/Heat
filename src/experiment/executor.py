@@ -29,10 +29,13 @@ class StepExecutor:
         self._dm = device_manager
         self._should_stop = lambda: False
         self._is_paused = lambda: False
+        self._paused_at = None
+        self._paused_total = 0.0
         self._active_heaters = set()
         self._active_pumps = set()
         self._pump_repeat_counts = {}
         self._active_microwaves = set()
+        self._pump_start_confirmed = set()
         self._active_syringes = set()
         self._reserved_syringes = set()
         self._syringe_owner = object()
@@ -106,39 +109,46 @@ class StepExecutor:
     def set_pause_checker(self, checker):
         self._is_paused = checker
 
+    def notify_pause(self, paused):
+        """Timestamp actual orchestration pause transitions, never pending requests."""
+        if paused and self._paused_at is None:
+            self._paused_at = time.monotonic()
+        elif not paused and self._paused_at is not None:
+            self._paused_total += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+    def _wait_clock(self):
+        now = time.monotonic()
+        return now - self._paused_total - (now - self._paused_at if self._paused_at is not None else 0)
+
     async def _wait_for_resume(self):
         if not self._is_paused():
             return 0.0
+        self.notify_pause(True)
         paused_at = time.monotonic()
         while self._is_paused():
             if self._should_stop():
                 return None
             await asyncio.sleep(0.05)
+        self.notify_pause(False)
         return time.monotonic() - paused_at
 
     async def _pause_aware_sleep(self, seconds):
         if not _is_nonnegative_finite_number(seconds):
             logger.error(f"Invalid sleep duration: {seconds}")
             return None
-        remaining = float(seconds)
+        deadline = self._wait_clock() + seconds
         paused_total = 0.0
-        while remaining > 0:
+        while True:
             paused_duration = await self._wait_for_resume()
             if paused_duration is None or self._should_stop():
                 return None
             paused_total += paused_duration
+            remaining = deadline - self._wait_clock()
+            if remaining <= 0:
+                return paused_total
             sleep_time = min(remaining, 0.05)
-            started_at = time.monotonic()
             await asyncio.sleep(sleep_time)
-            elapsed = time.monotonic() - started_at
-            if self._is_paused():
-                paused_duration = await self._wait_for_resume()
-                if paused_duration is None or self._should_stop():
-                    return None
-                paused_total += paused_duration
-                elapsed = max(0.0, elapsed - paused_duration)
-            remaining -= elapsed
-        return paused_total
 
     async def execute(self, step: ExperimentStep) -> bool:
         """执行一个步骤
@@ -151,6 +161,11 @@ class StepExecutor:
         """
         logger.info(f"Executing step: {step.id} ({step.type.value})")
         self._current_step = step
+        if step.type == ActionType.PUMP_START:
+            self._pump_start_confirmed.discard((step.params.get("device_id"), step.params.get("channel")))
+        if step.wait.type == WaitType.MICROWAVE_MONITORED_HOLD and (not step.enabled or step.on_error != "stop"):
+            self._last_error = "微波保护保温必须启用且失败停止"
+            return False
         self.last_device_result = None
         target = step.params.get("device_id", "system")
         channel = step.params.get("channel")
@@ -356,13 +371,16 @@ class StepExecutor:
                 if not result:
                     logger.error(f"Step {step.id}: start_pump_channel returned False")
                     return False
+                # The synchronous driver returned success only after START readback.
+                self._pump_start_confirmed.add(pump_key)
 
             elif step.type == ActionType.PUMP_STOP:
+                device_id = step.params["device_id"]
+                self._pump_start_confirmed = {key for key in self._pump_start_confirmed if key[0] != device_id}
                 result = await loop.run_in_executor(None, self._dm.stop_pump_channel, step.params["device_id"])
                 if not result:
                     logger.error(f"Step {step.id}: stop_pump_channel returned False")
                     return False
-                device_id = step.params["device_id"]
                 self._active_pumps = {
                     item for item in self._active_pumps if item[0] != device_id
                 }
@@ -373,6 +391,7 @@ class StepExecutor:
                 }
 
             elif step.type == ActionType.PUMP_STOP_CHANNEL:
+                self._pump_start_confirmed.discard((step.params["device_id"], step.params["channel"]))
                 result = await loop.run_in_executor(
                     None, self._dm.stop_pump_channel, step.params["device_id"], step.params["channel"]
                 )
@@ -390,6 +409,7 @@ class StepExecutor:
                 pass
 
             elif step.type == ActionType.EMERGENCY_STOP:
+                self._pump_start_confirmed.clear()
                 result = await loop.run_in_executor(None, self._dm.emergency_stop_all)
                 if not result:
                     logger.error(f"Step {step.id}: emergency_stop_all returned False")
@@ -422,6 +442,7 @@ class StepExecutor:
 
     async def stop_active_devices(self) -> bool:
         """Stop devices that this executor attempted to start."""
+        self._pump_start_confirmed.clear()
         loop = asyncio.get_running_loop()
         success = True
         self.release_unused_syringes()
@@ -645,6 +666,49 @@ class StepExecutor:
             return False
         return False
 
+    def _valid_microwave_state(self, data, *, require_control=True):
+        if (data.get("read_ok") is False or data.get("fault_code") != 0
+                or not _is_nonnegative_finite_number(data.get("material_temperature"))
+                or (data.get("control_active") is not True and data.get("control_active") is not False)
+                or data.get("status_confirmed") is False
+                or (require_control and data.get("control_active") is not True)):
+            self._last_error = "微波故障、温度无效、状态读取失败或提前退出控制"
+            return False
+        return True
+
+    async def _monitored_hold(self, condition):
+        if (not condition.device_id or not _is_nonnegative_finite_number(condition.seconds)
+                or condition.seconds != round(condition.seconds)):
+            self._last_error = "微波保护保温必须指定设备并使用非负整秒"
+            return False
+        started = self._wait_clock()
+        while True:
+            if self._should_stop():
+                return False
+            paused = await self._wait_for_resume()
+            if paused is None:
+                return False
+            next_poll = self._wait_clock() + 1.0
+            try:
+                data = await asyncio.to_thread(self._dm.read_microwave_data, condition.device_id)
+                self.last_device_result = data
+                if not self._valid_microwave_state(data, require_control=False):
+                    return False
+                remaining = condition.seconds - (self._wait_clock() - started)
+                if data.get("control_active") is False and remaining > 1.0:
+                    self._last_error = "微波仪提前超过一个轮询周期退出控制，保温失败"
+                    return False
+                if self._should_stop():
+                    return False
+                if remaining <= 0:
+                    return True
+            except Exception as exc:
+                self._last_error = "微波保温状态读取失败：" + str(exc)
+                return False
+            paused = await self._pause_aware_sleep(min(max(0, next_poll - self._wait_clock()), remaining))
+            if paused is None:
+                return False
+
     async def _wait_condition(self, condition):
         """等待条件满足
 
@@ -653,8 +717,10 @@ class StepExecutor:
         """
         if condition.type == WaitType.SYRINGE_PUMP_COMPLETE:
             return await self._wait_syringe(condition.device_id, condition.timeout)
+        if condition.type == WaitType.MICROWAVE_MONITORED_HOLD:
+            return await self._monitored_hold(condition)
         loop = asyncio.get_event_loop()
-        start_time = time.time()
+        start_time = self._wait_clock()
 
         if condition.type == WaitType.DURATION:
             if not _is_nonnegative_finite_number(condition.seconds):
@@ -688,18 +754,7 @@ class StepExecutor:
 
         if condition.type == WaitType.DURATION:
             logger.info(f"Waiting {condition.seconds}s...")
-            remaining = max(condition.seconds, 0)
-            while remaining > 0:
-                if self._should_stop():
-                    logger.info("Wait interrupted by stop request")
-                    return False
-                if await self._wait_for_resume() is None:
-                    return False
-                sleep_time = min(remaining, 0.2)
-                if await self._pause_aware_sleep(sleep_time) is None:
-                    return False
-                remaining -= sleep_time
-            return True
+            return not self._should_stop() and await self._pause_aware_sleep(condition.seconds) is not None
 
         elif condition.type == WaitType.TEMPERATURE_REACHED:
             logger.info(
@@ -713,8 +768,7 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
-                elapsed = time.time() - start_time
+                elapsed = self._wait_clock() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Wait timeout after {condition.timeout}s")
                     return False
@@ -732,7 +786,6 @@ class StepExecutor:
                 paused_duration = await self._pause_aware_sleep(1.0)
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
 
         elif condition.type in {WaitType.MICROWAVE_TEMPERATURE_REACHED, WaitType.MICROWAVE_TEMPERATURE_BELOW}:
             cooling = condition.type == WaitType.MICROWAVE_TEMPERATURE_BELOW
@@ -749,8 +802,7 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
-                elapsed = time.time() - start_time
+                elapsed = self._wait_clock() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Microwave temperature wait timeout after {condition.timeout}s")
                     return False
@@ -759,6 +811,15 @@ class StepExecutor:
                         None, self._dm.read_microwave_data, condition.device_id
                     )
                     material_temperature = data.get("material_temperature")
+                    self.last_device_result = data
+                    if not cooling and not self._valid_microwave_state(data):
+                        return False
+                    if self._should_stop():
+                        return False
+                    if self._is_paused():
+                        continue
+                    if self._wait_clock() - start_time > condition.timeout:
+                        return False
                     if cooling:
                         if data.get("read_ok") is False or data.get("fault_code", 0) != 0 or data.get("output_active") is True:
                             self._last_error = "Cooling wait failed: microwave read/fault/output state"
@@ -770,7 +831,7 @@ class StepExecutor:
                             return False
                         if self._is_paused():
                             continue
-                        if time.time() - start_time > condition.timeout:
+                        if self._wait_clock() - start_time > condition.timeout:
                             return False
                         if material_temperature <= target_temperature:
                             logger.info(f"Cooling complete: {material_temperature}C <= {target_temperature}C")
@@ -789,12 +850,11 @@ class StepExecutor:
                         f"Microwave temperature wait read failed for "
                         f"{condition.device_id}: {e}"
                     )
-                    if cooling:
-                        return False
+                    self._last_error = "微波温度读取失败：" + str(e)
+                    return False
                 paused_duration = await self._pause_aware_sleep(0.2)
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
 
         elif condition.type == WaitType.MICROWAVE_COMPLETE:
             logger.info(
@@ -809,8 +869,7 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
-                elapsed = time.time() - start_time
+                elapsed = self._wait_clock() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Microwave complete wait timeout after {condition.timeout}s")
                     return False
@@ -839,7 +898,6 @@ class StepExecutor:
                 paused_duration = await self._pause_aware_sleep(0.2)
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
 
         elif condition.type == WaitType.PUMP_COMPLETE:
             pump_key = (condition.device_id, condition.channel)
@@ -855,7 +913,8 @@ class StepExecutor:
             logger.info(
                 f"Waiting for pump {condition.device_id} CH{condition.channel} to complete"
             )
-            seen_running = False
+            seen_running = pump_key in self._pump_start_confirmed
+            self._pump_start_confirmed.discard(pump_key)  # Evidence belongs to this wait only.
             while True:
                 if self._should_stop():
                     logger.info("Pump wait interrupted by stop request")
@@ -863,8 +922,7 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
-                elapsed = time.time() - start_time
+                elapsed = self._wait_clock() - start_time
                 if elapsed > condition.timeout:
                     logger.warning(f"Pump wait timeout after {condition.timeout}s")
                     return False
@@ -877,11 +935,10 @@ class StepExecutor:
                         paused_duration = await self._pause_aware_sleep(1.0)
                         if paused_duration is None:
                             return False
-                        start_time += paused_duration
                         continue
-                    if ch_data.get("running") is True:
+                    if ch_data.get("running") is True and ch_data.get("run_status") in ("START", "FULL_SPEED"):
                         seen_running = True
-                    elif seen_running:
+                    elif seen_running and ch_data.get("running") is False and ch_data.get("run_status") == "STOP":
                         logger.info(
                             f"Pump channel {condition.channel} completed"
                         )
@@ -891,6 +948,5 @@ class StepExecutor:
                 paused_duration = await self._pause_aware_sleep(1.0)
                 if paused_duration is None:
                     return False
-                start_time += paused_duration
 
         return True

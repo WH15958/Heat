@@ -179,6 +179,8 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
                     'temperature_reached': 'heater', 'pump_complete': 'pump',
                     'microwave_temperature_reached': 'microwave',
                     'microwave_complete': 'microwave',
+                    'microwave_temperature_below': 'microwave',
+                    'microwave_monitored_hold': 'microwave',
                     'syringe_pump_complete': 'syringe_pump',
                 }.get(wait.get('type'))
                 if wait_group and wait.get('device_id') not in device_groups[wait_group]:

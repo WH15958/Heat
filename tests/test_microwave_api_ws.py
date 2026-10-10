@@ -183,6 +183,7 @@ def test_websocket_payload_includes_microwaves():
     microwave = FakeConnectedMicrowave()
     dm = Mock()
     dm.syringe_pumps = {}
+    dm.valves = {}
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}
@@ -228,6 +229,7 @@ def test_websocket_payload_includes_heater_and_pump_ports():
     dm = Mock()
     dm.get_all_heaters.return_value = {"heater1": heater}
     dm.syringe_pumps = {}
+    dm.valves = {}
     dm.get_all_pumps.return_value = {"pump1": pump}
     dm.get_all_microwaves.return_value = {}
     dm.get_heater_binding.return_value = {}
@@ -249,6 +251,7 @@ def test_websocket_microwave_read_failure_is_error_payload():
     microwave.config = SimpleNamespace(connection_params={"port": "COM12"})
     dm = Mock()
     dm.syringe_pumps = {}
+    dm.valves = {}
     dm.get_all_heaters.return_value = {}
     dm.get_all_pumps.return_value = {}
     dm.get_all_microwaves.return_value = {"mw1": microwave}
@@ -263,6 +266,30 @@ def test_websocket_microwave_read_failure_is_error_payload():
             "connection_port": "COM12",
             "error": "read_timeout",
         }
+
+
+def test_websocket_valve_present_absent_and_read_failure():
+    dm = Mock()
+    dm.get_all_heaters.return_value = {}
+    dm.get_all_pumps.return_value = {}
+    dm.get_all_microwaves.return_value = {}
+    dm.syringe_pumps = {}
+    dm.valves = {}
+    assert run(build_realtime_payload(dm))["valves"] == {}
+    dm.valve_operation.assert_not_called()
+    valve = Mock()
+    valve.is_connected.return_value = True
+    valve.config = SimpleNamespace(connection_params={"port": "COM7"})
+    dm.valves = {"valve1": valve}
+    dm.valve_operation.return_value = {"read_ok": True, "relay_energized": False}
+    assert run(build_realtime_payload(dm))["valves"]["valve1"] == dm.valve_operation.return_value
+    dm.valve_operation.assert_called_with("valve1", "status")
+    dm.valve_operation.side_effect = IOError("valve read failed")
+    result = run(build_realtime_payload(dm))["valves"]["valve1"]
+    assert result["read_ok"] is False
+    assert result["relay_energized"] is None
+    assert result["physical_route_confirmed"] is False
+    assert "valve read failed" in result["error"]
 
 
 def test_create_device_manager_raises_on_config_load_failure():

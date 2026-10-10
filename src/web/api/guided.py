@@ -31,6 +31,8 @@ def read_record(batch_id):
     if (record["state"] not in guided.TERMINAL or record.get("cleanup_required")) and batch_id not in _batches:
         record["state"] = "interrupted"
         record["recovery_required"] = True
+        record["pause_pending"] = False
+    record.setdefault("pause_pending", False)
     return record
 
 
@@ -63,7 +65,7 @@ async def current():
         return live[-1].snapshot()
     stored = records()
     if not stored:
-        return {"state": "idle"}
+        return {"state": "idle", "pause_pending": False}
     actionable = [r for r in stored if r.get("recovery_required")]
     latest = max(actionable or stored, key=lambda r: r["created_at"])
     return _batches[latest["batch_id"]].snapshot() if latest["batch_id"] in _batches else latest

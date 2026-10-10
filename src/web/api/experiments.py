@@ -66,6 +66,8 @@ async def save_experiment_source(filename: str, body: SourceRequest):
         try:
             target = source_path(filename).resolve()
             for active_name, engine in _engines.items():
+                if not active_name.endswith(('.yaml', '.yml')):
+                    continue  # Guided registry keys identify batches, not YAML files.
                 if source_path(active_name).resolve() == target and (
                     engine.state.value in ('running', 'paused') or engine.cleanup_pending
                 ):
@@ -268,7 +270,7 @@ async def stop_experiment(filename: str):
 async def get_progress(filename: str):
     engine = _engines.get(filename)
     if engine is None:
-        return {"state": "idle"}
+        return {"state": "idle", "pause_pending": False}
     p = engine.progress
     return {
         "state": p.state.value,
@@ -276,6 +278,7 @@ async def get_progress(filename: str):
         "total_steps": p.total_steps,
         "step_id": p.step_id,
         "elapsed": round(p.elapsed, 1),
+        "pause_pending": p.pause_pending,
     }
 
 
@@ -327,6 +330,7 @@ async def _broadcast_progress(filename: str, progress):
             "total_steps": progress.total_steps,
             "step_id": progress.step_id,
             "elapsed": round(progress.elapsed, 1),
+            "pause_pending": progress.pause_pending,
         }
     )
 
