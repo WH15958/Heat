@@ -23,6 +23,198 @@ from test_guided import FakeManager, spec, until
 from test_microwave_atomic_config import make_device
 
 
+def test_manual_drain_times_and_fixed_cleaning_route():
+    request = spec(axes=[[30], [30], [.1, .5], [.2], [30], [0]],
+                   product_drain_seconds=150, clean_drain_seconds=210, drain_flow=2,
+                   clean_volume=.8, clean_flow=1, clean_cycles=2)
+    for data in guided.compile_plan(request):
+        steps = {s['id']: s for s in data['steps']}
+        order = list(steps)
+        assert not any(s['type'] == 'heater.stop' for s in data['steps'])
+        product = steps['collect_product']
+        assert product['params']['run_time'] == 150
+        assert product['params']['dispense_volume'] == 5
+        assert product['params']['flow_rate'] == 2
+        assert product['wait']['timeout'] == 210
+        assert steps['product_route']['params']['position'] == 'NO'
+        row = data['metadata']['guided_parameters']
+        assert data['metadata']['theoretical_product_volume_ml'] == pytest.approx(row[2]+row[3])
+        for cycle in range(2):
+            assert order.index(f'clean_{cycle}_route') < order.index(f'clean_{cycle}_in')
+            assert steps[f'clean_{cycle}_route']['params']['position'] == 'NC'
+            assert steps[f'clean_{cycle}_in']['params']['run_time'] == 48
+            assert steps[f'clean_{cycle}_in']['params']['dispense_volume'] == .8
+            drain = steps[f'clean_{cycle}_out']
+            assert drain['params']['run_time'] == 210
+            assert drain['params']['dispense_volume'] == 7
+            assert drain['wait']['timeout'] == 270
+    assert guided.priming_recipe(request, 'test')['metadata']['waste_port'] == 'NC'
+
+
+@pytest.mark.parametrize('field,value', [('product_drain_seconds', 0),
+    ('clean_drain_seconds', 10000), ('product_drain_seconds', float('inf')),
+    ('clean_drain_seconds', None), ('product_drain_seconds', None), ('product_port', 'NC')])
+def test_invalid_formal_drain_or_mapping_rejected_before_writes(field, value):
+    app = FastAPI()
+    dm = FakeManager()
+    app.state.device_manager = dm
+    app.include_router(api.router, prefix='/api')
+    body = spec().model_dump()
+    if value is None:
+        del body[field]
+    else:
+        body[field] = value
+    # JSON itself cannot encode infinity, but the strict request model rejects it.
+    if value == float('inf'):
+        with pytest.raises(ValueError):
+            guided.GuidedRequest.model_validate(body)
+    else:
+        with TestClient(app) as client:
+            for path in ('preview', 'prime', 'start'):
+                assert client.post('/api/guided/'+path, json=body).status_code == 422
+    assert not dm.calls
+
+
+def test_formal_drains_reach_real_executor_with_entered_times():
+    class RecordingManager(FakeManager):
+        def __init__(self):
+            super().__init__()
+            self.motions = []
+
+        def start_pump_channel(self, did, channel, *args):
+            self.motions.append((channel, args))
+            return super().start_pump_channel(did, channel, *args)
+
+    async def scenario():
+        dm = RecordingManager()
+        batch = guided.GuidedBatch(dm, spec(product_drain_seconds=123, clean_drain_seconds=234))
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'completed'
+        # flow, direction, mode, run_time, dispense_volume, ...
+        assert [(ch, args[3], args[4]) for ch, args in dm.motions] == [
+            (4, 480, 8), (4, 123, 2.05), (3, 60, 1), (4, 234, 3.9)]
+        assert [c for c in dm.calls if c[0] in ('valve', 'pump_start')] == [
+            ('valve', True), ('pump_start', 4), ('valve', False), ('pump_start', 4),
+            ('valve', True), ('pump_start', 3), ('pump_start', 4)]
+    asyncio.run(scenario())
+
+
+def test_heaters_remain_on_through_reaction_cleaning_and_next_group():
+    class CheckingManager(FakeManager):
+        def start_microwave(self, did, mode):
+            assert not any(c[0] == 'heater_stop' for c in self.calls)
+            return super().start_microwave(did, mode)
+
+        def start_pump_channel(self, did, channel, *args):
+            assert not any(c[0] == 'heater_stop' for c in self.calls)
+            return super().start_pump_channel(did, channel, *args)
+
+    async def scenario():
+        dm = CheckingManager()
+        batch = guided.GuidedBatch(dm, spec(axes=[[30, 35], [30], [.1], [.2], [30], [0]]))
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'completed'
+        assert len(batch.record['groups']) == 2
+        assert dm.heating == {'heater1': 35, 'heater2': 30}
+        assert sum(c == ('heater_stop', 'heater1') for c in dm.calls) == 1
+        assert sum(c == ('heater_stop', 'heater2') for c in dm.calls) == 1
+        assert all(c[0] == 'heater_stop' for c in dm.calls[-2:])
+        assert not batch.executor._active_heaters
+        assert not batch.record['cleanup_required']
+    asyncio.run(scenario())
+
+
+def test_paused_guided_heaters_stay_on_and_stop_turns_them_off():
+    async def scenario():
+        dm = FakeManager()
+        batch = guided.GuidedBatch(dm, spec(axes=[[30], [30], [.1], [.2], [60], [0]]))
+        await batch.start()
+        await until(lambda: batch.record.get('last_step') == 'cool_before_collection')
+        await batch.pause()
+        assert batch.state.value == 'paused'
+        assert batch.executor._active_heaters == {'heater1', 'heater2'}
+        assert not any(c[0] == 'heater_stop' for c in dm.calls)
+        assert await batch.stop()
+        assert batch.state.value == 'stopped'
+        assert not batch.executor._active_heaters
+        assert ('heater_stop', 'heater1') in dm.calls
+        assert ('heater_stop', 'heater2') in dm.calls
+    asyncio.run(scenario())
+
+
+def test_final_heater_stop_failure_persists_restart_interlock():
+    async def scenario():
+        dm = FakeManager()
+        dm.stop_heater = Mock(return_value=False)
+        batch = guided.GuidedBatch(dm, spec())
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'failed'
+        assert len(batch.record['groups']) == 1
+        assert batch.cleanup_pending and batch.record['cleanup_required']
+        restored = api.read_record(batch.batch_id)
+        assert restored['state'] == 'interrupted' and restored['recovery_required']
+        dm.stop_heater.return_value = True
+        assert await batch.stop()
+        assert not batch.executor._active_heaters
+        assert not batch.cleanup_pending
+        assert not batch.record['cleanup_required']
+    asyncio.run(scenario())
+
+
+def test_formal_feed_failure_stops_retained_heaters_and_both_syringes():
+    async def scenario():
+        dm = FakeManager()
+        dm.fail_feed = True
+        batch = guided.GuidedBatch(dm, spec(repeats=2))
+        batch.record['priming']['status'] = 'completed'
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'failed'
+        assert len(batch.record['groups']) == 1
+        assert not batch.executor._active_heaters
+        for did in ('heater1', 'heater2'):
+            assert ('heater_stop', did) in dm.calls
+        for did in ('syringe_pump1', 'syringe_pump2'):
+            assert ('syringe_stop', did) in dm.calls
+        assert not any(c[0] in ('microwave_start', 'pump_start') for c in dm.calls)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('keep,release,fail_cleanup', [(False, True, False),
+    (True, True, False), (True, False, False), (True, False, True)])
+def test_group_cleanup_retention_is_scoped_and_failure_always_stops_heaters(keep, release, fail_cleanup):
+    async def scenario():
+        dm = FakeManager()
+        executor = execution.StepExecutor(dm)
+        executor.release_resources_on_cleanup = release
+        executor._active_heaters.add('heater1')
+        if fail_cleanup:
+            executor._active_pumps.add(('pump1', 4))
+            dm.stop_pump_channel = Mock(return_value=False)
+        engine = ExperimentEngine(executor, ExperimentLogger(save_log=False),
+                                  keep_heaters_on_completion=keep)
+        engine.load_steps(parser.parse_experiment_data({'steps': [
+            {'id': 'done', 'type': 'log', 'params': {'message': 'done'}}]})['steps'])
+        await engine.start()
+        await engine.wait_finished()
+        retained = keep and not release and not fail_cleanup
+        assert ('heater1' in executor._active_heaters) == retained
+        assert engine.state.value == ('failed' if fail_cleanup else 'completed')
+        if retained:
+            assert engine._cleanup_result is None
+            # A later stop must not treat selective cleanup as a full stop.
+            assert await engine.stop()
+            assert not executor._active_heaters
+        if fail_cleanup:
+            assert engine.cleanup_pending
+            dm.stop_pump_channel.return_value = True
+            assert await engine.stop()
+    asyncio.run(scenario())
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real hardware')))
@@ -405,9 +597,13 @@ def test_batch_pause_during_heating_is_pending_until_stopped_then_no_collection_
         await until(lambda: reads > 0)
         await batch.pause()
         assert batch.snapshot()['pause_pending'] and batch.state.value == 'running'
+        assert batch.executor._active_heaters == {'heater1', 'heater2'}
+        assert not any(c[0] == 'heater_stop' for c in dm.calls)
         ready = True
         await until(lambda: batch.state.value == 'paused')
         assert not dm.microwave_on and not batch.snapshot()['pause_pending']
+        assert batch.executor._active_heaters == {'heater1', 'heater2'}
+        assert not any(c[0] == 'heater_stop' for c in dm.calls)
         assert not any(c[0] == 'pump_start' for c in dm.calls)
         assert batch.record['current_group'] == 1
         await batch.resume()
@@ -474,6 +670,9 @@ def test_batch_microwave_failure_stops_and_never_collects_or_starts_next_group(s
         await asyncio.wait_for(batch.task, timeout=5)
         assert batch.state.value == 'failed'
         assert not dm.microwave_on
+        assert not batch.executor._active_heaters
+        assert ('heater_stop', 'heater1') in dm.calls
+        assert ('heater_stop', 'heater2') in dm.calls
         assert not any(c[0] == 'pump_start' for c in dm.calls)
         assert len(batch.record['groups']) == 1
     asyncio.run(scenario())

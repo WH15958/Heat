@@ -34,7 +34,8 @@ class ExperimentProgress:
 
 class ExperimentEngine:
     def __init__(self, executor: StepExecutor, exp_logger: Optional[ExperimentLogger] = None,
-                 *, finish_reaction_before_pause: bool = False):
+                 *, finish_reaction_before_pause: bool = False,
+                 keep_heaters_on_completion: bool = False):
         self._executor = executor
         self._executor.set_stop_checker(lambda: self._stop_flag)
         self._exp_logger = exp_logger or ExperimentLogger()
@@ -59,6 +60,7 @@ class ExperimentEngine:
         self._experiment_name: str = ""
         self._experiment_file: str = ""
         self._finish_reaction_before_pause = finish_reaction_before_pause
+        self._keep_heaters_on_completion = keep_heaters_on_completion
         self.pause_pending = False
 
     @property
@@ -233,17 +235,20 @@ class ExperimentEngine:
                 self._exp_logger.finish_step(i, success=True, wait_duration=wait_duration)
 
         self._current_step = len(self._steps)
-        cleanup_ok = await self._cleanup_active_devices()
+        cleanup_ok = await self._cleanup_for_completion()
         if not cleanup_ok:
             logger.error(
                 "Experiment completion failed to stop one or more active devices"
             )
         self._finish_terminal_run(
-            ExperimentState.COMPLETED if cleanup_ok else ExperimentState.FAILED,
-            RunStatus.COMPLETED.value if cleanup_ok else RunStatus.FAILED.value,
+            (ExperimentState.STOPPED if self._stop_flag else ExperimentState.COMPLETED)
+            if cleanup_ok else ExperimentState.FAILED,
+            (RunStatus.STOPPED.value if self._stop_flag else RunStatus.COMPLETED.value)
+            if cleanup_ok else RunStatus.FAILED.value,
             cleanup_complete=cleanup_ok,
         )
-        self._stop_result = cleanup_ok
+        # Retained heaters still require full cleanup if stop is requested later.
+        self._stop_result = None if cleanup_ok and self._keep_heaters_on_completion else cleanup_ok
 
     async def pause(self):
         if self._state == ExperimentState.RUNNING:
@@ -326,6 +331,22 @@ class ExperimentEngine:
         )
         self._stop_result = cleanup_ok
         return cleanup_ok
+
+    async def _cleanup_for_completion(self) -> bool:
+        if (not self._keep_heaters_on_completion or self._stop_flag
+                or not isinstance(self._executor, StepExecutor)
+                or self._executor.release_resources_on_cleanup):
+            return await self._cleanup_active_devices()
+        try:
+            success = await self._executor.stop_active_devices(preserve_heaters=True)
+        except Exception as exc:
+            logger.error(f"Guided group cleanup failed: {exc}")
+            success = False
+        if not success or self._stop_flag:
+            cleanup_ok = await self._cleanup_active_devices()
+            return success and cleanup_ok
+        # Do not cache this as full cleanup: heaters belong to the enclosing batch.
+        return True
 
     async def _cleanup_active_devices(self) -> bool:
         if self._cleanup_result is True:

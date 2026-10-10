@@ -20,7 +20,8 @@ from src.web.api import devices, valves, syringe_pumps
 
 def spec(**kwargs):
     values = dict(axes=[[30], [30], [0.1], [0.2], [30], [0]],
-        product_port="NO", drain_flow=1, clean_volume=1, clean_flow=1,
+        product_port="NO", drain_flow=1, product_drain_seconds=60, clean_drain_seconds=90,
+        clean_volume=1, clean_flow=1,
         clean_dwell=0, clean_cycles=1, plumbing_confirmed=True, priming_confirmed=True,
         reactor_available_ml=20, source_available_a_ml=100, source_available_b_ml=100, waste_available_ml=500,
         prime_drain_seconds=480, prime_drain_flow=1)
@@ -533,6 +534,8 @@ class GuidedTests(unittest.TestCase):
             self.assertIn(("syringe_stop", "syringe_pump1"), dm.calls)
             self.assertIn(("syringe_stop", "syringe_pump2"), dm.calls)
             self.assertFalse(any(c[0] == "microwave_start" for c in dm.calls))
+            self.assertFalse(batch.executor._active_heaters)
+            self.assertFalse(any(c[0] == "heat" for c in dm.calls))
         asyncio.run(scenario())
 
     def test_failed_plan_persistence_dispatches_nothing(self):
