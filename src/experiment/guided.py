@@ -19,10 +19,22 @@ from src.experiment.engine import ExperimentEngine, ExperimentState
 from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
+from src.devices.syringe_commands import SyringeCommand
 
 
 BATCH_DIR = Path("output/guided_batches")
 TERMINAL = {"completed", "failed", "stopped", "interrupted"}
+
+
+class GuidedInitialization(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    direction: Literal["Z", "Y"]
+    initialization_code: int
+
+    @model_validator(mode="after")
+    def check_command(self):
+        SyringeCommand.model_validate(dict(action="initialize", confirm=True, **self.model_dump()))
+        return self
 
 
 class GuidedRequest(BaseModel):
@@ -56,6 +68,9 @@ class GuidedRequest(BaseModel):
     source_available_b_ml: float = Field(gt=0)
     waste_available_ml: float = Field(gt=0)
     priming_confirmed: bool = False
+    initialization_a: GuidedInitialization
+    initialization_b: GuidedInitialization
+    initialization_confirmed: bool = False
     priming_batch_id: str | None = None
 
     @model_validator(mode="after")
@@ -111,7 +126,7 @@ def drain_seconds(volume, flow):
 
 def priming_signature(spec):
     from src.utils.config import ConfigManager
-    fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "priming_batch_id"})
+    fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
     config = ConfigManager().load()
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves) for device in group
@@ -127,6 +142,10 @@ def priming_recipe(spec, batch_id):
     # Check temperature without starting microwave output; hot residual liquid is unsafe to drain.
     add("prime_temperature", "wait", wait=dict(type="microwave_temperature_below",
         device_id="microwave1", target_temperature=45, timeout=spec.cooling_timeout))
+    for n, initialization in enumerate((spec.initialization_a, spec.initialization_b), 1):
+        add(f"prime_initialize_{n}", "syringe_pump.initialize",
+            dict(device_id=f"syringe_pump{n}", confirm=True, timeout=spec.syringe_timeout,
+                 **initialization.model_dump()))
     for n, (volume, speed) in enumerate(((spec.prime_volume_a, spec.speed_a),
                                        (spec.prime_volume_b, spec.speed_b)), 1):
         for cycle in range(1, spec.prime_cycles+1):
@@ -179,9 +198,9 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         did = f"heater{n+1}"
         add(f"heat_{n}_set", "heater.set_temperature", dict(device_id=did, temperature=row[n]))
         add(f"heat_{n}_start", "heater.start", dict(device_id=did))
-    for n in (0, 1):
-        add(f"heat_{n}_wait", "wait", wait=dict(type="temperature_reached",
-            device_id=f"heater{n+1}", tolerance=1, timeout=spec.heating_timeout))
+    add("heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
+        targets=[dict(device_id=f"heater{n+1}", target_temperature=row[n]) for n in (0, 1)],
+        tolerance=3, seconds=30, timeout=spec.heating_timeout))
     feeds = []
     for n, speed in enumerate((spec.speed_a, spec.speed_b)):
         feed = dict(device_id=f"syringe_pump{n+1}", volume=row[n+2], unit="mL",
@@ -235,6 +254,10 @@ def compile_plan(spec, batch_id="preview"):
         pump = next((p for p in config.syringe_pumps if p.device_id == did and p.enabled), None)
         if pump is None or max(max(spec.axes[i+2]), (spec.prime_volume_a, spec.prime_volume_b)[i]) > pump.capacity_ml:
             raise ValueError(f"{did} 未配置或进样量超出额定容量")
+        code = (spec.initialization_a, spec.initialization_b)[i].initialization_code
+        if ((code == 0 or 10 <= code <= 40) and pump.capacity_ml < 2.5
+                or code == 1 and pump.capacity_ml < 0.5):
+            raise ValueError(f"{did} 初始化代码不适用于当前注射器容量")
     recipes = [recipe(row, spec, batch_id, i) for i, row in enumerate(spec.rows())]
     for data in [priming_recipe(spec, batch_id), *recipes]:
         result = validate_source(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
@@ -336,6 +359,7 @@ class GuidedBatch:
                                   step_id=p.step_id, elapsed=p.elapsed) if p else None
         if p:
             labels = {"feed_both": "两路前驱体进料", "microwave_config": "设置微波反应温度",
+                "heat_both_stable": "两路温度同时在目标 ±3℃ 内持续 30 秒",
                 "microwave_start": "微波升温", "hold": "反应保温", "microwave_stop": "停止微波",
                 "cool_before_collection": "等待降温至45℃",
                 "recheck_temperature": "收取前复查温度", "product_route": "切向产物出口",
@@ -351,10 +375,13 @@ class GuidedBatch:
             if p.step_id.startswith("prime_"):
                 parts = p.step_id.split("_")
                 prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤45℃",
+                    "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
                     "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度 ≤45℃",
                     "prime_drain": "预充排废液", "prime_drain_stop": "停止预充排液"}
                 result["progress"]["step_label"] = prime_labels.get(p.step_id, label)
-                if len(parts) == 4 and parts[1] in ("1", "2"):
+                if p.step_id in ("prime_initialize_1", "prime_initialize_2"):
+                    result["progress"]["device_id"] = "syringe_pump" + parts[2]
+                elif len(parts) == 4 and parts[1] in ("1", "2"):
                     result["progress"].update(device_id="syringe_pump"+parts[1], cycle=int(parts[2]),
                         step_label=f"注射泵{parts[1]} 第{parts[2]}次 " + ("吸取" if parts[3] == "aspirate" else "排出"))
                 elif p.step_id.startswith("prime_drain"):
@@ -575,7 +602,7 @@ class GuidedBatch:
         return success
 
     async def begin_experiments(self, spec):
-        if not spec.plumbing_confirmed or not spec.priming_confirmed:
+        if not spec.plumbing_confirmed or not spec.priming_confirmed or not spec.initialization_confirmed:
             raise ValueError("请重新确认现场预充和液路条件")
         if (self.stopping or self.record["phase"] != "ready" or self.record["priming"]["status"] != "completed"
                 or self.record["recovery_required"] or self.persistence_failure):
@@ -596,13 +623,15 @@ class GuidedBatch:
         self.task = asyncio.create_task(self.run())
 
 
-async def preflight(dm, spec, owner=None):
-    """Read-only device readiness check. Never connect or initialize implicitly."""
+async def preflight(dm, spec, owner=None, *, before_initialization=False):
+    """Read-only checks: preparation permits uninitialized pumps; formal start requires zero."""
     compile_plan(spec)  # Recheck current configuration before any reagent-consuming write.
     if not spec.plumbing_confirmed:
         raise ValueError("请确认进液、排液方向及三通阀实际出口接管")
     if not spec.priming_confirmed:
         raise ValueError("请确认前驱体相容性、液路排气、容积及废液条件")
+    if not spec.initialization_confirmed:
+        raise ValueError("请明确确认本批次初始化运动及切阀")
     for devices, ids in ((dm.get_all_heaters(), ("heater1", "heater2")),
                          (dm.get_all_pumps(), ("pump1",)),
                          (dm.get_all_microwaves(), ("microwave1",)),
@@ -615,10 +644,11 @@ async def preflight(dm, spec, owner=None):
         if not control.device.is_connected() or control.owner not in (None, owner):
             raise ValueError(f"注射泵 {i+1} 未连接或已占用")
         state = await asyncio.to_thread(control.read)
-        if not state.get("read_ok") or state.get("busy") is not False or state.get("fault_code") != 0:
+        allowed_faults = (0, 7) if before_initialization else (0,)
+        if not state.get("read_ok") or state.get("busy") is not False or state.get("fault_code") not in allowed_faults:
             raise ValueError(f"注射泵 {i+1} 未就绪")
-        if not state.get("initialized") or not state.get("position_trusted") or state.get("position") != 0:
-            raise ValueError(f"请先初始化注射泵 {i+1} 并确认空行程位置；本功能不自动初始化")
+        if not before_initialization and (not state.get("initialized") or not state.get("position_trusted") or state.get("position") != 0):
+            raise ValueError(f"注射泵 {i+1} 未确认初始化及可信零位")
         if max(max(spec.axes[i+2]), (spec.prime_volume_a, spec.prime_volume_b)[i]) > control.config.capacity_ml:
             raise ValueError(f"进样量超出注射泵 {i+1} 额定容量")
     microwave = await asyncio.to_thread(dm.read_microwave_data, "microwave1")

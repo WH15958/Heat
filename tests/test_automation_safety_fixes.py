@@ -3,7 +3,7 @@ import asyncio
 import copy
 import csv
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -217,6 +217,8 @@ def test_group_cleanup_retention_is_scoped_and_failure_always_stops_heaters(keep
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    # Full batch regressions do not wait 30 real seconds; dedicated stability tests use virtual time.
+    monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', AsyncMock(return_value=True))
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real hardware')))
     monkeypatch.setattr('src.experiment.experiment_logger.LOGS_DIR', tmp_path / 'logs')
     monkeypatch.setattr(sample_record, 'SAMPLES_DIR', tmp_path / 'data')

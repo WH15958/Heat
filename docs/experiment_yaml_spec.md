@@ -475,6 +475,28 @@
 - 判断逻辑基于当前温度和设定温度差值
 - 超时会导致该步骤失败，不会静默继续
 
+### 双路加热器稳定等待 `heater_pair_stable`
+
+同时检查两台加热器，只有两路读温均处于各自目标的容差范围内并持续指定时长，才继续。目标设备必须是两个不同的已启用加热器，目标温度须在设备范围内；`seconds` 和 `timeout` 必须为正数，`tolerance` 为非负有限数。步骤必须启用且 `on_error: stop`，不能跳过保护等待。
+
+```yaml
+- id: precursor_temperature_stable
+  type: wait
+  on_error: stop
+  wait:
+    type: heater_pair_stable
+    targets:
+      - device_id: heater1
+        target_temperature: 30
+      - device_id: heater2
+        target_temperature: 30
+    tolerance: 3
+    seconds: 30
+    timeout: 600
+```
+
+引导式每组使用 ±3℃、连续30秒，约每秒读取一次两路温度；任一路越界或暂停后重新计时。稳定时长与总超时使用单调时钟，总超时扣除实际暂停。读取失败、非有限或无效温度及超时均停止实验，停止请求可中断等待。原 `temperature_reached` 单设备等待语义不变。
+
 ### 5.4 `pump_complete`
 
 等待指定泵通道运行结束。

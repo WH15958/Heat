@@ -74,12 +74,14 @@ export const settingsFields: Field[] = [
   num('start_speed', '启动速度', 50, 1000, false, true), num('speed', '运行速度', 5, 5000, false, true), num('stop_speed', '停止速度', 50, 2700, false, true), num('acceleration', '加速度代码', 1, 20, false, true), num('speed_code', '速度代码（不与运行速度同时设置）', 0, 40, false, true), select('microstep', '步进模式', [{ value: 0, label: '3000 步' }, { value: 1, label: '48000 步' }, { value: 2, label: '24000 步' }]), num('backlash', '回退间隙', 0, 31, false, true), num('dead_volume', '死区步数', 0, 80, false, true),
 ]
 export const waitOptions = [
+  { value: 'heater_pair_stable', label: '等待两路加热器温度稳定' },
   { value: 'microwave_monitored_hold', label: '微波保护保温（每秒监督，失败停止）' },
   { value: 'none', label: '不附加等待' }, { value: 'duration', label: '等待时长' }, { value: 'temperature_reached', label: '等待加热器到温' }, { value: 'pump_complete', label: '等待泵通道完成' }, { value: 'microwave_temperature_reached', label: '等待微波到温' }, { value: 'microwave_temperature_below', label: '等待微波反应液降至温度上限' }, { value: 'microwave_complete', label: '等待微波完成（需实机确认）' }, { value: 'syringe_pump_complete', label: '等待注射泵完成' },
 ]
 export function waitFields(type = 'none'): Field[] {
   if (type === 'none') return []
   if (type === 'duration') return [num('seconds', '等待时长（秒）', 0, undefined, true)]
+  if (type === 'heater_pair_stable') return [num('seconds', '连续稳定时长（秒）', 0.001, undefined, true), num('tolerance', '温度容差（°C）', 0), num('timeout', '等待超时（秒）', 0.001)]
   if (type === 'microwave_monitored_hold') return [device, num('seconds', '保护保温时长（整秒，失败停止）', 0, undefined, true, true)]
   const fields: Field[] = [device, num('timeout', '等待超时（秒，默认 3600）', type === 'syringe_pump_complete' ? 0.001 : 0, type === 'syringe_pump_complete' ? 3600 : undefined)]
   if (type === 'pump_complete') fields.push(channel)
@@ -87,6 +89,7 @@ export function waitFields(type = 'none'): Field[] {
   if (['microwave_temperature_reached', 'microwave_temperature_below'].includes(type)) fields.push(num('target_temperature', '目标温度（°C）', 0, undefined, true))
   return fields
 }
+export const heaterStableTargetFields: Field[] = [device, num('target_temperature', '目标温度（°C）', 0, undefined, true)]
 export function segmentFields(type: string): Field[] {
   const fields = [num('segment', '段号', 1, 5, true, true)]
   if (type === 'microwave.configure_manual') fields.push(num('heating_temperature', '加热温度 °C', 0, 65535), num('heating_power_percent', '加热功率 %', 0, 100, false, true), num('holding_power_percent', '保温功率 %', 0, 100, false, true), num('holding_deviation', '保温偏差 °C', 0, 65535))

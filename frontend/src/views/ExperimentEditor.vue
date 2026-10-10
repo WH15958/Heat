@@ -84,6 +84,9 @@
         <details open><summary>步骤后的等待</summary>
           <select :value="step.wait?.type || 'none'" @change="set(['steps', selected, 'wait', 'type'], inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
           <ParameterFields :fields="waitFields(step.wait?.type)" :values="step.wait || {}" :devices="devicesFor(waitGroup(step.wait?.type))" @change="(k, v) => set(['steps', selected, 'wait', k], v)" />
+          <template v-if="step.wait?.type === 'heater_pair_stable'">
+            <div v-for="i in 2" :key="i"><strong>加热器 {{ i }}</strong><ParameterFields :fields="heaterStableTargetFields" :values="step.wait?.targets?.[i-1] || {}" :devices="devicesFor('heater')" @change="(k, v) => set(['steps', selected, 'wait', 'targets', i-1, k], v)" /></div>
+          </template>
         </details>
         <label>步骤失败时<select :value="step.on_error || 'stop'" @change="set(['steps', selected, 'on_error'], inputText($event))"><option value="stop">停止实验</option><option value="skip">跳过并继续</option></select></label>
         <el-button @click="openAdvanced(['steps', selected], '步骤完整 YAML（含额外字段）')">高级 YAML</el-button>
@@ -106,7 +109,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, isAlias, isMap, parseDocument, visit, type Node } from 'yaml'
 import { editorApi, type Issue, type Validation } from '../api/experimentEditor'
 import { devicesApi } from '../api/devices'
-import { actions, groups, actionLabel, parameterFields, settingsFields, segmentFields, waitFields, waitOptions, fieldErrors, executionHint } from '../experiment/catalog'
+import { actions, groups, actionLabel, parameterFields, settingsFields, segmentFields, waitFields, waitOptions, heaterStableTargetFields, fieldErrors, executionHint } from '../experiment/catalog'
 import { duplicateStep, editSource, emptySource, inspectSource, moveStep, setValue, stepsFrom, uniqueId, type Path, type Step } from '../experiment/document'
 import YamlEditor from '../components/experiment/YamlEditor.vue'
 import ParameterFields from '../components/experiment/ParameterFields.vue'
@@ -176,6 +179,9 @@ const localErrors = computed(() => {
   const ids = new Set<string>()
   return steps.value.flatMap((s, i) => {
     const errors = fieldErrors(parameterFields(s), s.params || {}).concat(fieldErrors(waitFields(s.wait?.type), s.wait || {}))
+    if (s.wait?.type === 'heater_pair_stable') {
+      for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait.targets?.[i] || {}))
+    }
     if (typeof s.id !== 'string' || !s.id.trim() || ids.has(s.id)) errors.push('步骤 ID 为空或重复')
     ids.add(s.id)
     if (!actions.some(a => a.type === s.type)) errors.push('不支持的实验动作；请在 YAML 中修正')

@@ -94,7 +94,7 @@ def _check_params(step):
         ):
             raise ValueError('Power fields are only allowed for manual_power')
     wait = step.get('wait', {})
-    if wait.get('type', 'none') not in ('none', 'duration'):
+    if wait.get('type', 'none') not in ('none', 'duration', 'heater_pair_stable'):
         if not isinstance(wait.get('device_id'), str) or not wait['device_id'].strip():
             raise ValueError('wait.device_id is required')
     if wait.get('type') == 'pump_complete':
@@ -175,6 +175,10 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
                 if group in device_groups and device_id and device_id not in device_groups[group]:
                     warnings.append(issue(f'未知或未启用的设备：{device_id}', ('steps', index, 'params', 'device_id'), step['id']))
                 wait = step.get('wait', {})
+                if wait.get('type') == 'heater_pair_stable':
+                    for target_index, target in enumerate(wait.get('targets', [])):
+                        if target.get('device_id') not in device_groups['heater']:
+                            warnings.append(issue(f'等待引用未知或未启用的设备：{target.get("device_id")}', ('steps', index, 'wait', 'targets', target_index, 'device_id'), step['id']))
                 wait_group = {
                     'temperature_reached': 'heater', 'pump_complete': 'pump',
                     'microwave_temperature_reached': 'microwave',

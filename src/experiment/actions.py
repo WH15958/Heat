@@ -42,6 +42,7 @@ class WaitType(Enum):
     NONE = "none"
     DURATION = "duration"
     TEMPERATURE_REACHED = "temperature_reached"
+    HEATER_PAIR_STABLE = "heater_pair_stable"
     MICROWAVE_TEMPERATURE_REACHED = "microwave_temperature_reached"
     MICROWAVE_TEMPERATURE_BELOW = "microwave_temperature_below"
     MICROWAVE_COMPLETE = "microwave_complete"
@@ -62,6 +63,7 @@ class WaitCondition:
         timeout: 超时秒数
         channel: 泵通道号（PUMP_COMPLETE使用）
         target_temperature: 目标温度（MICROWAVE_TEMPERATURE_REACHED使用）
+        targets: 两路设备及目标温度（HEATER_PAIR_STABLE使用）
     """
     type: WaitType = WaitType.NONE
     seconds: float = 0
@@ -70,6 +72,7 @@ class WaitCondition:
     timeout: float = 3600
     channel: int = 0
     target_temperature: Optional[float] = None
+    targets: list[dict] = field(default_factory=list)
 
 
 @dataclass

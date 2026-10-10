@@ -105,7 +105,7 @@ async def prime(spec: guided.GuidedRequest, request: Request):
             raise HTTPException(409, "存在服务中断批次，请先现场确认设备停止并解除中断锁定")
         try:
             batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
-            await guided.preflight(batch.dm, spec)
+            await guided.preflight(batch.dm, spec, before_initialization=True)
             _batches[batch.batch_id] = batch
             _engines[batch.batch_id] = batch
             await batch.start(prime_only=True)

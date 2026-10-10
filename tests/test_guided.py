@@ -6,7 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -25,6 +25,8 @@ def spec(**kwargs):
         clean_dwell=0, clean_cycles=1, plumbing_confirmed=True, priming_confirmed=True,
         reactor_available_ml=20, source_available_a_ml=100, source_available_b_ml=100, waste_available_ml=500,
         prime_drain_seconds=480, prime_drain_flow=1)
+    values.update(initialization_a=dict(direction="Z", initialization_code=0),
+                  initialization_b=dict(direction="Z", initialization_code=0), initialization_confirmed=True)
     return guided.GuidedRequest(**{**values, **kwargs})
 
 
@@ -94,6 +96,8 @@ class FakeManager:
                 self.barrier.wait(timeout=2)
             if self.fail_feed and did == "syringe_pump1":
                 raise IOError("dose failed")
+            self.syringes[did].position = 0
+        elif params["action"] == "initialize":
             self.syringes[did].position = 0
         else:
             self.syringes[did].position = 100
@@ -189,6 +193,8 @@ class GuidedTests(unittest.TestCase):
         self.patches = [patch("serial.Serial.open", side_effect=AssertionError("real serial forbidden")),
             patch("src.experiment.experiment_logger.LOGS_DIR", self.directory / "logs"),
             patch("src.experiment.experiment_logger.write_sample_record", return_value=True),
+            # Timing and stability are tested separately with a simulated monotonic clock.
+            patch("src.experiment.executor.StepExecutor._wait_heater_pair_stable", new=AsyncMock(return_value=True)),
             patch.object(guided, "BATCH_DIR", self.directory / "batches")]
         for p in self.patches:
             p.start()
@@ -224,7 +230,9 @@ class GuidedTests(unittest.TestCase):
         request = spec(prime_volume_a=1.5, prime_volume_b=2, prime_cycles=3,
                        prime_drain_seconds=123, prime_drain_flow=2, drain_flow=3)
         data = guided.priming_recipe(request, "test")
-        motions = [s for s in data["steps"] if s["type"].startswith("syringe_pump.")]
+        initializations = [s for s in data["steps"] if s["type"] == "syringe_pump.initialize"]
+        self.assertEqual([s["params"]["device_id"] for s in initializations], ["syringe_pump1", "syringe_pump2"])
+        motions = [s for s in data["steps"] if s["type"] in ("syringe_pump.aspirate", "syringe_pump.dispense")]
         self.assertEqual([s["params"]["device_id"] for s in motions],
                          ["syringe_pump1"]*6+["syringe_pump2"]*6)
         self.assertEqual([s["type"].split(".")[1] for s in motions], ["aspirate", "dispense"]*6)

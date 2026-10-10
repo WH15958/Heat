@@ -31,6 +31,7 @@ class StepExecutor:
         self._is_paused = lambda: False
         self._paused_at = None
         self._paused_total = 0.0
+        self._pause_generation = 0
         self._active_heaters = set()
         self._active_pumps = set()
         self._pump_repeat_counts = {}
@@ -112,6 +113,7 @@ class StepExecutor:
     def notify_pause(self, paused):
         """Timestamp actual orchestration pause transitions, never pending requests."""
         if paused and self._paused_at is None:
+            self._pause_generation += 1
             self._paused_at = time.monotonic()
         elif not paused and self._paused_at is not None:
             self._paused_total += time.monotonic() - self._paused_at
@@ -203,6 +205,14 @@ class StepExecutor:
                     return False
                 if params["action"] in ("initialize", "configure", "move", "aspirate", "dispense", "valve", "program_run", "repeat"):
                     if not await self._wait_syringe(device_id, params.get("timeout", 120)):
+                        return False
+                if params["action"] == "initialize":
+                    state = await asyncio.to_thread(control.read)
+                    self.last_device_result = state
+                    if (not state.get("read_ok") or state.get("busy") is not False
+                            or state.get("fault_code") != 0 or not state.get("initialized")
+                            or not state.get("position_trusted") or state.get("position") != 0):
+                        self._last_error = "注射泵初始化后未确认可信零位"
                         return False
 
             elif step.type == ActionType.VALVE_SWITCH:
@@ -709,6 +719,56 @@ class StepExecutor:
             if paused is None:
                 return False
 
+    async def _wait_heater_pair_stable(self, condition):
+        start = self._wait_clock()
+        stable_since = None
+        pause_generation = self._pause_generation
+        while True:
+            if self._should_stop() or await self._wait_for_resume() is None:
+                return False
+            generation = self._pause_generation
+            if generation != pause_generation:
+                stable_since = None
+                pause_generation = generation
+            if self._wait_clock() - start > condition.timeout:
+                self._last_error = "两路前驱体温度稳定等待超时"
+                return False
+            readings = {}
+            try:
+                for target in condition.targets:
+                    if self._should_stop():
+                        return False
+                    if self._is_paused():
+                        break
+                    data = await asyncio.to_thread(self._dm.read_heater_data, target["device_id"])
+                    if (data.get("read_ok") is False or data.get("fault_code", 0) != 0
+                            or not _is_nonnegative_finite_number(data.get("pv"))):
+                        raise ValueError(f'{target["device_id"]} 温度无效或读取失败')
+                    readings[target["device_id"]] = data
+            except Exception as exc:
+                self._last_error = "前驱体温度读取失败：" + str(exc)
+                return False
+            self.last_device_result = {"device_type": "heater_pair", "heaters": readings}
+            if self._should_stop():
+                return False
+            if self._is_paused() or self._pause_generation != pause_generation:
+                stable_since = None
+                continue
+            now = self._wait_clock()
+            if now - start > condition.timeout:
+                self._last_error = "两路前驱体温度稳定等待超时"
+                return False
+            if all(abs(readings[t["device_id"]]["pv"] - t["target_temperature"]) <= condition.tolerance
+                   for t in condition.targets):
+                if stable_since is None:
+                    stable_since = now
+                if now - stable_since >= condition.seconds:
+                    return True
+            else:
+                stable_since = None
+            if await self._pause_aware_sleep(1.0) is None:
+                return False
+
     async def _wait_condition(self, condition):
         """等待条件满足
 
@@ -719,6 +779,8 @@ class StepExecutor:
             return await self._wait_syringe(condition.device_id, condition.timeout)
         if condition.type == WaitType.MICROWAVE_MONITORED_HOLD:
             return await self._monitored_hold(condition)
+        if condition.type == WaitType.HEATER_PAIR_STABLE:
+            return await self._wait_heater_pair_stable(condition)
         loop = asyncio.get_event_loop()
         start_time = self._wait_clock()
 

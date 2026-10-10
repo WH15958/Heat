@@ -478,7 +478,7 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 
 GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返回状态、当前组、进度和单组 run_id/sample_id。POST `/{batch_id}/pause|resume|stop` 控制整批；stop 的 success=false 代表清理或保存未确认成功。逐组收取自动执行，没有换瓶确认接口或等待步骤。
 
-双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，初始化必须事前完成，不会隐式回零。
+双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，正式进料不隐式回零；每批通过明确确认的预充入口依次执行已有 syringe_pump.initialize，确认完成及可信零位后才吸排预充液。
 
 微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃；温度读取失败、微波故障或仍输出不放行。收取前重复此检查，再切换产物出口及抽液。pump.start 使用已有 TIME_QUANTITY、pump_complete 和显式 stop_channel，理论流量不冒充实际排空传感器。
 
@@ -491,13 +491,13 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 `POST /api/guided/prime` 为同一 GuidedBatch 执行前置预充；`POST /api/guided/start` 现在要求请求携带 `priming_batch_id`，只启动该批次签名匹配且预充成功的正式流程。缺少预充时返回 409，不再支持直接启动旧版请求。`/preview` 增加 `priming` 流程，仍只校验、不控制硬件。`/prime` 携带已有批次 ID 且签名一致时返回现状，不重发运动。
 
-GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵容量）、`prime_cycles`（默认 2，1–10）、`prime_drain_seconds`（必填，0.1–9999 秒）、`prime_drain_flow`（必填，0.01–9999 mL/min），以及必填正数 `reactor_available_ml`、`source_available_a_ml`、`source_available_b_ml`、`waste_available_ml`。启动预充和正式运行均要求 `priming_confirmed`、`plumbing_confirmed` 为 true。容量校验涵盖预充总量、正式单组量、整批耗液和清洗废液。
+GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵容量）、`prime_cycles`（默认 2，1–10）、`prime_drain_seconds`（必填，0.1–9999 秒）、`prime_drain_flow`（必填，0.01–9999 mL/min），以及必填正数 `reactor_available_ml`、`source_available_a_ml`、`source_available_b_ml`、`waste_available_ml`。请求新增必填 `initialization_a/b` 对象，各含 `direction`（Z/Y）和 `initialization_code`，复用 SyringeCommand 校验并在编译时检查容量适用性；新增 `initialization_confirmed`（默认 false）。启动预充和正式运行均要求三项现场确认 `initialization_confirmed`、`priming_confirmed`、`plumbing_confirmed` 为 true。初始化参数纳入预充签名，三项确认标志不纳入签名；缺少初始化参数的旧请求被拒绝，旧记录仅供查看。容量校验涵盖预充总量、正式单组量、整批耗液和清洗废液。
 
 批次 checkpoint 新增 `phase`（priming / ready / experiments）和 `priming`（状态、SHA256 签名、已完成循环、步骤设备结果、run_id、持久化状态、失败停机确认）。计划快照包含独立 priming recipe。签名覆盖完整实验参数及固定设备配置，排除确认标志和批次 ID；正式启动前再次只读检查连接、故障、零位及输出停机状态。签名不符拒绝启动；设备状态异常会失效结果并设置恢复锁。
 
 预充复用同步设备驱动、现有 StepExecutor、ExperimentEngine、资源预留和日志；不新增设备动作或 YAML 动作类型。预充成功后批次处于 paused/ready，保留所有权；普通 resume 被拒绝，必须调用 start。失败会停止两台注射泵（含未启动那台）及排液通道；任何 False 或停机异常保留未确认状态，并可再次停止重试。恢复锁必须人工确认后通过现有 acknowledge-interrupted 接口解除，此接口也处理本服务中的预充失败。服务重启后 ready 不可自动复用或恢复。
 
-预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗排液使用 drain_flow 和各自独立的 product_drain_seconds / clean_drain_seconds，名义排量同样为 秒数×流量÷60。清洗进液仍按 clean_volume / clean_flow 计算时间。每次清洗先 valve.switch NC 再进液，收产物固定 NO。单组 metadata 记录两个排液时长及 theoretical_product_volume_ml，名义排量不能冒充真实样品量；旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，估算按钮只在明确点击时填入无额外余量的理论时间；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
+预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗排液使用 drain_flow 和各自独立的 product_drain_seconds / clean_drain_seconds，名义排量同样为 秒数×流量÷60。清洗进液仍按 clean_volume / clean_flow 计算时间。每次清洗先 valve.switch NC 再进液，收产物固定 NO。单组 metadata 记录两个排液时长及 theoretical_product_volume_ml，名义排量不能冒充真实样品量；旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，产物、清洗与批次确认页面移除理论排液时间和估算按钮，清洗页同步显示共用排液流量；预充页仍保留明确点击的估算按钮；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
 
 ### 自动化保护等待与计时
 
@@ -507,8 +507,10 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 固定等待和通用条件超时使用单调时钟。实际暂停起止由引擎通知执行器，等待时钟扣除真实暂停累计值；微波阶段 pending 不是实际暂停，持续计时。注射泵已发动作仍完成并持续读 Q。短蠕动泵动作的本次启动读回证据按设备及通道保存，等待消费一次；有效 STOP 才完成，未知或 PAUSE 不通过，新启动/停止/清理清除证据。
 
-`compile_plan` 检查固定设备启用、通道启用和流量上限，模型检查预充、单组和每次清洗的反应器容量及源液/废液总量。`preflight` 在预充与正式启动前重做编译校验，再执行只读就绪检查；不隐式连接或初始化。保存 YAML 的覆盖保护只检查文件实验注册键，批次标识不作为文件路径解析。预充维护 sample_id 由 logger 使用 batch_id 和 run_id 生成，CSV 保留 PRIMING 标记及维护 notes；历史编号不迁移。
+`compile_plan` 检查固定设备启用、通道启用和流量上限，模型检查预充、单组和每次清洗的反应器容量及源液/废液总量。`preflight` 在预充与正式启动前重做编译校验，再执行只读就绪检查；不连接或发送动作。预充入口使用 before_initialization 检查，允许故障码 0/7、位置未确认的空闲泵，其他故障阻止启动；正式入口仍要求 fault_code=0、已初始化、可信零位。预充流程在温度检查后显式执行两台泵的初始化，失败沿用批次清理及恢复锁。保存 YAML 的覆盖保护只检查文件实验注册键，批次标识不作为文件路径解析。预充维护 sample_id 由 logger 使用 batch_id 和 run_id 生成，CSV 保留 PRIMING 标记及维护 notes；历史编号不迁移。
 
 软件回归入口：`tests/test_automation_safety_fixes.py`（时钟、状态联锁、暂停/停止、容量/流量、真实临时 CSV、文件保存），并执行既有后端和前端回归。实机验收按微波和注射泵验收文档回填，不用模拟器结果标记实机通过。
 
 引导式正式组启用 `keep_heaters_on_completion=True`：移除反应前 heater.stop，成功组完成仅调用 `stop_active_devices(preserve_heaters=True)` 清理其他活动设备，保留加热器跟踪及批次资源。选择性清理不缓存为全停机，且仅在外层保留资源时生效；选择性清理失败则执行全清理并判本组失败。普通实验、预充、失败/停止默认全清理；整批 finally 关闭加热器。下一组重新设置目标并等待到温，暂停期间持续保温。批次 cleanup_required 包含未停止的活动设备，最终加热器停机失败必须持久化恢复锁定，服务重启也不能绕过。新排液时间进入完整请求签名，旧记录不回填或复用预充资格。
+
+引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=heating_timeout（默认600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
