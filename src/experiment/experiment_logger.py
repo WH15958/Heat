@@ -206,6 +206,8 @@ class ExperimentLogger:
 
         batch_id = merged_metadata.get("batch_id", "")
         sample_index = merged_metadata.get("sample_index", 1)
+        if merged_metadata.get("run_kind") == "priming":
+            merged_metadata["sample_id"] = f"{merged_metadata.get('batch_id', '')}_PRIMING_{run_id}"
         merged_metadata["sample_id"] = generate_unique_sample_id(merged_metadata)
 
         self._active_run = ExperimentRun(
@@ -336,6 +338,7 @@ class ExperimentLogger:
             metadata=metadata,
             status=status,
             error_flag=error_flag,
+            notes=metadata.get("notes", "") if metadata.get("run_kind") == "priming" else "",
             log_file_path=log_path,
         )
 

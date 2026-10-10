@@ -45,6 +45,7 @@ class WaitType(Enum):
     MICROWAVE_TEMPERATURE_REACHED = "microwave_temperature_reached"
     MICROWAVE_TEMPERATURE_BELOW = "microwave_temperature_below"
     MICROWAVE_COMPLETE = "microwave_complete"
+    MICROWAVE_MONITORED_HOLD = "microwave_monitored_hold"
     PUMP_COMPLETE = "pump_complete"
     SYRINGE_PUMP_COMPLETE = "syringe_pump_complete"
 

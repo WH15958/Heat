@@ -345,9 +345,9 @@ def test_pump_complete_requires_fresh_running_to_stopped_transition():
         def __init__(self):
             self.calls = 0
             self.statuses = [
-                {"channels": {"1": {"running": False, "read_ok": False}}},
-                {"channels": {"1": {"running": True, "read_ok": True}}},
-                {"channels": {"1": {"running": False, "read_ok": True}}},
+                {"channels": {"1": {"running": False, "read_ok": False, "run_status": None}}},
+                {"channels": {"1": {"running": True, "read_ok": True, "run_status": "START"}}},
+                {"channels": {"1": {"running": False, "read_ok": True, "run_status": "STOP"}}},
             ]
 
         def read_pump_status(self, _device_id):

@@ -248,7 +248,7 @@
 - `allow_experiment_control`、`allow_real_hardware_writes` 和 `enable_control_writes` 字段仍可出现在配置或状态中，但当前不作为 YAML 自动控制的阻断门。
 - 普通配置批量写入仍不得覆盖控制字 `40151`。
 - 真实自动启动前，仍必须完成 [microwave_smoke_test.md](microwave_smoke_test.md) 中的实验室人工确认。
-- 当前 MKM-AH1E 外控协议没有已实机确认的“程序完成”寄存器。推荐主流程用 `microwave_temperature_reached` 判断物料温度、用 `duration` 计时保温，然后显式执行 `microwave.stop`；不要把 `microwave_complete` 作为真实实验主路径的唯一结束条件。
+- 当前 MKM-AH1E 外控协议没有已实机确认的“程序完成”寄存器。推荐主流程用 `microwave_temperature_reached` 判断物料温度、用 `microwave_monitored_hold` 监督保温，然后显式执行 `microwave.stop`；不要把 `microwave_complete` 作为真实实验主路径的唯一结束条件。
 - 以下示例只说明 YAML 结构，不是化学工艺建议，也不能作为真实实验参数直接照抄。
 
 `microwave.configure_manual` 参数：
@@ -368,8 +368,8 @@
         target_temperature: 40
         holding_temperature: 40
         hours: 0
-        minutes: 0
-        seconds: 5
+        minutes: 5
+        seconds: 0
 
 - id: mw_start_auto_power_structure_only
   type: microwave.start
@@ -389,9 +389,12 @@
 
 - id: mw_hold_by_heat_timer_structure_only
   type: wait
+  enabled: true
+  on_error: stop
   params: {}
   wait:
-    type: duration
+    type: microwave_monitored_hold
+    device_id: microwave1
     seconds: 300
 
 - id: mw_stop
@@ -804,3 +807,13 @@ interval_time: 0
       - {device_id: syringe_pump1, volume: 0.1, unit: mL, speed: 100, timeout: 120}
       - {device_id: syringe_pump2, volume: 0.1, unit: mL, speed: 100, timeout: 120}
 ```
+
+### 微波保护保温 `microwave_monitored_hold`
+
+`wait.device_id` 必须是已启用的微波仪；`wait.seconds` 必填且为非负整秒。步骤必须启用，`on_error` 必须为 `stop`；不能禁用或跳过该保护等待。它在编排层每秒读取物料温度、故障码和控制状态，读取失败、非有限或负温度、未知控制状态、故障立即失败并进入引擎停机清理。功率或电流暂时为零不是故障。
+
+到温等待 `microwave_temperature_reached` 同样检查有效温度、零故障码及有效且处于运行的控制状态。保护保温不依赖未验收的完成信号；微波控制提前结束超过一个轮询周期（1 秒）判失败，剩余时间 ≤1 秒允许正常结束边界，但软件仍监督至计时终点并显式 `microwave.stop`。寄存器保温时长须与软件保温时长一致；引导式自动生成时、分、秒，搭建式由编排者配置一致的时长。
+
+普通 `duration` 保持普通等待语义，不提供微波故障监督。所有固定等待及通用等待超时采用单调时钟，按实际经过时间计算，调度延迟不补时，实际暂停不计时。引导式微波启动后，暂停请求只设置 `pause_pending=true`，升温和保护保温继续计时及监督；显式停止微波后才真正暂停。停止请求始终可中断。搭建式保持原暂停语义，不自动采用整段反应延后暂停策略。
+
+`pump_complete` 消费本通道本次成功启动的 START 读回证据，随后首次有效 STOP 即可通过，不要求再次看见运行。没有证据的独立等待仍须观察运行→停止。未知、PAUSE 或读取失败不能证明完成；新启动、停止、清理和已消费等待不会复用旧证据。该状态链只证明软件/设备状态，不能证明真实液量或排空。

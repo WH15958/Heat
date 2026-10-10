@@ -263,7 +263,7 @@ def test_emergency_stop_false_result_fails_step():
 
 def test_microwave_temperature_reached_success():
     dm = FakeMicrowaveExperimentManager()
-    dm.read_payloads = [{"material_temperature": 79.8, "running": True}]
+    dm.read_payloads = [{"material_temperature": 79.8, "running": True, "control_active": True, "fault_code": 0}]
     executor = StepExecutor(dm)
     step = ExperimentStep(
         id="wait_temp",
@@ -285,7 +285,7 @@ def test_microwave_temperature_reached_success():
 
 def test_microwave_temperature_reached_timeout_fails():
     dm = FakeMicrowaveExperimentManager()
-    dm.read_payloads = [{"material_temperature": 25.0, "running": True}]
+    dm.read_payloads = [{"material_temperature": 25.0, "running": True, "control_active": True, "fault_code": 0}]
     executor = StepExecutor(dm)
     step = ExperimentStep(
         id="wait_temp_timeout",

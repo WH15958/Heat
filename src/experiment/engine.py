@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Optional, Callable, List
 from dataclasses import dataclass
 
-from src.experiment.actions import ExperimentStep
+from src.experiment.actions import ExperimentStep, ActionType, WaitType
 from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger, RunStatus
 from src.utils.logger import get_logger
@@ -29,10 +29,12 @@ class ExperimentProgress:
     state: ExperimentState = ExperimentState.IDLE
     elapsed: float = 0.0
     message: str = ""
+    pause_pending: bool = False
 
 
 class ExperimentEngine:
-    def __init__(self, executor: StepExecutor, exp_logger: Optional[ExperimentLogger] = None):
+    def __init__(self, executor: StepExecutor, exp_logger: Optional[ExperimentLogger] = None,
+                 *, finish_reaction_before_pause: bool = False):
         self._executor = executor
         self._executor.set_stop_checker(lambda: self._stop_flag)
         self._exp_logger = exp_logger or ExperimentLogger()
@@ -42,6 +44,8 @@ class ExperimentEngine:
         self._start_time: Optional[float] = None
         self._pause_event = asyncio.Event()
         self._pause_event.set()
+        if isinstance(self._executor, StepExecutor):
+            self._executor.notify_pause(False)
         if hasattr(self._executor, "set_pause_checker"):
             self._executor.set_pause_checker(lambda: not self._pause_event.is_set())
         self._stop_flag = False
@@ -54,6 +58,8 @@ class ExperimentEngine:
         self._completion_notified = False
         self._experiment_name: str = ""
         self._experiment_file: str = ""
+        self._finish_reaction_before_pause = finish_reaction_before_pause
+        self.pause_pending = False
 
     @property
     def state(self) -> ExperimentState:
@@ -66,13 +72,14 @@ class ExperimentEngine:
             if self._current_step < len(self._steps)
             else None
         )
-        elapsed = time.time() - self._start_time if self._start_time else 0
+        elapsed = time.monotonic() - self._start_time if self._start_time else 0
         return ExperimentProgress(
             current_step=self._current_step,
             total_steps=len(self._steps),
             step_id=step.id if step else "",
             state=self._state,
             elapsed=elapsed,
+            pause_pending=self.pause_pending,
         )
 
     @property
@@ -91,6 +98,9 @@ class ExperimentEngine:
         self._on_complete = callback
 
     def load_steps(self, steps: List[ExperimentStep], name: str = "", filename: str = "", metadata: dict = None):
+        if any(s.wait.type == WaitType.MICROWAVE_MONITORED_HOLD and
+               (not s.enabled or s.on_error != "stop") for s in steps):
+            raise ValueError("微波保护保温必须启用且失败停止")
         self._steps = [s for s in steps if s.enabled]
         self._current_step = 0
         self._experiment_name = name
@@ -107,11 +117,14 @@ class ExperimentEngine:
             logger.error(error)
             raise RuntimeError(error)
         self._stop_flag = False
+        self.pause_pending = False
         self._cleanup_task = None
         self._cleanup_result = None
         self._stop_result = None
         self._completion_notified = False
         self._pause_event.set()
+        if isinstance(self._executor, StepExecutor):
+            self._executor.notify_pause(False)
         if isinstance(self._executor, StepExecutor):
             try:
                 await self._executor.reserve_valves(self._steps)
@@ -132,7 +145,7 @@ class ExperimentEngine:
                 await self._executor.release_valves()
             raise
         self._state = ExperimentState.RUNNING
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
         self._task = asyncio.create_task(self._run())
 
     async def _run(self):
@@ -158,12 +171,16 @@ class ExperimentEngine:
                 wait_type=step.wait.type.value,
             )
 
-            step_start = time.time()
+            step_start = time.monotonic()
             success = await self._executor.execute(step)
+            if (success and self.pause_pending and step.type == ActionType.MICROWAVE_STOP
+                    and not self._executor._active_microwaves and not self._stop_flag):
+                self.pause_pending = False
+                await self._pause_now()
             device_result = getattr(self._executor, "last_device_result", None)
             if device_result is not None:
                 self._exp_logger.record_device_result(i, device_result)
-            wait_duration = time.time() - step_start
+            wait_duration = time.monotonic() - step_start
 
             while success and not self._stop_flag and not self._pause_event.is_set():
                 try:
@@ -230,14 +247,29 @@ class ExperimentEngine:
 
     async def pause(self):
         if self._state == ExperimentState.RUNNING:
-            self._pause_event.clear()
-            self._state = ExperimentState.PAUSED
-            self._exp_logger.pause_run()
-            self._notify()
+            if self._finish_reaction_before_pause and self._executor._active_microwaves:
+                self.pause_pending = True
+                self._notify()
+            else:
+                await self._pause_now()
+
+    async def _pause_now(self):
+        self._pause_event.clear()
+        if isinstance(self._executor, StepExecutor):
+            self._executor.notify_pause(True)
+        self._state = ExperimentState.PAUSED
+        self._exp_logger.pause_run()
+        self._notify()
 
     async def resume(self):
+        if self.pause_pending:
+            self.pause_pending = False
+            self._notify()
+            return
         if self._state == ExperimentState.PAUSED:
             self._pause_event.set()
+            if isinstance(self._executor, StepExecutor):
+                self._executor.notify_pause(False)
             self._state = ExperimentState.RUNNING
             self._exp_logger.resume_run()
             self._notify()
@@ -245,7 +277,10 @@ class ExperimentEngine:
     def request_stop(self):
         """Prevent further steps before awaiting device shutdown."""
         self._stop_flag = True
+        self.pause_pending = False
         self._pause_event.set()
+        if isinstance(self._executor, StepExecutor):
+            self._executor.notify_pause(False)
         cancel_valves = getattr(self._executor, "cancel_pending_valve_operations", None)
         if callable(cancel_valves):
             cancel_valves()
@@ -330,6 +365,9 @@ class ExperimentEngine:
         cleanup_complete: bool = True,
     ):
         self._state = state
+        self.pause_pending = False
+        if isinstance(self._executor, StepExecutor):
+            self._executor.notify_pause(False)
         self._exp_logger.finish_run(run_status)
         self._notify()
         if cleanup_complete:

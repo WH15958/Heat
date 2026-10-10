@@ -164,3 +164,5 @@ python -m pytest tests\test_campaigns.py -q
 
 
 引导批次预充有独立维护 run_id，日志 metadata 使用 `run_kind=priming`、`condition_id=PRIMING`，notes 明确标注“非正式样品”。沿用现有实验追踪机制，维护运行也会产生 samples.csv 记录，但不进入批次 groups，不创建 Trial，不得作为正式样品表征或 planner 反馈。正式样品仍从第 1 组开始计数。查看预充历史时应根据维护标记和 notes 区分。
+
+预充维护条目现在使用独立编号 `{batch_id}_PRIMING_{run_id}`，CSV 保留 `condition_id=PRIMING` 与维护说明，正式组使用 `{batch_id}_S001` 起的样品编号。维护条目不占用正式序号，也不得用于表征反馈；历史日志、旧样品编号及旧 Trial/表征关联不迁移、不重编号。

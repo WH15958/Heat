@@ -79,6 +79,7 @@ WAIT_MAP = {
     "microwave_temperature_reached": WaitType.MICROWAVE_TEMPERATURE_REACHED,
     "microwave_temperature_below": WaitType.MICROWAVE_TEMPERATURE_BELOW,
     "microwave_complete": WaitType.MICROWAVE_COMPLETE,
+    "microwave_monitored_hold": WaitType.MICROWAVE_MONITORED_HOLD,
     "pump_complete": WaitType.PUMP_COMPLETE,
 }
 
@@ -189,6 +190,18 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         step_ids.add(step_id)
 
         on_error = s.get("on_error", "stop")
+        if wait_type_name == "microwave_monitored_hold":
+            if on_error != "stop" or enabled is not True:
+                raise ValueError("微波保护保温必须启用且失败停止（on_error=stop）")
+            if not isinstance(wait.device_id, str) or not wait.device_id.strip():
+                raise ValueError("微波保护保温必须指定 wait.device_id")
+            if "seconds" not in wait_data or seconds != round(seconds):
+                raise ValueError("微波保护保温时间必须填写非负整秒")
+            if validate_devices:
+                from src.utils.config import ConfigManager
+                ids = {c.device_id for c in ConfigManager().load().microwaves if c.enabled}
+                if wait.device_id not in ids:
+                    raise ValueError("微波保护保温引用未配置或未启用的微波仪")
         if wait_type_name == "microwave_temperature_below":
             if on_error != "stop" or s.get("enabled", True) is not True:
                 raise ValueError("Cooling wait must be enabled and requires on_error=stop")
