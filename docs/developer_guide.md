@@ -472,7 +472,7 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 
 `src/experiment/guided.py` 定义严格请求模型、后端条件组合、固定液路完整 recipe 和 GuidedBatch。调用原 parser、StepExecutor、ExperimentEngine 和 ExperimentLogger，每组一个真实运行及 sample_id；不用另建驱动或后台串口线程。最多 200 组、每组最多 10 次清洗；加热温度及剂量以当前设备配置范围校验。
 
-`/api/guided/preview` POST 只生成校验完整流程，返回 rows、recipes、yaml 和 total_groups，无硬件访问。请求 axes 是六个非空且不含重复数值的数值列表，依次为 A/B 温度、A/B 剂量、反应温度和保温分钟。repeats、speed_a/b、product_port、drain_flow、clean_volume、clean_flow、clean_dwell、clean_cycles 配置组合及固定操作；clean_direction、drain_direction 指定现场泵向，plumbing_confirmed 在开始时必须为 true。默认 heating_timeout=600、syringe_timeout=120、cooling_timeout=3600，均可在模型范围内调整。
+`/api/guided/preview` POST 只生成校验完整流程，返回 rows、recipes、yaml 和 total_groups，无硬件访问。请求 axes 是六个非空且不含重复数值的数值列表，依次为 A/B 温度、A/B 剂量、反应温度和保温分钟。repeats、speed_a/b、drain_flow、clean_volume、clean_flow、clean_dwell、clean_cycles 配置组合及固定操作。product_port 仅接受 NO（默认 NO），废液固定 NC；product_drain_seconds 与 clean_drain_seconds 均必填，0.1–9999 秒，分别用于正式收产物及每次清洗排液；clean_direction、drain_direction 指定现场泵向，plumbing_confirmed 在开始时必须为 true。默认 heating_timeout=600、syringe_timeout=120、cooling_timeout=3600，均可在模型范围内调整。
 
 `/api/guided/prime` POST 读设备就绪状态、预留注射泵和阀、原子保存计划，然后执行预充；成功后 `/api/guided/start` POST 携带同批 priming_batch_id 并核对签名、重查就绪状态，启动正式后台批次任务。注册到原 experiments._engines 并使用 _source_lock，整批占用期间阻止其他实验启动。设备 REST 写入与批次注册串行；引导批次占用时拒绝手动配置/启动/断开，手动停止会同时请求停止整批。注射泵及阀保持既有所有权，跨组保留直到最终清理，普通实验默认清理行为不变。
 
@@ -497,7 +497,7 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 预充复用同步设备驱动、现有 StepExecutor、ExperimentEngine、资源预留和日志；不新增设备动作或 YAML 动作类型。预充成功后批次处于 paused/ready，保留所有权；普通 resume 被拒绝，必须调用 start。失败会停止两台注射泵（含未启动那台）及排液通道；任何 False 或停机异常保留未确认状态，并可再次停止重试。恢复锁必须人工确认后通过现有 acknowledge-interrupted 接口解除，此接口也处理本服务中的预充失败。服务重启后 ready 不可自动复用或恢复。
 
-预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗继续使用 drain_flow。旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，估算按钮只在明确点击时填入无额外余量的理论时间；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
+预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗排液使用 drain_flow 和各自独立的 product_drain_seconds / clean_drain_seconds，名义排量同样为 秒数×流量÷60。清洗进液仍按 clean_volume / clean_flow 计算时间。每次清洗先 valve.switch NC 再进液，收产物固定 NO。单组 metadata 记录两个排液时长及 theoretical_product_volume_ml，名义排量不能冒充真实样品量；旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，估算按钮只在明确点击时填入无额外余量的理论时间；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
 
 ### 自动化保护等待与计时
 
@@ -510,3 +510,5 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 `compile_plan` 检查固定设备启用、通道启用和流量上限，模型检查预充、单组和每次清洗的反应器容量及源液/废液总量。`preflight` 在预充与正式启动前重做编译校验，再执行只读就绪检查；不隐式连接或初始化。保存 YAML 的覆盖保护只检查文件实验注册键，批次标识不作为文件路径解析。预充维护 sample_id 由 logger 使用 batch_id 和 run_id 生成，CSV 保留 PRIMING 标记及维护 notes；历史编号不迁移。
 
 软件回归入口：`tests/test_automation_safety_fixes.py`（时钟、状态联锁、暂停/停止、容量/流量、真实临时 CSV、文件保存），并执行既有后端和前端回归。实机验收按微波和注射泵验收文档回填，不用模拟器结果标记实机通过。
+
+引导式正式组启用 `keep_heaters_on_completion=True`：移除反应前 heater.stop，成功组完成仅调用 `stop_active_devices(preserve_heaters=True)` 清理其他活动设备，保留加热器跟踪及批次资源。选择性清理不缓存为全停机，且仅在外层保留资源时生效；选择性清理失败则执行全清理并判本组失败。普通实验、预充、失败/停止默认全清理；整批 finally 关闭加热器。下一组重新设置目标并等待到温，暂停期间持续保温。批次 cleanup_required 包含未停止的活动设备，最终加热器停机失败必须持久化恢复锁定，服务重启也不能绕过。新排液时间进入完整请求签名，旧记录不回填或复用预充资格。

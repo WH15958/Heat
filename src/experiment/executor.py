@@ -440,8 +440,8 @@ class StepExecutor:
             logger.error(f"Step {step.id} failed: {e}")
             return False
 
-    async def stop_active_devices(self) -> bool:
-        """Stop devices that this executor attempted to start."""
+    async def stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
+        """Stop attempted devices; successful guided groups may retain batch heaters."""
         self._pump_start_confirmed.clear()
         loop = asyncio.get_running_loop()
         success = True
@@ -483,7 +483,7 @@ class StepExecutor:
             else:
                 success = False
 
-        for device_id in list(self._active_heaters):
+        for device_id in ([] if preserve_heaters else list(self._active_heaters)):
             try:
                 stopped = await loop.run_in_executor(
                     None, self._dm.stop_heater, device_id

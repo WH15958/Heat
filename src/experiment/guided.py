@@ -32,8 +32,10 @@ class GuidedRequest(BaseModel):
     repeats: int = Field(default=1, ge=1, le=200)
     speed_a: int = Field(default=100, ge=5, le=5000)
     speed_b: int = Field(default=100, ge=5, le=5000)
-    product_port: Literal["NO", "NC"]
+    product_port: Literal["NO"] = "NO"
     drain_flow: float = Field(ge=0.01, le=9999)
+    product_drain_seconds: float = Field(ge=0.1, le=9999)
+    clean_drain_seconds: float = Field(ge=0.1, le=9999)
     clean_volume: float = Field(ge=0.01, le=9999)
     clean_flow: float = Field(ge=0.01, le=9999)
     clean_dwell: float = Field(ge=0, le=3600)
@@ -132,7 +134,7 @@ def priming_recipe(spec, batch_id):
                           speed=speed, timeout=spec.syringe_timeout)
             for action in ("aspirate", "dispense"):
                 add(f"prime_{n}_{cycle}_{action}", "syringe_pump."+action, params)
-    waste = "NC" if spec.product_port == "NO" else "NO"
+    waste = "NC"
     add("prime_waste_route", "valve.switch", dict(device_id="valve1", position=waste))
     add("prime_recheck_temperature", "wait", wait=dict(type="microwave_temperature_below",
         device_id="microwave1", target_temperature=45, timeout=spec.cooling_timeout))
@@ -158,8 +160,13 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         steps.append(dict(id=step_id, type=action, params=params or {},
                           on_error="stop", **({"wait": wait} if wait else {})))
 
-    def pump(step_id, channel, volume, flow, direction):
-        seconds = drain_seconds(volume, flow)
+    def pump(step_id, channel, volume, flow, direction, seconds=None):
+        if seconds is None:
+            seconds = drain_seconds(volume, flow)
+        else:
+            # TIME_QUANTITY uses consistent nominal volume/time/flow, as in priming.
+            # This nominal displacement includes emptying time; it is not sample volume.
+            volume = seconds * flow / 60
         add(step_id, "pump.start", dict(device_id="pump1", channel=channel,
             mode="TIME_QUANTITY", flow_rate=flow, flow_unit=1, run_time=seconds,
             time_unit=0, dispense_volume=volume, volume_unit=1,
@@ -182,8 +189,6 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         add(f"aspirate_{n}", "syringe_pump.aspirate", feed)
         feeds.append(feed)
     add("feed_both", "syringe_pair.dispense", dict(feeds=feeds))
-    for n in (1, 2):
-        add(f"heater{n}_stop", "heater.stop", dict(device_id=f"heater{n}"))
     seconds = hold_seconds(row[5])
     add("microwave_config", "microwave.configure_auto_power", dict(device_id="microwave1",
         segments=[dict(segment=1, heating_temperature=row[4], holding_temperature=row[4],
@@ -198,16 +203,20 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     add("cool_before_collection", "wait", wait=cool)
     add("recheck_temperature", "wait", wait=cool)
     add("product_route", "valve.switch", dict(device_id="valve1", position=spec.product_port))
-    pump("collect_product", 4, row[2]+row[3], spec.drain_flow, spec.drain_direction)
-    waste = "NC" if spec.product_port == "NO" else "NO"
+    pump("collect_product", 4, row[2]+row[3], spec.drain_flow, spec.drain_direction,
+         spec.product_drain_seconds)
+    waste = "NC"
     for cycle in range(spec.clean_cycles):
+        add(f"clean_{cycle}_route", "valve.switch", dict(device_id="valve1", position=waste))
         pump(f"clean_{cycle}_in", 3, spec.clean_volume, spec.clean_flow, spec.clean_direction)
         add(f"clean_{cycle}_dwell", "wait", wait=dict(type="duration", seconds=spec.clean_dwell))
-        add(f"clean_{cycle}_route", "valve.switch", dict(device_id="valve1", position=waste))
-        pump(f"clean_{cycle}_out", 4, spec.clean_volume, spec.drain_flow, spec.drain_direction)
+        pump(f"clean_{cycle}_out", 4, spec.clean_volume, spec.drain_flow, spec.drain_direction,
+             spec.clean_drain_seconds)
     return dict(name=f"引导式实验 第{index+1}组", steps=steps, metadata=dict(
         batch_id=batch_id, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
         guided_parameters=row, product_port=spec.product_port,
+        theoretical_product_volume_ml=row[2]+row[3],
+        product_drain_seconds=spec.product_drain_seconds, clean_drain_seconds=spec.clean_drain_seconds,
         recipe_file=f"output/guided_batches/plans/{batch_id}.json", recipe_group=index+1))
 
 
@@ -289,6 +298,8 @@ class GuidedBatch:
     @property
     def cleanup_pending(self):
         return bool((self.engine and self.engine.cleanup_pending)
+                    or self.executor._active_heaters or self.executor._active_microwaves
+                    or self.executor._active_pumps or self.executor._active_syringes
                     or self.executor._reserved_syringes or self.executor._reserved_valves
                     or self.record["persistence_status"] == "error" or self.record["recovery_required"]
                     or self.priming_stop_pending)
@@ -304,7 +315,9 @@ class GuidedBatch:
     def save(self):
         self.record["state"] = self.state.value
         self.record["pause_pending"] = bool(self.engine and self.engine.pause_pending)
-        self.record["cleanup_required"] = bool(self.engine and self.engine.cleanup_pending)
+        self.record["cleanup_required"] = bool((self.engine and self.engine.cleanup_pending)
+            or self.executor._active_heaters or self.executor._active_microwaves
+            or self.executor._active_pumps or self.executor._active_syringes)
         try:
             self.record["persistence_status"] = "ok"
             atomic_record(self.record, self.directory)
@@ -417,7 +430,8 @@ class GuidedBatch:
                 self.record["current_group"] = i+1
                 executor = self.executor
                 self.engine = ExperimentEngine(executor, ExperimentLogger(save_log=True),
-                                               finish_reaction_before_pause=True)
+                                               finish_reaction_before_pause=True,
+                                               keep_heaters_on_completion=True)
                 parsed = parse_experiment_data(data)
                 self.engine.load_steps(parsed["steps"], data["name"],
                     filename=self.batch_id + f"_{i+1}.yaml", metadata=data["metadata"])
