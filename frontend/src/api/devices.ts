@@ -155,6 +155,11 @@ export const devicesApi = {
   startMicrowave: (id: string, mode: MicrowaveMode) =>
     api.post(`/microwave/${id}/start`, { mode }),
   stopMicrowave: (id: string) => api.post(`/microwave/${id}/stop`),
+  previewMicrowaveProgram: (id: string, body: unknown) => api.post(`/microwave-program/${id}/preview`, body),
+  startMicrowaveProgram: (id: string, body: unknown) => api.post(`/microwave-program/${id}/start`, body),
+  currentMicrowaveProgram: (id: string) => api.get(`/microwave-program/${id}/current`),
+  stopMicrowaveProgram: (id: string) => api.post(`/microwave-program/${id}/stop`),
+  acknowledgeMicrowaveProgram: (id: string) => api.post(`/microwave-program/${id}/acknowledge-interrupted`, { devices_stopped_confirmed: true }),
 
   emergencyStop: () => api.post('/emergency_stop'),
 }

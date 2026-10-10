@@ -36,6 +36,8 @@
           :microwave-id="microwaveId"
           :microwave="microwave"
           :realtime="microwaveStatus(microwaveId)"
+          :host-program="microwavePrograms[microwaveId]"
+          @recover="recoverMicrowaveProgram"
           @connect="connectMicrowave"
           @disconnect="disconnectMicrowave"
           @refresh="readMicrowaveData"
@@ -69,8 +71,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { devicesApi, FLOW_UNITS, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type MicrowaveSegmentPayload, type PumpMode } from '../api/devices'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { devicesApi, FLOW_UNITS, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type PumpMode } from '../api/devices'
+import { hostedMicrowavePayload, microwaveProgramPayload, microwaveProgramKey, microwaveProgramConfigured, type MicrowaveProgram, type MicrowaveSegmentConfig } from '../utils/microwaveProgram'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWebSocket, type MicrowaveRealtimeData } from '../composables/useWebSocket'
 import ValveControl from '../components/ValveControl.vue'
@@ -147,16 +150,9 @@ interface HeaterDeviceState {
   stopping: boolean
 }
 
-interface MicrowaveSegmentConfig {
-  segment: number
-  temperature: number
-  powerPercent: number
-  hours: number
-  minutes: number
-  seconds: number
-}
-
-interface MicrowaveDeviceState {
+interface MicrowaveDeviceState extends MicrowaveProgram {
+  programRevision: number
+  programRequestId: string
   connected: boolean
   loading: boolean
   connectionError?: string | null
@@ -165,7 +161,6 @@ interface MicrowaveDeviceState {
   starting: boolean
   stopping: boolean
   mode: MicrowaveMode
-  selectedSegment: number
   connectionPort?: string
   bindingMode?: string
   bindingLabel?: string
@@ -188,6 +183,19 @@ const devices = reactive<{
 })
 
 const microwaveSnapshots = reactive<Record<string, MicrowaveRealtimeData>>({})
+const microwavePrograms = reactive<Record<string, any>>({})
+watch(() => Object.entries(devices.microwaves).map(([id, device]) =>
+  [id, JSON.stringify([microwaveProgramKey(device), device.connected, device.connectionPort])] as const),
+  (current, previous) => {
+    const old = new Map(previous)
+    for (const [id, key] of current) {
+      if (old.get(id) !== key) {
+        devices.microwaves[id]!.configuredProgramKey = ''
+        devices.microwaves[id]!.programRequestId = ''
+        devices.microwaves[id]!.programRevision++
+      }
+    }
+  }, { flush: 'sync' })
 const selectedDevice = ref('')
 let initialSelectionReady = false
 const syringeDevices = ref<Record<string, SyringeState>>({})
@@ -236,10 +244,6 @@ function createMicrowaveSegments(): Record<number, MicrowaveSegmentConfig> {
     segments[i] = { segment: i, temperature: 25.0, powerPercent: 0, hours: 0, minutes: 1, seconds: 0 }
   }
   return segments
-}
-
-function isMicrowaveMode(value: unknown): value is MicrowaveMode {
-  return value === 'manual_power' || value === 'auto_power' || value === 'constant_rate'
 }
 
 function isPumpMode(value: unknown): value is PumpMode {
@@ -331,7 +335,6 @@ function saveParams() {
   for (const [microwaveId, microwave] of Object.entries(devices.microwaves)) {
     params.microwaves[microwaveId] = {
       mode: microwave.mode,
-      selectedSegment: microwave.selectedSegment,
       segments: microwave.segments,
     }
   }
@@ -376,11 +379,7 @@ function restoreParams() {
     const microwaveParams = params.microwaves || {}
     for (const [microwaveId, cfg] of Object.entries(microwaveParams as Record<string, any>)) {
       if (!devices.microwaves[microwaveId]) continue
-      if (isMicrowaveMode(cfg.mode)) devices.microwaves[microwaveId].mode = cfg.mode
-      const selectedSegment = Number(cfg.selectedSegment)
-      if (selectedSegment >= 1 && selectedSegment <= 5) {
-        devices.microwaves[microwaveId].selectedSegment = selectedSegment
-      }
+      if (cfg.mode === 'auto_power' || cfg.mode === 'manual_power') devices.microwaves[microwaveId].mode = cfg.mode
       for (const [segmentId, segmentCfg] of Object.entries(cfg.segments || {})) {
         const segment = devices.microwaves[microwaveId].segments[Number(segmentId)]
         if (!segment) continue
@@ -463,8 +462,11 @@ function applyDeviceData(data: any) {
         configuring: false,
         starting: false,
         stopping: false,
-        mode: 'manual_power',
-        selectedSegment: 1,
+        mode: 'auto_power',
+        usedSegments: 1,
+        configuredProgramKey: '',
+        programRevision: 0,
+        programRequestId: '',
         connectionPort: undefined,
         bindingMode: undefined,
         bindingLabel: undefined,
@@ -511,9 +513,24 @@ async function refreshDevices(refreshUnresolvedBindings = true) {
   }
 }
 
-onMounted(() => {
-  void refreshDevices()
+let programTimer: ReturnType<typeof setInterval> | undefined
+let readingPrograms = false
+async function refreshMicrowavePrograms() {
+  if (readingPrograms) return
+  readingPrograms = true
+  try {
+    for (const id of Object.keys(devices.microwaves)) {
+      try { microwavePrograms[id] = (await devicesApi.currentMicrowaveProgram(id)).data }
+      catch { microwavePrograms[id] = { ...microwavePrograms[id], status_error: '托管状态读取失败，请刷新后核对' } }
+    }
+  } finally { readingPrograms = false }
+}
+onMounted(async () => {
+  await refreshDevices()
+  await refreshMicrowavePrograms()
+  programTimer = setInterval(() => { void refreshMicrowavePrograms() }, 1000)
 })
+onUnmounted(() => { if (programTimer) clearInterval(programTimer) })
 
 function heaterConnectionPort(id: string): string {
   return realtimeData.value?.heaters?.[id]?.connection_port ?? devices.heaters[id]?.connectionPort ?? '--'
@@ -872,56 +889,20 @@ function microwaveConnectionPort(id: string): string {
   return status?.connection_port ?? devices.microwaves[id]?.connectionPort ?? '--'
 }
 
-function microwaveSegmentPayload(microwave: MicrowaveDeviceState): MicrowaveSegmentPayload {
-  const segment = microwave.segments[microwave.selectedSegment]
-  const payload: MicrowaveSegmentPayload = {
-    segment: segment.segment,
-    heating_temperature: segment.temperature,
-    target_temperature: segment.temperature,
-    holding_temperature: segment.temperature,
-    holding_deviation: 0,
-    hours: segment.hours,
-    minutes: segment.minutes,
-    seconds: segment.seconds,
-    ramp_hours: 0,
-    ramp_minutes: 0,
-    ramp_seconds: 0,
-  }
-  if (microwave.mode === 'manual_power') {
-    payload.heating_power_percent = segment.powerPercent
-    payload.holding_power_percent = segment.powerPercent
-  }
-  return payload
-}
-
-function validateMicrowaveSegment(microwave: MicrowaveDeviceState): boolean {
-  if (!isMicrowaveMode(microwave.mode)) {
-    ElMessage.error('微波仪模式不合法')
+function validateMicrowaveProgram(microwave: MicrowaveDeviceState): boolean {
+  try {
+    microwaveProgramPayload(microwave)
+    return true
+  } catch (e: any) {
+    ElMessage.error(e.message)
     return false
   }
-  const segment = microwave.segments[microwave.selectedSegment]
-  if (segment.segment < 1 || segment.segment > 5) {
-    ElMessage.error('微波仪段号范围为 1-5')
-    return false
-  }
-  if (segment.temperature < 0 || segment.temperature > 300) {
-    ElMessage.error('微波仪温度范围为 0-300°C')
-    return false
-  }
-  if (microwave.mode === 'manual_power' && (segment.powerPercent < 0 || segment.powerPercent > 100)) {
-    ElMessage.error('微波仪手动功率范围为 0-100%')
-    return false
-  }
-  if (segment.hours < 0 || segment.minutes < 0 || segment.minutes > 59 || segment.seconds < 0 || segment.seconds > 59) {
-    ElMessage.error('微波仪时间范围不合法')
-    return false
-  }
-  return true
 }
 
 async function connectMicrowave(id: string) {
   if (!ensureBindingResolved(devices.microwaves[id].bindingResolved, '微波仪' + id, devices.microwaves[id].bindingLabel)) return
   devices.microwaves[id].connectionError = null
+  devices.microwaves[id].configuredProgramKey = ''
   devices.microwaves[id].loading = true
   try {
     const res = await devicesApi.connectMicrowave(id)
@@ -945,6 +926,7 @@ async function connectMicrowave(id: string) {
 }
 
 async function disconnectMicrowave(id: string) {
+  devices.microwaves[id].configuredProgramKey = ''
   devices.microwaves[id].loading = true
   try {
     const res = await devicesApi.disconnectMicrowave(id)
@@ -985,38 +967,35 @@ async function readMicrowaveData(id: string) {
 
 async function configureMicrowave(id: string) {
   const microwave = devices.microwaves[id]
-  if (!ensureConnected(microwave.connected, '微波仪 ' + id, microwaveConnectionPort(id))) return
-  if (!validateMicrowaveSegment(microwave)) return
+  if (microwave.configuring || microwave.starting) return
+  if (!validateMicrowaveProgram(microwave)) return
+  const key = microwaveProgramKey(microwave)
+  const revision = microwave.programRevision
+  microwave.configuring = true
+  microwave.configuredProgramKey = ''
   try {
-    const segment = microwave.segments[microwave.selectedSegment]
-    await ElMessageBox.confirm(
-      '即将向微波仪 ' + id + '（串口 ' + microwaveConnectionPort(id) + '）写入普通配置寄存器。\n' +
-      '本操作不会调用 start/stop，不会写控制字 40151。\n' +
-      '模式：' + microwave.mode + '；段：' + microwave.selectedSegment + '；温度：' + segment.temperature + '°C；功率：' + segment.powerPercent + '%。\n' +
-      '请确认设备、串口和参数已检查无误后继续。',
-      '微波仪配置写入确认',
-      {
-        confirmButtonText: '确认写入配置',
-        cancelButtonText: '取消',
-        type: 'warning',
-      },
-    )
-    microwave.configuring = true
-    await devicesApi.configureMicrowave(id, microwave.mode, [microwaveSegmentPayload(microwave)], true)
-    ElMessage.success('微波仪 ' + id + ' 第 ' + microwave.selectedSegment + ' 段已配置')
-    await readMicrowaveData(id)
+    microwave.programRequestId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+      value => value.toString(16).padStart(2, '0')).join('')
+    const res = await devicesApi.previewMicrowaveProgram(id, hostedMicrowavePayload(microwave, microwave.programRequestId))
+    if (!res.data.success) throw new Error('程序校验失败')
+    if (revision !== microwave.programRevision || key !== microwaveProgramKey(microwave)) throw new Error('参数已变化，请重新检查程序')
+    microwave.configuredProgramKey = key
+    ElMessage.success('电脑托管程序已检查；尚未控制设备')
   } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
-    ElMessage.error('配置失败: ' + (e.response?.data?.detail || e.message))
-  } finally {
-    microwave.configuring = false
-  }
+    ElMessage.error('检查失败: ' + (e.response?.data?.detail || e.message))
+  } finally { microwave.configuring = false }
 }
 
 async function startMicrowave(id: string) {
   const microwave = devices.microwaves[id]
   if (!ensureConnected(microwave.connected, '微波仪 ' + id, microwaveConnectionPort(id))) return
-  if (!validateMicrowaveSegment(microwave)) return
+  if (microwave.configuring || microwave.starting) return
+  if (!validateMicrowaveProgram(microwave)) return
+  if (!microwaveProgramConfigured(microwave)) {
+    ElMessage.error('请先检查当前整套程序；参数变更后需要重新检查')
+    return
+  }
+  const configuredKey = microwave.configuredProgramKey
   const status = microwaveStatus(id)
   if (!status) {
     ElMessage.error('微波仪尚未获取到状态，请先刷新状态并确认设备正常')
@@ -1034,27 +1013,32 @@ async function startMicrowave(id: string) {
     ElMessage.error('微波仪存在故障码 ' + status?.fault_code + '，禁止启动')
     return
   }
-  if (Number(status?.power_percent || 0) > 0 || Number(status?.current || 0) > 0) {
-    ElMessage.error('微波仪已有功率输出或电流非零，禁止重复启动；请先确认设备状态')
+  if (status.control_active || Number(status?.power_percent || 0) > 0 || Number(status?.current || 0) > 0) {
+    ElMessage.error('微波仪仍在控制运行或有输出，禁止重复启动；请先停止并确认设备状态')
     return
   }
   microwave.starting = true
   try {
     await ElMessageBox.confirm(
-      '启动微波输出前请确认：\n1. 炉门已关闭，设备门控联锁正常；说明书记录未关门时设备/HMI 会禁止启动并提示门未关严。\n2. 反应瓶非空载，光纤探头已没入物料。\n3. 温度、功率和时间参数已核对。\n4. 设备运行期间有人看护。\n5. 当前串口为 ' + microwaveConnectionPort(id) + '，确认连接的是目标微波仪。\n确认后才会调用微波仪启动接口。',
+      '启动电脑托管程序，共 ' + microwave.usedSegments + ' 个逻辑段。后端将逐段配置温度、启动、等待到温、计时保温并确认停止，再进入下一段；段间会短暂停机。无需在触摸屏设置执行范围。\n本流程会覆盖设备五个硬件段的参数，运行期间须保持后端服务运行并有人看护。\n请确认炉门关闭、反应瓶非空载、探头没入物料，当前串口 ' + microwaveConnectionPort(id) + ' 对应目标设备。',
       '微波仪启动确认',
       {
-        confirmButtonText: '确认启动',
+        confirmButtonText: '确认启动托管程序',
         cancelButtonText: '取消',
         type: 'warning',
       },
     )
-    const res = await devicesApi.startMicrowave(id, microwave.mode)
-    if (!res.data.success) {
-      ElMessage.error('微波仪启动失败: 设备返回失败')
+    if (configuredKey !== microwave.configuredProgramKey || !microwaveProgramConfigured(microwave) || !microwave.connected) {
+      throw new Error('参数或连接已变化，请重新检查程序')
+    }
+    const res = await devicesApi.startMicrowaveProgram(id, hostedMicrowavePayload(microwave, microwave.programRequestId, true))
+    microwavePrograms[id] = res.data
+    microwave.configuredProgramKey = ''
+    if (res.data.state !== 'running') {
+      ElMessage.error('托管请求已处理，请查看运行状态；不会重复执行旧请求')
       return
     }
-    ElMessage.success(`微波仪 ${id} 启动控制位已确认`)
+    ElMessage.success(`微波仪 ${id} 托管程序已启动`)
     await readMicrowaveData(id)
   } catch (e: any) {
     if (e === 'cancel' || e === 'close') return
@@ -1078,7 +1062,13 @@ async function stopMicrowave(id: string) {
       },
     )
     devices.microwaves[id].stopping = true
-    const res = await devicesApi.stopMicrowave(id)
+    devices.microwaves[id].configuredProgramKey = ''
+    devices.microwaves[id].programRevision++
+    await refreshMicrowavePrograms()
+    const host = microwavePrograms[id]
+    const hosted = host && host.state !== 'interrupted' && (host.state === 'running' || host.state === 'paused' || host.cleanup_pending)
+    const res = hosted ? await devicesApi.stopMicrowaveProgram(id) : await devicesApi.stopMicrowave(id)
+    await refreshMicrowavePrograms()
     if (!res.data.success) {
       ElMessage.error('停止失败: 微波仪设备返回失败')
       return
@@ -1093,6 +1083,17 @@ async function stopMicrowave(id: string) {
   }
 }
 
+async function recoverMicrowaveProgram(id: string) {
+  try {
+    await ElMessageBox.confirm('请现场确认微波设备已经停止且功率、电流归零。解除锁定不会恢复或重放程序。', '人工恢复确认', { type: 'warning', confirmButtonText: '设备已停止，解除锁定' })
+    await devicesApi.acknowledgeMicrowaveProgram(id)
+    await refreshMicrowavePrograms()
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error('解除锁定失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
 async function emergencyStop() {
   try {
     await ElMessageBox.confirm('确定要紧急停止所有设备吗？此操作不可撤销！', '紧急停止确认', {
@@ -1100,6 +1101,10 @@ async function emergencyStop() {
       cancelButtonText: '取消',
       type: 'error',
     })
+    for (const microwave of Object.values(devices.microwaves)) {
+      microwave.configuredProgramKey = ''
+      microwave.programRevision++
+    }
     const res = await devicesApi.emergencyStop()
     await refreshDevices()
     if (!res.data.success) {
