@@ -46,6 +46,7 @@ function page(fill = true) {
     state.priming.value.forEach((p:any)=>{p.value=p.key==='prime_cycles'?2:p.key==='prime_drain_seconds'?480:10})
   }
   function ready() {
+    state.stage.value = 6
     state.validatedKey.value = state.requestKey.value
     state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = true
   }
@@ -233,5 +234,55 @@ test('missing capacity or repeat count blocks preview and start even with stale 
   await s.validate();await s.startBatch()
   assert.equal(p.calls.length,0)
   assert.equal(s.advancedOpen.value,true)
+ }finally{p.dispose()}
+})
+
+
+test('final-page confirmation reasons identify missing checks and parameter edits clear all three', async () => {
+ const p=page(),s=p.state
+ try {
+  await vue.nextTick()
+  s.stage.value=5
+  assert.match(s.startBlockReason.value,/批次确认/)
+  s.nextStage()
+  assert.equal(s.stage.value,6)
+  assert.match(s.startBlockReason.value,/校验/)
+  s.validatedKey.value=s.requestKey.value
+  assert.match(s.startBlockReason.value,/接管.*设备.*初始化/)
+  s.plumbingConfirmed.value=true
+  assert.match(s.startBlockReason.value,/设备.*初始化/)
+  await s.startBatch();assert.equal(p.calls.length,0)
+  s.primingConfirmed.value=true
+  assert.equal(s.startBlockReason.value,'待确认：初始化与预充耗液')
+  s.initializationConfirmed.value=true
+  assert.equal(s.startBlockReason.value,'')
+  s.repeats.value=2;await vue.nextTick()
+  assert.equal(s.stage.value,6)
+  assert.equal(s.plumbingConfirmed.value,false)
+  assert.equal(s.primingConfirmed.value,false)
+  assert.equal(s.initializationConfirmed.value,false)
+  assert.match(s.startBlockReason.value,/校验/)
+  p.ready();assert.equal(s.startBlockReason.value,'')
+ }finally{p.dispose()}
+})
+
+test('batch locks explain disabled start and remain enforced across the confirmation dialog', async () => {
+ const p=page(),s=p.state
+ try {
+  await vue.nextTick();p.ready()
+  for(const [state,reason] of [
+   [{state:'running'},/运行中/],
+   [{state:'failed',recovery_required:true},/恢复锁定/],
+   [{state:'completed',cleanup_pending:true},/清理/],
+   [{state:'paused',phase:'ready'},/不匹配/]
+  ] as const){
+   s.batch.value=state
+   assert.match(s.startBlockReason.value,reason)
+   await s.startBatch();assert.equal(p.calls.length,0)
+  }
+  s.batch.value={state:'idle'}
+  p.confirmation(async()=>{s.batch.value={state:'failed',recovery_required:true}})
+  await s.startBatch();assert.equal(p.calls.length,0)
+  assert.match(s.error.value,/变化/)
  }finally{p.dispose()}
 })
