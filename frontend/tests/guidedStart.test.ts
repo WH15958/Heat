@@ -14,7 +14,7 @@ const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', impo
 const script = compileScript(parse(source).descriptor, { id: 'guided-start-test' }).content
 const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
-function page() {
+function page(fill = true) {
   const calls: any[][] = [], dialogs: string[] = []
   let confirm = async () => {}
   let snapshot: any = { state: 'idle' }, readFailure = false
@@ -38,7 +38,13 @@ function page() {
   const scope = vue.effectScope()
   const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
   state.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} } }
-  state.fixed.value.filter((s: any) => ['productTime', 'cleanTime'].includes(s.key)).forEach((s: any) => { s.value = 60 })
+  if(fill) {
+    state.axes.value.forEach((a:any,i:number)=>{a.start=[30,30,0.1,0.1,30,1][i]})
+    state.speedA.value=state.speedB.value=100
+    state.repeats.value=1
+    state.fixed.value.forEach((s:any)=>{s.value=['productTime','cleanTime'].includes(s.key)?60:1})
+    state.priming.value.forEach((p:any)=>{p.value=p.key==='prime_cycles'?2:p.key==='prime_drain_seconds'?480:10})
+  }
   function ready() {
     state.validatedKey.value = state.requestKey.value
     state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = true
@@ -153,4 +159,79 @@ test('a matching existing ready batch starts with its ID and preserves priming',
     assert.equal(p.calls.length, 1)
     assert.equal(p.calls[0][1].priming_batch_id, 'prepared')
   } finally { p.dispose() }
+})
+
+
+test('blank defaults permit stepwise entry without coercing empty fields to zero', async () => {
+  const p=page(false), s=p.state
+  try {
+    assert.ok(s.axes.value.every((a:any)=>a.start===null&&a.end===null&&a.interval===null&&a.list===''))
+    assert.ok(s.fixed.value.every((f:any)=>f.value===null))
+    assert.ok(s.priming.value.every((f:any)=>f.value===null))
+    assert.equal(s.repeats.value,null)
+    assert.equal(s.speedA.value,null)
+    assert.equal(s.speedB.value,null)
+    assert.equal(s.initialization.value[0].direction,'Z')
+    assert.equal(s.initialization.value[0].initialization_code,0)
+    assert.ok(Number.isNaN(s.primeTotal.value))
+    s.nextStage();assert.equal(s.stage.value,0)
+    s.axes.value[0].start=30;s.axes.value[1].start=30
+    s.nextStage();assert.equal(s.stage.value,1)
+    s.nextStage();assert.equal(s.stage.value,1)
+    s.axes.value[2].start=0.1;s.axes.value[3].start=0.2
+    s.speedA.value=s.speedB.value=100
+    s.nextStage();assert.equal(s.stage.value,2)
+    s.axes.value[4].start=80;s.axes.value[5].start=0
+    s.nextStage();assert.equal(s.stage.value,3)
+    s.fixed.value[0].value=10;s.fixed.value[1].value=60
+    s.nextStage();assert.equal(s.stage.value,4)
+    s.fixed.value.slice(2).forEach((f:any)=>{f.value=1})
+    s.fixed.value.find((f:any)=>f.key==='wait').value=0
+    assert.equal(s.stepError(4),'')
+    s.fixed.value.find((f:any)=>f.key==='wait').value=''
+    assert.ok(s.stepError(4))
+    s.axes.value[0].start=''
+    assert.ok(s.stepError(0))
+    await s.validate();await s.startBatch()
+    assert.equal(p.calls.length,0)
+  } finally {p.dispose()}
+})
+
+test('range and list inputs require explicit values; clearing fields invalidates validated requests', async () => {
+  const p=page(),s=p.state
+  try {
+    const a=s.axes.value[0]
+    a.mode='range';a.start=30
+    assert.ok(s.stepError(0))
+    a.end=40;a.interval=5
+    assert.equal(s.stepError(0),'')
+    assert.deepEqual(Array.from(s.requestBody.value.axes[0]),[30,35,40])
+    a.mode='list';a.list=''
+    assert.ok(s.stepError(0))
+    a.list='30, 35, 40'
+    assert.equal(s.stepError(0),'')
+    s.fixed.value.find((f:any)=>f.key==='drainFlow').value=10
+    s.priming.value.find((f:any)=>f.key==='prime_drain_flow').value=2
+    assert.equal(s.requestBody.value.drain_flow,10)
+    assert.equal(s.requestBody.value.prime_drain_flow,2)
+    assert.equal(s.requestBody.value.product_drain_seconds,60)
+    assert.equal(s.requestBody.value.clean_drain_seconds,60)
+    await vue.nextTick();p.ready()
+    a.list='';await vue.nextTick()
+    assert.equal(s.validatedKey.value,'')
+    await s.startBatch();assert.equal(p.calls.length,0)
+  } finally {p.dispose()}
+})
+
+test('missing capacity or repeat count blocks preview and start even with stale confirmations', async () => {
+ const p=page(),s=p.state
+ try {
+  s.repeats.value=null
+  await s.validate();assert.equal(p.calls.length,0)
+  s.repeats.value=1;s.priming.value[5].value=null
+  await vue.nextTick();p.ready()
+  await s.validate();await s.startBatch()
+  assert.equal(p.calls.length,0)
+  assert.equal(s.advancedOpen.value,true)
+ }finally{p.dispose()}
 })
