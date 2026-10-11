@@ -56,8 +56,6 @@
           <div class="grid compact-fields settings"><label v-for="p in priming.slice(5)" :key="p.key">{{ p.label }}<span class="number-unit"><input v-model.number="p.value" type="number" step="any" placeholder="请输入" /><span>{{ p.unit }}</span></span></label></div>
           <p><small>按现场余量填写，预留防吸空和防溢出空间。</small></p>
         </details>
-        <label class="confirm-check"><input v-model="primingConfirmed" type="checkbox" />已核对设备、液路、容量及前驱体相容性。</label>
-        <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液。</label>
         <p>下一步确认批次，校验后即可开始自动实验。</p>
         <p v-if="primeReady">已有本批次预充结果，开始自动实验时将沿用，不重复初始化或预充。修改参数或维护设备前请先停止批次。</p>
         <details><summary>预充流程预览</summary><pre>{{ previewPrime }}</pre></details>
@@ -73,15 +71,21 @@
         </details>
       </template>
       <div v-else class="batch-placeholder"><strong>待完成设置</strong><p>校验参数后显示组数与用量。</p></div>
-      <div class="preflight-summary">
+      <div v-if="stage===6" class="preflight-summary">
         <h4>执行前确认</h4>
-        <p>设备已连接，现场条件已核对。</p>
+        <p>请先连接设备，再逐项核对。启动时系统会检查设备就绪状态。</p>
         <div class="plumbing-summary"><span>NO · 收产物</span><span>NC · 排废液</span></div>
-        <label class="confirm-check"><input v-model="plumbingConfirmed" type="checkbox" :disabled="activeRun" />已核对接管、泵向及微波负载</label>
+        <label class="confirm-check"><input v-model="plumbingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对接管、泵向及微波负载</label>
+        <label class="confirm-check"><input v-model="primingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对设备、容量及前驱体相容性</label>
+        <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液</label>
+        <small>修改参数后，需重新校验并勾选三项确认。</small>
         <details class="batch-details"><summary>查看启动说明</summary><p>请先在装置控制页连接全部设备。系统会按预充页确认的方向与代码依次初始化两台注射泵，再预充、排液；成功后自动开始实验。反应液降至 45℃及以下后自动收集。</p></details>
       </div>
-      <el-button type="primary" :loading="controlling" :disabled="stage!==6||!!plan.error||validatedKey!==requestKey||!plumbingConfirmed||!primingConfirmed||!initializationConfirmed||activeRun||(batch.phase==='ready'&&!primeReady)||batch.recovery_required" @click="startBatch">开始自动实验</el-button>
-      <p class="start-caption">启动后自动预充，再开始实验</p>
+      <template v-if="stage===6">
+        <el-button type="primary" :loading="controlling" :disabled="controlling||!!startBlockReason" aria-describedby="start-status" @click="startBatch">开始自动实验</el-button>
+        <p id="start-status" class="start-caption" role="status">{{ controlling ? '正在处理启动请求…' : startBlockReason || '确认启动后自动预充，再开始实验' }}</p>
+      </template>
+      <p v-else class="start-caption">完成参数设置后，在“批次确认”页统一确认并启动。</p>
     </aside></div>
     <footer v-if="!showProgress"><el-button :disabled="stage===0" @click="goBack(stage-1)">上一步</el-button><el-button v-if="stage<6" type="primary" @click="nextStage">{{ stage===5?'批次确认':'下一步' }}</el-button><el-button @click="router.push('/experiment/batch/template')">高级：已有模板参数设计</el-button></footer>
   </div>
@@ -226,6 +230,23 @@ const labels:Record<string,string>={idle:'未运行',pending:'待执行',running
 const stateLabel=computed(()=>labels[batch.value.state]||batch.value.state)
 const requestBody=computed(()=>({axes:axes.value.map(a=>valuesFor(a)),repeats:repeats.value,initialization_a:initialization.value[0],initialization_b:initialization.value[1],speed_a:speedA.value,speed_b:speedB.value,product_port:productPort,drain_flow:setting('drainFlow'),product_drain_seconds:setting('productTime'),clean_drain_seconds:setting('cleanTime'),clean_volume:setting('volume'),clean_flow:setting('flow'),clean_dwell:setting('wait'),clean_cycles:setting('cycles'),drain_direction:drainDirection.value,clean_direction:cleanDirection.value,...Object.fromEntries(priming.value.map(p=>[p.key,p.value]))}))
 const requestKey=computed(()=>{try{return JSON.stringify(requestBody.value)}catch{return ''}})
+const startBlockReason=computed(()=>{
+ if(stage.value!==6)return '请前往批次确认页'
+ if(activeRun.value)return '已有批次运行中，请先停止或查看实验进度'
+ if(batch.value.recovery_required)return '请在实验进度页完成现场检查并解除恢复锁定'
+ if(batch.value.cleanup_pending)return '设备清理尚未完成，请查看实验进度'
+ if(batch.value.phase==='ready'&&!primeReady.value)return '当前参数与已有预充结果不匹配，请先停止旧批次'
+ const issue=stepError(6)
+ if(issue)return issue
+ if(advancedMissing.value)return '请返回预充页填写可用容量'
+ if(validating.value)return '正在校验完整批次…'
+ if(!requestKey.value||validatedKey.value!==requestKey.value)return '请先生成并校验完整批次'
+ const missing=[]
+ if(!plumbingConfirmed.value)missing.push('接管、泵向及微波负载')
+ if(!primingConfirmed.value)missing.push('设备、容量及相容性')
+ if(!initializationConfirmed.value)missing.push('初始化与预充耗液')
+ return missing.length?'待确认：'+missing.join('；'):''
+})
 const fragment=computed(()=>previewYaml.value[selected.value]||'请先生成并校验完整批次。')
 watch([axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,initialization],()=>{report.value='';selected.value=0;validatedKey.value='';previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false},{deep:true})
 function showError(e:any){const detail=e.response?.data?.detail;error.value=Array.isArray(detail)?detail.map(d=>`${d.loc?.slice(1).join('.') || '参数'}：${d.msg}`).join('；'):String(detail||e.message||e)}
@@ -237,9 +258,9 @@ async function startBatch(){
  controlling.value=true
  try{
   const key=requestKey.value
-  if(!key||stepError(6)||advancedMissing.value||validatedKey.value!==key||!plumbingConfirmed.value||!primingConfirmed.value||!initializationConfirmed.value||activeRun.value||(batch.value.phase==='ready'&&!primeReady.value))throw new Error('请先校验当前参数并确认现场条件，已有批次须先停止')
+  if(startBlockReason.value)throw new Error(startBlockReason.value)
   await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按设定参数预充并排废液，消耗前驱体；成功后自动开始加热、进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
-  if(key!==requestKey.value||validatedKey.value!==key||!plumbingConfirmed.value||!primingConfirmed.value||!initializationConfirmed.value||activeRun.value||(batch.value.phase==='ready'&&!primeReady.value))throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
+  if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
   showProgress.value=true
   lastRefresh.value=Date.now()
