@@ -44,7 +44,7 @@
                   inactive-text=""
                   style="margin-right: 12px"
                 />
-                <el-button type="success" @click="startExperiment" :disabled="isRunning" :loading="starting">
+                <el-button type="success" @click="startExperiment" :disabled="isRunning || isPaused || cleanupPending" :loading="starting">
                   启动实验
                 </el-button>
                 <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning" :loading="pausing">
@@ -53,13 +53,14 @@
                 <el-button type="primary" @click="resumeExperiment" :disabled="!isPaused" :loading="resuming">
                   恢复
                 </el-button>
-                <el-button type="danger" @click="stopExperiment" :disabled="!isRunning && !isPaused" :loading="stopping">
-                  停止
+                <el-button type="danger" @click="stopExperiment" :disabled="!isRunning && !isPaused && !cleanupPending" :loading="stopping">
+                  {{ cleanupPending ? '重试停止' : '停止' }}
                 </el-button>
               </div>
             </div>
           </template>
 
+          <el-alert v-if="cleanupPending" title="停止未确认：请现场确认设备状态，处理故障后重试停止。" type="error" :closable="false" show-icon />
           <div v-if="progress" class="progress-section">
             <div class="progress-header">
               <el-tag :type="stateTagType" size="large">{{ stateLabel }}</el-tag>
@@ -133,7 +134,7 @@
       <template #footer>
         <el-button :disabled="previewLoading" @click="router.push({ path: '/experiment/editor', query: { filename: previewFilename } })">编辑此实验</el-button>
         <el-button @click="previewVisible = false">关闭</el-button>
-        <el-button type="primary" :disabled="!previewExp || previewLoading || isRunning || isPaused || starting" @click="choosePreviewExperiment">选择此实验</el-button>
+        <el-button type="primary" :disabled="!previewExp || previewLoading || isRunning || isPaused || cleanupPending || starting" @click="choosePreviewExperiment">选择此实验</el-button>
       </template>
     </el-dialog>
 
@@ -201,6 +202,7 @@ interface ExperimentDetail {
 
 interface ExperimentProgress {
   state: string
+  cleanup_pending: boolean
   current_step: number
   total_steps: number
   step_id: string
@@ -243,6 +245,7 @@ let wsClosed = false
 
 const isRunning = computed(() => progress.value?.state === 'running')
 const isPaused = computed(() => progress.value?.state === 'paused')
+const cleanupPending = computed(() => progress.value?.cleanup_pending === true)
 const terminalStates = new Set(['completed', 'failed', 'stopped'])
 
 const metadataSummary = computed(() => {
@@ -341,6 +344,7 @@ function normalizeProgress(data: any, fallback: ExperimentProgress | null = prog
 
   return {
     state,
+    cleanup_pending: Boolean(data?.cleanup_pending ?? (state === 'idle' ? false : fallback?.cleanup_pending)),
     current_step: currentStep,
     total_steps: totalSteps,
     step_id: data?.step_id ?? fallback?.step_id ?? '',
@@ -380,7 +384,8 @@ function handleWsMessage(event: MessageEvent) {
     const msg = JSON.parse(event.data)
     if (msg.type === 'experiment_progress' && msg.filename === selectedFilename.value) {
       progress.value = normalizeProgress(msg)
-      if (terminalStates.has(progress.value.state)) stopPolling()
+      if (terminalStates.has(progress.value.state) && !cleanupPending.value) stopPolling()
+      else startPolling()
     } else if (msg.type === 'experiment_log' && msg.filename === selectedFilename.value) {
       const evt = msg.event
       const data = msg.data
@@ -426,7 +431,9 @@ function handleWsMessage(event: MessageEvent) {
           elapsed: data.total_duration ?? progress.value?.elapsed,
           step_id: '',
         })
-        stopPolling()
+        // run_finished precedes the progress event carrying cleanup status.
+        startPolling()
+        void pollProgress()
       }
     }
   } catch {
@@ -489,7 +496,7 @@ async function previewExperiment(filename: string) {
 }
 
 async function choosePreviewExperiment() {
-  if (!previewExp.value || previewLoading.value || isRunning.value || isPaused.value || starting.value) return
+  if (!previewExp.value || previewLoading.value || isRunning.value || isPaused.value || cleanupPending.value || starting.value) return
   await selectExperiment(previewFilename.value)
   previewVisible.value = false
 }
@@ -581,6 +588,7 @@ async function stopExperiment() {
     ElMessage.error(`停止失败: ${e.response?.data?.detail || e.message}`)
   } finally {
     stopping.value = false
+    await pollProgress()
   }
 }
 
@@ -590,10 +598,13 @@ async function pollProgress() {
     const res = await axios.get(`/api/experiments/${selectedFilename.value}/progress`)
     const nextProgress = normalizeProgress(res.data)
     if (nextProgress.state === 'idle' && progress.value && terminalStates.has(progress.value.state)) {
+      progress.value.cleanup_pending = false
+      stopPolling()
       return
     }
     progress.value = nextProgress
-    if (terminalStates.has(progress.value.state)) stopPolling()
+    if (terminalStates.has(progress.value.state) && !cleanupPending.value) stopPolling()
+    else if (cleanupPending.value && !pollTimer) startPolling()
   } catch (e) {
     // ignore
   }

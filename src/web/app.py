@@ -13,9 +13,9 @@ from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
 from src.web.api.syringe_pumps import router as syringe_router
 from src.web.api.valves import router as valves_router
-from src.web.api.experiments import router as experiments_router
+from src.web.api.experiments import router as experiments_router, shutdown as stop_experiments
 from src.web.api.guided import router as guided_router
-from src.web.api.microwave_program import router as microwave_program_router, shutdown as stop_microwave_programs
+from src.web.api.microwave_program import router as microwave_program_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
 
@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
     syringe_task = asyncio.create_task(syringe_supervisor(app.state.device_manager))
     yield
     logger.info("Shutting down...")
-    await stop_microwave_programs()
+    await stop_experiments()
     push_task.cancel()
     syringe_task.cancel()
     try:
@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
         await push_task
     except asyncio.CancelledError:
         pass
-    if not app.state.device_manager.cleanup():
+    if not await asyncio.to_thread(app.state.device_manager.cleanup):
         logger.error("One or more devices failed to stop or disconnect during shutdown")
 
 

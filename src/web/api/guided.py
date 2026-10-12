@@ -8,7 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from src.experiment import guided
-from src.web.api.experiments import _engines, _get_active_engine, _source_lock
+from src.web.api.experiments import (_engines, _get_active_engine, _source_lock,
+                                     control_generation, check_control_generation)
 
 router = APIRouter(prefix="/guided", tags=["guided"])
 _batches = {}
@@ -78,14 +79,16 @@ async def history():
 
 @router.post("/start")
 async def start(spec: guided.GuidedRequest, request: Request):
+    generation = control_generation()
     async with _source_lock:
+        check_control_generation(generation)
         from src.web.api.microwave_program import require_recovered
         require_recovered()
         if not spec.priming_batch_id:
             return await create_batch(spec, request, prime_only=False)
         batch = active_batch(spec.priming_batch_id)
         try:
-            await batch.begin_experiments(spec)
+            await batch.begin_experiments(spec, before_start=lambda: check_control_generation(generation))
         except (ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(409, str(exc)) from exc
         return batch.snapshot()
@@ -93,7 +96,9 @@ async def start(spec: guided.GuidedRequest, request: Request):
 
 @router.post("/prime")
 async def prime(spec: guided.GuidedRequest, request: Request):
+    generation = control_generation()
     async with _source_lock:
+        check_control_generation(generation)
         if spec.priming_batch_id:
             existing = active_batch(spec.priming_batch_id)
             if (not existing.stopping and existing.record["phase"] in ("priming", "ready")
@@ -105,6 +110,7 @@ async def prime(spec: guided.GuidedRequest, request: Request):
 
 
 async def create_batch(spec, request, *, prime_only):
+    generation = control_generation()
     from src.web.api.microwave_program import require_recovered
     require_recovered()
     # Both callers hold _source_lock across readiness checks and registration.
@@ -115,6 +121,7 @@ async def create_batch(spec, request, *, prime_only):
     try:
         batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
         await guided.preflight(batch.dm, spec, before_initialization=True)
+        check_control_generation(generation)
         _batches[batch.batch_id] = batch
         _engines[batch.batch_id] = batch
         await batch.start(prime_only=prime_only)

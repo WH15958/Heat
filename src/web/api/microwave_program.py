@@ -4,7 +4,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Request
 
 from src.experiment import microwave_program as program
-from src.web.api.experiments import _engines, _get_active_engine, _source_lock
+from src.web.api.experiments import (_engines, _get_active_engine, _source_lock,
+                                     control_generation, check_control_generation)
 from src.web.api.guided import RecoveryConfirmation
 
 router = APIRouter(prefix="/microwave-program", tags=["microwave-program"])
@@ -51,7 +52,9 @@ async def current(device_id: str):
 
 @router.post("/{device_id}/start")
 async def start(device_id: str, spec: program.ProgramRequest, request: Request):
+    generation = control_generation()
     async with _source_lock:
+        check_control_generation(generation)
         program_id = "mwprogram_" + spec.request_id
         existing = next((r for r in records() if r["program_id"] == program_id), None)
         if existing:
@@ -68,6 +71,7 @@ async def start(device_id: str, spec: program.ProgramRequest, request: Request):
         try:
             run = program.MicrowaveProgramRun(request.app.state.device_manager, device_id, spec)
             await program.preflight(request.app.state.device_manager, device_id)
+            check_control_generation(generation)
         except (ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(409, str(exc)) from exc
         _runs[program_id] = run
@@ -118,10 +122,3 @@ async def acknowledge(device_id: str, body: RecoveryConfirmation):
                 if _engines.get(record["program_id"]) is live:
                     _engines.pop(record["program_id"])
         return {"success": True}
-
-
-async def shutdown():
-    runs = [r for r in _runs.values() if r.state.value not in program.TERMINAL or r.cleanup_pending]
-    for run in runs:
-        run.request_stop()
-    await asyncio.gather(*(r.stop() for r in runs), return_exceptions=True)

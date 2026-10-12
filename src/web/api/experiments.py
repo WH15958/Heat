@@ -3,7 +3,8 @@ import asyncio
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 
-from src.experiment.parser import parse_experiment, list_experiments, _validate_filename
+from src.experiment.parser import parse_experiment, parse_experiment_content, list_experiments, _validate_filename
+from src.experiment import parser as experiment_parser
 from src.experiment.engine import ExperimentEngine
 from src.experiment.editor import read_source, write_source, validate_source, source_path, SourceConflict
 from src.experiment.executor import StepExecutor
@@ -16,6 +17,46 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 _engines: dict = {}
 # Serialize source replacement with loading/registering a run, including initial awaits.
 _source_lock = asyncio.Lock()
+_stop_generation = 0
+_stopping = 0
+
+
+def control_generation():
+    if _stopping:
+        raise HTTPException(409, "全局停止或服务关闭处理中")
+    return _stop_generation
+
+
+def check_control_generation(generation):
+    if _stopping or generation != _stop_generation:
+        raise HTTPException(409, "停止请求已取消待执行操作，请重新确认")
+
+
+def begin_stop():
+    global _stop_generation, _stopping
+    _stop_generation += 1
+    _stopping += 1
+    for engine in list(_engines.values()):
+        engine.request_stop()
+
+
+def end_stop():
+    global _stopping
+    _stopping -= 1
+
+
+async def shutdown():
+    begin_stop()
+    try:
+        async with _source_lock:
+            engines = list(_engines.values())
+            for engine in engines:
+                engine.request_stop()
+            results = await asyncio.gather(*(e.stop() for e in engines), return_exceptions=True)
+            if any(result is not True for result in results):
+                logger.error("One or more experiments failed to stop during shutdown")
+    finally:
+        end_stop()
 
 
 def _get_active_engine():
@@ -116,7 +157,9 @@ async def get_experiment(filename: str):
 
 @router.post("/{filename}/start")
 async def start_experiment(filename: str, body: StartExperimentRequest, request: Request):
+    generation = control_generation()
     async with _source_lock:
+        check_control_generation(generation)
         return await _start_experiment_locked(filename, body, request)
 
 
@@ -126,10 +169,22 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
     from src.web.api.guided import records
     if any(r.get("recovery_required") for r in records()):
         raise HTTPException(409, "存在中断的引导式批次，须先现场确认设备停止")
+
+    active_fname, active_engine = _get_active_engine()
+    if active_engine is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot start new experiment: '{active_fname}' is still {active_engine.state.value}. "
+                   f"Please stop or wait for it to complete before starting another.",
+        )
     dm = request.app.state.device_manager
     try:
         _validate_filename(filename)
-        data = parse_experiment(f"experiments/{filename}")
+        source_content = (experiment_parser.EXPERIMENTS_DIR / filename).read_text(encoding="utf-8")
+        validation = validate_source(source_content, filename)
+        if not validation["valid"]:
+            raise ValueError("; ".join(error["message"] for error in validation["errors"]))
+        data = parse_experiment_content(source_content, filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Experiment not found")
     except ValueError as e:
@@ -142,14 +197,6 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
             and not getattr(engine, "cleanup_pending", False)
         ):
             _cleanup_engine(fname)
-
-    active_fname, active_engine = _get_active_engine()
-    if active_engine is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot start new experiment: '{active_fname}' is still {active_engine.state.value}. "
-                   f"Please stop or wait for it to complete before starting another.",
-        )
 
     for step in data["steps"]:
         if not step.enabled:
@@ -285,6 +332,7 @@ async def get_progress(filename: str):
         "step_id": p.step_id,
         "elapsed": round(p.elapsed, 1),
         "pause_pending": p.pause_pending,
+        "cleanup_pending": engine.cleanup_pending,
     }
 
 
@@ -312,7 +360,10 @@ async def get_history_run(run_id: str):
 
 @router.delete("/history/runs/{run_id}")
 async def delete_history_run(run_id: str):
-    success = delete_experiment_run(run_id)
+    try:
+        success = delete_experiment_run(run_id)
+    except OSError as exc:
+        raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
     if not success:
         raise HTTPException(status_code=404, detail="Run not found")
     return {"success": True, "deleted": run_id}
@@ -320,7 +371,10 @@ async def delete_history_run(run_id: str):
 
 @router.delete("/history/runs")
 async def delete_all_history_runs():
-    count = delete_all_experiment_runs()
+    try:
+        count = delete_all_experiment_runs()
+    except OSError as exc:
+        raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
     return {"success": True, "deleted_count": count}
 
 
@@ -337,6 +391,7 @@ async def _broadcast_progress(filename: str, progress):
             "step_id": progress.step_id,
             "elapsed": round(progress.elapsed, 1),
             "pause_pending": progress.pause_pending,
+            "cleanup_pending": progress.cleanup_pending,
         }
     )
 

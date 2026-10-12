@@ -256,7 +256,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - 控制竞态：`DeviceManager` 对同一加热器或微波仪的写控制做串行协调，并用 stop 请求代次取消更早进入但尚未执行的 start，避免 stop 已返回成功后旧 start 再启动；全局急停和 shutdown cleanup 执行期间的新 start 会被拒绝。主动断开和 cleanup 按同一设备锁先 stop，stop 返回 `False` 或异常时保留连接供重试，不得继续 disconnect。
 - 串口资源：AIBUS 与 Modbus RTU 在打开串口前统一通过 `SerialPortManager` 取得进程锁并登记句柄；同一进程内重复占用同一端口会被拒绝，连接失败或断开时会释放锁和句柄。管理器只登记 `atexit` 资源清理，不启动超时看门狗、不接管 `SIGTERM` 或调用 `os._exit()`；Web 服务由 Uvicorn/FastAPI lifespan 先执行设备 stop/cleanup，辅助 CLI 由应用级信号处理器执行同样的停机流程。
 - 失败传播：设备返回 `False`、timeout 或异常必须向上传播为失败；WebSocket 和页面加载不能触发写入。
-- 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。实验自然结束也会清理本次启动的设备；清理失败时运行标记为 `failed` 并阻止同一引擎重新启动，直到重试停机成功。
+- 实验引擎：`microwave.configure_*`、`microwave.start` 和 `microwave.stop` 直接调用 `DeviceManager`，行为与加热器/蠕动泵动作一致，设备方法返回 `False` 时步骤失败。实验自然结束也会清理本次启动的设备；清理失败时运行标记为 `failed` 并阻止同一引擎重新启动，直到重试停机成功。普通实验、引导批次和托管程序在服务正常关闭时统一请求停止并等待记录收尾；清理未确认时 API/WS 暴露 `cleanup_pending`，前端保留重试入口。
 
 fake 测试只能证明地址换算、参数校验、失败传播、API/WS payload 和 executor 调用链。真实串口、接线、写入顺序、浮点字序、运行状态、故障码 bit、门控联锁和 stop 语义必须由实验室按 [microwave_smoke_test.md](microwave_smoke_test.md) 人工确认。
 
@@ -296,6 +296,8 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 ---
 
 ## 6. 测试分层策略
+
+普通 YAML 启动入口复用编辑器的整份源文校验，再解析同一份内存文本；无效参数在注册引擎或调用硬件前拒绝。急停先发布共享停止代次并派发设备停止，待启动请求及引导/托管预检在注册前复核代次；不绕过设备控制锁。历史删除的存储失败返回 HTTP 503，允许重试；缺少日志的有效 run_id 也可清理此前遗留的样品行。
 
 ### 6.1 纯软件验证
 

@@ -606,7 +606,7 @@ class GuidedBatch:
         self.record["priming"]["stop_confirmed"] = success
         return success
 
-    async def begin_experiments(self, spec):
+    async def begin_experiments(self, spec, before_start=None):
         if not spec.plumbing_confirmed or not spec.priming_confirmed or not spec.initialization_confirmed:
             raise ValueError("请重新确认现场预充和液路条件")
         if (self.stopping or self.record["phase"] != "ready" or self.record["priming"]["status"] != "completed"
@@ -622,6 +622,8 @@ class GuidedBatch:
             self.record["error"] = "预充后设备状态变化：" + str(exc)
             self.save()
             raise
+        if before_start:
+            before_start()
         self.state = ExperimentState.RUNNING
         self.record["phase"] = "experiments"
         self.save()

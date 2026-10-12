@@ -348,9 +348,10 @@ def test_shutdown_stops_live_host_program():
         body['stages'][0]['hold_seconds'] = 100
         run = program.MicrowaveProgramRun(dm, 'microwave1', program.ProgramRequest(**body))
         api._runs[run.record['program_id']] = run
+        experiments._engines[run.record['program_id']] = run
         await run.start()
         await until(lambda: run.record['phase'] == 'hold')
-        await api.shutdown()
+        await experiments.shutdown()
         assert run.state.value == 'stopped' and not dm.microwave_on
         assert len(dm.configurations) == 1
     asyncio.run(scenario())

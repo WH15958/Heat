@@ -17,13 +17,16 @@ async def protect_guided_devices(request: Request):
     if request.method not in ("POST", "PUT", "DELETE") or request.url.path.endswith("/emergency_stop"):
         yield
         return
-    from src.web.api.experiments import _engines, _source_lock
+    from src.web.api.experiments import _engines, _source_lock, control_generation, check_control_generation
     from src.experiment.guided import GuidedBatch
     from src.experiment.microwave_program import MicrowaveProgramRun
+    generation = control_generation()
     async with _source_lock:
+        check_control_generation(generation)
         is_stop = request.url.path.endswith("/stop")
         if request.url.path.endswith("/command"):
             is_stop = (await request.json()).get("action") == "stop"
+        check_control_generation(generation)
         batches = [b for b in _engines.values() if isinstance(b, (GuidedBatch, MicrowaveProgramRun))
                    and (b.state.value in ("running", "paused") or b.cleanup_pending)]
         if batches:
@@ -555,20 +558,27 @@ async def emergency_stop(request: Request):
     """
     dm = get_dm(request)
     loop = asyncio.get_event_loop()
-    from src.web.api.experiments import _engines, _source_lock
+    from src.web.api.experiments import _engines, _source_lock, begin_stop, end_stop
 
-    # Block new experiment registration until existing runs and devices stop.
-    async with _source_lock:
-        engines = list(_engines.values())
-        for engine in engines:
-            engine.request_stop()
-        try:
-            result = await loop.run_in_executor(None, dm.emergency_stop_all)
-        finally:
+    # Publish stop intent and dispatch device stops before waiting for slow I/O
+    # holding the source lock. The generation guard cancels queued starts.
+    begin_stop()
+    device_stop = loop.run_in_executor(None, dm.emergency_stop_all)
+    try:
+        async with _source_lock:
+            engines = list(_engines.values())
+            for engine in engines:
+                engine.request_stop()
             stopped = await asyncio.gather(
                 *(engine.stop() for engine in engines), return_exceptions=True
             )
+        result = await device_stop
         result = result and all(value is True for value in stopped)
+    finally:
+        try:
+            await asyncio.shield(device_stop)
+        finally:
+            end_stop()
     get_report = getattr(dm, "get_last_emergency_stop_report", None)
     return {
         "success": bool(result),

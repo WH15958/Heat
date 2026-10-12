@@ -134,6 +134,8 @@ async def create_characterization(campaign_id: str, body: CreateCharacterization
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Trial not found")
+    except OSError as exc:
+        raise HTTPException(503, "表征及 Trial 保存未完成，请检查存储后重试") from exc
 
 
 @router.get("/{campaign_id}/history")

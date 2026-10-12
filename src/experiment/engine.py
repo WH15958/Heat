@@ -30,6 +30,7 @@ class ExperimentProgress:
     elapsed: float = 0.0
     message: str = ""
     pause_pending: bool = False
+    cleanup_pending: bool = False
 
 
 class ExperimentEngine:
@@ -82,6 +83,7 @@ class ExperimentEngine:
             state=self._state,
             elapsed=elapsed,
             pause_pending=self.pause_pending,
+            cleanup_pending=self.cleanup_pending,
         )
 
     @property
@@ -304,6 +306,7 @@ class ExperimentEngine:
 
         self._stop_result = await self._cleanup_active_devices()
         if self._stop_result:
+            self._notify()
             self._notify_complete()
         return self._stop_result
 

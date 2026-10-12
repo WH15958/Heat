@@ -38,6 +38,8 @@ data/campaigns/characterizations.json
 
 这些文件会在首次访问 Campaign API 时自动创建。已有的 `data/datasets/samples.csv` 不迁移、不替代，仍用于现有实验样品记录链路。
 
+表征结果与 Trial 状态通过恢复日志共同提交；任一步文件写入失败时回滚，服务中断后在下次访问前恢复。存储失败时接口返回错误，不把部分保存当作成功；解除存储故障后可以重试。
+
 ---
 
 ## 3. 推荐使用流程

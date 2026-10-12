@@ -44,6 +44,7 @@ def _ensure_store() -> None:
         if not path.exists():
             path.write_text("[]\n", encoding="utf-8")
     _recover_recommendation()
+    _recover_characterization()
 
 
 @_synchronized
@@ -105,6 +106,18 @@ def _new_trials(campaign_id, recommendation_id, parameters_batch):
         parameters=parameters, status=TrialStatus.PLANNED.value,
         recommendation_id=recommendation_id, created_at=now, updated_at=now,
     ).to_dict() for parameters in parameters_batch]
+
+
+def _recover_characterization() -> None:
+    journal = CAMPAIGNS_DIR / "characterization.pending.json"
+    if not journal.exists():
+        return
+    previous = json.loads(journal.read_text(encoding="utf-8"))
+    if not isinstance(previous.get("trials"), list) or not isinstance(previous.get("characterizations"), list):
+        raise ValueError("Invalid characterization recovery journal")
+    _write_json(TRIALS_JSON, previous["trials"])
+    _write_json(CHARACTERIZATIONS_JSON, previous["characterizations"])
+    journal.unlink()
 
 
 def _make_id(prefix: str) -> str:
@@ -252,17 +265,23 @@ class CampaignStore:
             measured_at=measured_at,
         ).to_dict()
         rows = _read_list(CHARACTERIZATIONS_JSON)
-        rows.append(result)
-        _write_list(CHARACTERIZATIONS_JSON, rows)
-        if trial_id:
-            self.update_trial(
-                campaign_id,
-                trial_id,
-                {
-                    "status": TrialStatus.CHARACTERIZED.value,
-                    "sample_id": sample_id or None,
-                },
-            )
+        previous_trials = _read_list(TRIALS_JSON)
+        trials = [dict(trial) for trial in previous_trials]
+        trial = next((t for t in trials if t.get("campaign_id") == campaign_id and t.get("trial_id") == trial_id), None)
+        if trial is None:
+            raise KeyError(f"Trial not found: {trial_id}")
+        trial.update(status=TrialStatus.CHARACTERIZED.value, updated_at=utc_now_iso())
+        if sample_id:
+            trial["sample_id"] = sample_id
+        journal = CAMPAIGNS_DIR / "characterization.pending.json"
+        _write_json(journal, {"trials": previous_trials, "characterizations": rows})
+        try:
+            _write_json(CHARACTERIZATIONS_JSON, rows + [result])
+            _write_json(TRIALS_JSON, trials)
+            journal.unlink()
+        except Exception:
+            _recover_characterization()
+            raise
         return result
 
     def build_history(self, campaign_id: str) -> List[Dict[str, Any]]:

@@ -105,7 +105,7 @@ def _remove_sample_records_for_run_ids_unlocked(run_ids: Iterable[str]) -> int:
         return removed
     except Exception as e:
         logger.error(f"Failed to remove sample records from {SAMPLES_CSV}: {e}")
-        return 0
+        raise
     finally:
         try:
             temp_path.unlink(missing_ok=True)

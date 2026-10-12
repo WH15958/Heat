@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -414,18 +415,16 @@ def get_experiment_run(run_id: str) -> Optional[dict]:
 
 
 def delete_experiment_run(run_id: str) -> bool:
-    if not LOGS_DIR.exists():
-        return False
     for filepath in LOGS_DIR.glob("*.json"):
         if _run_id_from_log_path(filepath) == run_id:
-            try:
-                filepath.unlink(missing_ok=True)
-                logger.info(f"Experiment log deleted: {filepath}")
-                remove_sample_records_for_run_ids([run_id])
-                return True
-            except Exception as e:
-                logger.error(f"Failed to delete experiment log: {e}")
-                return False
+            # Keep the log as the retry anchor until linked sample removal succeeds.
+            remove_sample_records_for_run_ids([run_id])
+            filepath.unlink(missing_ok=True)
+            logger.info(f"Experiment log deleted: {filepath}")
+            return True
+    # Repair a prior partial deletion without matching a run-id prefix.
+    if re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6}", run_id):
+        return bool(remove_sample_records_for_run_ids([run_id]))
     return False
 
 
@@ -433,17 +432,9 @@ def delete_all_experiment_runs() -> int:
     if not LOGS_DIR.exists():
         return 0
     count = 0
-    deleted_run_ids = []
-    for filepath in LOGS_DIR.glob("*.json"):
-        try:
-            run_id = _run_id_from_log_path(filepath)
-            filepath.unlink(missing_ok=True)
+    for filepath in list(LOGS_DIR.glob("*.json")):
+        if delete_experiment_run(_run_id_from_log_path(filepath)):
             count += 1
-            if run_id:
-                deleted_run_ids.append(run_id)
-        except Exception as e:
-            logger.error(f"Failed to delete experiment log {filepath}: {e}")
-    remove_sample_records_for_run_ids(deleted_run_ids)
     logger.info(f"Deleted {count} experiment logs")
     return count
 
