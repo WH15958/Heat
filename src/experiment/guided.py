@@ -209,9 +209,12 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         feeds.append(feed)
     add("feed_both", "syringe_pair.dispense", dict(feeds=feeds))
     seconds = hold_seconds(row[5])
+    # Cover retained HMI slot selections; the host owns the actual hold and stop.
+    guard = math.ceil(spec.heating_timeout) + seconds + 60
     add("microwave_config", "microwave.configure_auto_power", dict(device_id="microwave1",
-        segments=[dict(segment=1, heating_temperature=row[4], holding_temperature=row[4],
-                       hours=seconds//3600, minutes=seconds%3600//60, seconds=seconds%60)]))
+        segments=[dict(segment=n, heating_temperature=row[4], holding_temperature=row[4],
+                       hours=guard//3600, minutes=guard%3600//60, seconds=guard%60)
+                  for n in range(1, 6)]))
     add("microwave_start", "microwave.start", dict(device_id="microwave1", mode="auto_power"),
         dict(type="microwave_temperature_reached", device_id="microwave1",
              target_temperature=row[4], tolerance=1, timeout=spec.heating_timeout))

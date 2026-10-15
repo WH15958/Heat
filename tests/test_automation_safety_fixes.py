@@ -333,20 +333,53 @@ def test_hold_zero_output_is_not_fault(monkeypatch):
     assert dm.read_microwave_data.call_count == 4
 
 
-@pytest.mark.parametrize('minutes,parts', [(10, (0, 10, 0)), (60.5, (1, 0, 30)),
-                                         (1/60, (0, 0, 1)), (1440, (24, 0, 0))])
-def test_hold_duration_written_through_existing_device_interface(minutes, parts):
-    request = spec(axes=[[30], [30], [.1], [.2], [30], [minutes]])
-    steps = parser.parse_experiment_data(guided.compile_plan(request)[0])['steps']
+@pytest.mark.parametrize('minutes,timeout,parts', [(10, 600, (0, 21, 0)),
+    (60.5, 600, (1, 11, 30)), (1/60, 600, (0, 11, 1)),
+    (1440, 7200, (26, 1, 0)), (0, 0.1, (0, 1, 1))])
+def test_guided_covers_all_hardware_slots_with_guard_time(minutes, timeout, parts):
+    request = spec(axes=[[30], [30], [.1], [.2], [30, 80], [minutes]], heating_timeout=timeout)
     dm = DeviceManager()
     device, protocol = make_device()
     dm._microwaves['microwave1'] = device
     executor = execution.StepExecutor(dm)
-    assert asyncio.run(executor.execute(next(s for s in steps if s.id == 'microwave_config')))
-    assert (1, auto_power_segment_start(1), [30, 30, *parts]) in protocol.multi_writes
-    hold = next(s for s in steps if s.id == 'hold')
-    assert hold.wait.type == WaitType.MICROWAVE_MONITORED_HOLD
-    assert hold.wait.seconds == parts[0]*3600 + parts[1]*60 + parts[2]
+    # The instrument may retain a different hardware slot, including slot 4.
+    for slot in range(1, 6):
+        for offset, value in enumerate([60, 60, 0, 2, 0]):
+            protocol.registers[auto_power_segment_start(slot) + offset] = value
+    for data, target in zip(guided.compile_plan(request), (30, 80)):
+        steps = parser.parse_experiment_data(data)['steps']
+        protocol.multi_writes.clear()
+        assert asyncio.run(executor.execute(next(s for s in steps if s.id == 'microwave_config')))
+        assert protocol.multi_writes == [
+            (1, auto_power_segment_start(n), [target, target, *parts]) for n in range(1, 6)]
+        for slot in range(1, 6):
+            assert protocol.read_holding_registers(1, auto_power_segment_start(slot), 5) == [target, target, *parts]
+        assert protocol.single_writes == []  # Configuration never starts hardware.
+        hold = next(s for s in steps if s.id == 'hold')
+        assert hold.wait.type == WaitType.MICROWAVE_MONITORED_HOLD
+        assert hold.wait.seconds == round(minutes * 60)
+        assert next(s for s in steps if s.id == 'microwave_start').wait.timeout == timeout
+
+
+def test_guided_failed_fourth_slot_configuration_prevents_start(monkeypatch):
+    dm = DeviceManager()
+    device, protocol = make_device()
+    dm._microwaves['microwave1'] = device
+    write = protocol.write_multiple_registers
+    monkeypatch.setattr(protocol, 'write_multiple_registers',
+        lambda slave, address, values: False if address == auto_power_segment_start(4)
+        else write(slave, address, values))
+    dm.start_microwave = Mock(return_value=True)
+    steps = parser.parse_experiment_data(guided.compile_plan(spec())[0])['steps']
+    engine = ExperimentEngine(execution.StepExecutor(dm), ExperimentLogger(save_log=False))
+    engine.load_steps([s for s in steps if s.id in ('microwave_config', 'microwave_start')])
+    async def run():
+        await engine.start()
+        await engine.wait_finished()
+    asyncio.run(run())
+    assert engine.state.value == 'failed'
+    dm.start_microwave.assert_not_called()
+    assert protocol.single_writes == []
 
 
 @pytest.mark.parametrize('changes', [dict(clean_volume=21), dict(reactor_available_ml=7),
