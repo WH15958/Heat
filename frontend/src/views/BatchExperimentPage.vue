@@ -37,14 +37,20 @@
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
         <p v-if="batch.request?.product_port==='NC'" class="notice compact-notice">历史批次仅供查阅；新批次须按 NO 收产物、NC 排废液重新确认并预充。</p>
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span></label></div>
-        <p><small>通道四排液建议：流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+        <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
         <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
       </section>
       <section v-if="stage===4"><h3>清洗与排液</h3><p>通道三进液，通道四排液。</p>
-        <div class="grid compact-fields"><label v-for="item in fixed.slice(2)" :key="item.key">{{ item.label }}<span class="number-unit"><input v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span></label><label>排液流量<span class="readonly-value">{{ Number.isFinite(setting('drainFlow')) ? setting('drainFlow') : '待填写' }} mL/min</span><small>沿用产物收集设置</small></label></div>
-        <label class="direction-field settings">清洗进液方向<select v-model="cleanDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
-        <div class="notice compact-notice">切 NC → 进液 → 停留 → 排液，按次数重复。排液时间需覆盖管路排空余量。</div>
+        <div class="form-group"><h4>清洗进液 · 通道三</h4>
+          <div class="grid compact-fields"><label v-for="item in fixed.slice(2,6)" :key="item.key">{{ item.label }}<span class="number-unit"><input v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span></label></div>
+          <label class="direction-field settings">清洗进液方向<select v-model="cleanDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
+        </div>
+        <div class="form-group"><h4>清洗排液 · 通道四</h4>
+          <div class="grid compact-fields"><label v-for="item in fixed.slice(6)" :key="item.key">{{ item.label }}<span class="number-unit"><input v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span></label><label>排液流量<span class="readonly-value">{{ Number.isFinite(setting('drainFlow')) ? setting('drainFlow') : '待填写' }} mL/min</span><small>沿用产物收集设置</small></label></div>
+          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+        </div>
+        <div class="notice compact-notice">切 NC → 进液 → 停留 → 排液，按次数重复。</div>
       </section>
       <section v-if="stage===5">
         <h3>批次准备</h3>
@@ -54,7 +60,7 @@
           <label class="preheat-field">预充前加热时间<span class="number-unit"><input v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span></label>
           <p><small>从两路加热启动后计时，暂停不计时。时间到后检查目标 ±3℃、稳定30秒；未达标继续等待，最多60分钟。填0表示不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span></label></div>
-          <div class="estimate-actions"><el-button @click="estimatePrimingTime">估算预充排液时间</el-button><small>理论值，需现场确认排空余量。</small></div>
+          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
         </div>
         <details class="form-group" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open">
@@ -235,7 +241,6 @@ const primeValue=(key:string)=>numeric(priming.value.find(p=>p.key===key)!.value
 const primeTotal=computed(()=>(primeValue('prime_volume_a')+primeValue('prime_volume_b'))*primeValue('prime_cycles'))
 const advancedOpen=ref(false)
 const advancedMissing=computed(()=>priming.value.slice(5).some(p=>!Number.isFinite(p.value)||numeric(p.value)<=0))
-function estimatePrimingTime(){try{const cycles=primeValue('prime_cycles');if(!Number.isInteger(cycles)||cycles<1||cycles>10||primeValue('prime_volume_a')<=0||primeValue('prime_volume_b')<=0)throw new Error('请填写有效的预充体积及循环次数');const seconds=estimateDrainSeconds(primeTotal.value,primeValue('prime_drain_flow'));if(seconds<0.1||seconds>9999)throw new Error('排液时间须为 0.1–9999 秒');priming.value.find(p=>p.key==='prime_drain_seconds')!.value=seconds;error.value=''}catch(e){showError(e)}}
 const primeReady=computed(()=>!newDraft.value&&batch.value.request?.experiment_name!=null&&batch.value.request?.prime_heat_minutes!=null&&batch.value.request?.initialization_a!=null&&batch.value.request?.initialization_b!=null&&batch.value.request?.product_port==='NO'&&batch.value.request?.product_drain_seconds!=null&&batch.value.request?.clean_drain_seconds!=null&&batch.value.request?.prime_drain_seconds!=null&&batch.value.request?.prime_drain_flow!=null&&batch.value.phase==='ready'&&batch.value.state==='paused'&&!batch.value.recovery_required&&batch.value.priming?.status==='completed'&&JSON.stringify(batch.value.request&&requestWithoutFlags(batch.value.request))===JSON.stringify(requestWithoutFlags(requestBody.value)))
 function requestWithoutFlags(r:any){const keys=Object.keys(requestBody.value).filter(k=>!['plumbing_confirmed','priming_confirmed','initialization_confirmed','priming_batch_id'].includes(k));return Object.fromEntries(keys.map(k=>[k,r[k]]))}
 const labels:Record<string,string>={idle:'未运行',pending:'待执行',running:'执行中',paused:'已暂停',completed:'已完成',failed:'失败',stopped:'已停止',interrupted:'服务中断'}
@@ -341,7 +346,7 @@ onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if
 
 .batch-sidebar .batch-count{display:flex;align-items:baseline;gap:8px;margin:20px 0}.batch-count strong{font-size:36px;color:#1688e8;line-height:1}.batch-count span{font-size:14px}.batch-count small{margin-left:auto;font-size:12px;color:#48786b}.batch-placeholder{padding:18px 16px;margin:18px 0;background:#f3f7fb;border-radius:10px}.batch-placeholder strong{font-size:14px;font-weight:500;color:#526b83}.batch-placeholder p{margin:6px 0 0;font-size:12px}.batch-details{margin:14px 0;font-size:12px}.batch-details summary{cursor:pointer;color:#526b83}.batch-details dl{margin:14px 0}.batch-details dl>div{display:flex;justify-content:space-between;gap:10px;margin:10px 0}.batch-details dt{color:#667e94}.batch-details dd{margin:0;white-space:nowrap}.batch-details small{font-size:11px;line-height:1.6}.preflight-summary{border-top:1px solid #e3ebf3;margin:20px 0;padding-top:18px}.preflight-summary h4{margin:0;font-size:15px}.plumbing-summary{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.plumbing-summary span{padding:5px 8px;border-radius:6px;background:#eef5fb;color:#526b83;font-size:12px}.batch-sidebar .start-caption{text-align:center;font-size:12px;margin:10px 0 0;color:#73899d}
 
-.number-unit{display:flex;align-items:center;gap:8px;min-width:0}.number-unit input{width:140px;min-width:0;box-sizing:border-box}.number-unit>span{flex-shrink:0;color:#667e94;font-size:12px}.axis-controls .number-unit input{width:100%}.compact-fields{max-width:620px;gap:18px 28px}.direction-field{max-width:180px}.compact-notice{padding:10px 14px;font-size:13px;line-height:1.6}.compact-notice p{margin:4px 0}.readonly-value{padding:10px 0;font-size:14px}.form-group{border:1px solid #dce7f1;border-radius:10px;padding:18px;margin:18px 0}.form-group h4{margin:0 0 16px;font-size:14px}.pump-initialization{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.pump-initialization strong{font-size:13px;align-self:center}.pump-initialization label{font-size:12px;gap:5px}.pump-initialization select{padding:7px;font-size:12px}.estimate-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+.number-unit{display:flex;align-items:center;gap:8px;min-width:0}.number-unit input{width:140px;min-width:0;box-sizing:border-box}.number-unit>span{flex-shrink:0;color:#667e94;font-size:12px}.axis-controls .number-unit input{width:100%}.compact-fields{max-width:620px;gap:18px 28px}.direction-field{max-width:180px}.compact-notice{padding:10px 14px;font-size:13px;line-height:1.6}.compact-notice p{margin:4px 0}.readonly-value{padding:10px 0;font-size:14px}.form-group{border:1px solid #dce7f1;border-radius:10px;padding:18px;margin:18px 0}.form-group h4{margin:0 0 16px;font-size:14px}.pump-initialization{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.pump-initialization strong{font-size:13px;align-self:center}.pump-initialization label{font-size:12px;gap:5px}.pump-initialization select{padding:7px;font-size:12px}
 .guided footer .el-button:not(.is-disabled):not(.is-loading){filter:none;transform:none;transition:background-color .15s,color .15s,border-color .15s;box-shadow:none}.guided footer .el-button:focus-visible{outline:2px solid #1688e8;outline-offset:3px}
 @media(max-width:600px){.guided{padding-bottom:148px}.axis-controls{grid-template-columns:1fr}.compact-fields{grid-template-columns:1fr}footer .el-button:last-child{flex-basis:100%}.form-group{padding:14px}.number-unit input{max-width:100%}}
 </style>

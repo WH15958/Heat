@@ -11,6 +11,7 @@
             {{ heater.disconnectFailed ? '连接异常' : heater.connected ? '已连接' : '未连接' }}
           </el-tag>
         </div>
+        <DeviceConnectionControls :device-key="'heater:'+heaterId" :connected="heater.connected" :loading="heater.loading" :connect-disabled="heater.bindingResolved === false" hint="安全停止后断开；失败时可重试" @connect="$emit('connect', heaterId)" @disconnect="$emit('disconnect', heaterId)" />
       </div>
     </template>
     <el-alert v-if="heater.connectionError" :title="heater.connectionError" type="error" :closable="false" show-icon class="connection-feedback" />
@@ -23,14 +24,6 @@
         show-icon
         class="disconnect-alert"
       />
-      <el-form-item label="连接控制">
-        <el-button v-if="!heater.connected" type="primary" @click="$emit('connect', heaterId)" :loading="heater.loading">
-          {{ heater.loading ? '连接中…' : '连接设备' }}
-        </el-button>
-        <el-button v-else :type="heater.disconnectFailed ? 'warning' : 'danger'" @click="$emit('disconnect', heaterId)" :loading="heater.loading">
-          {{ heater.loading ? '正在安全断开…' : heater.disconnectFailed ? '重试安全断开' : '断开连接' }}
-        </el-button>
-      </el-form-item>
       <el-form-item label="目标温度">
         <el-input-number v-model="heater.targetTemp" :min="0" :max="450" :step="1" :precision="1" />
         <el-button type="primary" @click="$emit('setTemp', heaterId, heater.targetTemp)" style="margin-left: 10px">
@@ -46,6 +39,7 @@
 </template>
 
 <script setup lang="ts">
+import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import deviceArtwork from '../assets/theme/heater.webp'
 import { computed } from 'vue'
 

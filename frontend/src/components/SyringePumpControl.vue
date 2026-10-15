@@ -7,12 +7,11 @@
         <span>MSP1-CX · {{ state.capacity_ml }} mL · {{ state.connection_port || '串口待配置' }}</span>
         <el-tag size="small" :type="state.connected ? 'success' : 'info'">{{ state.connected ? '已连接' : state.configured ? '未连接' : '待配置' }}</el-tag>
       </div>
-      <div class="toolbar">
-        <el-button :disabled="state.connected || !state.configured || pending" @click="connect">连接</el-button>
-        <el-button :disabled="!state.connected || !!state.owner || pending" @click="disconnect">断开</el-button>
-        <el-button :disabled="!state.connected || pending" @click="refresh">刷新</el-button>
-        <el-button type="danger" :disabled="!state.connected" @click="send({ action: 'stop' }, true)">停止</el-button>
-      </div>
+      <DeviceConnectionControls :device-key="'syringe:'+state.device_id" :connected="state.connected" :loading="pending" :connect-disabled="!state.configured || state.binding_resolved === false" :disconnect-disabled="!!state.owner" @connect="connect" @disconnect="disconnect" />
+    </div>
+    <div class="toolbar operation-toolbar">
+      <el-button :disabled="!state.connected || pending" @click="refresh">刷新</el-button>
+      <el-button type="danger" :disabled="!state.connected" @click="send({ action: 'stop' }, true)">停止</el-button>
     </div>
 
     <el-alert v-if="state.connected && !state.read_ok" :title="state.read_error || '状态未知，控制已禁用'" type="warning" :closable="false" />
@@ -133,6 +132,7 @@
 </template>
 
 <script setup lang="ts">
+import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { syringeApi, syringeResult, type SyringeState } from '../api/syringePumps'
@@ -177,7 +177,7 @@ async function send(body: Record<string, unknown>, stop = false) {
     await refresh()
   } catch (e) { error(e) } finally { pending.value = false }
 }
-async function connect() { pending.value = true; try { await syringeApi.connect(props.state.device_id); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
+async function connect() { pending.value = true; try { const res = await syringeApi.connect(props.state.device_id); if (!res.data.success) throw new Error('设备返回连接失败'); emit('update', { ...props.state, connected: true, read_ok: false }); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
 async function disconnect() { pending.value = true; try { await syringeApi.disconnect(props.state.device_id); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
 async function initialize() {
   try { await ElMessageBox.confirm('初始化会将活塞移向上端并切阀。请确认安装、液路和现场看护，过载原因已排除。', '初始化确认', { type: 'warning' }) }
@@ -201,6 +201,7 @@ async function loadPrograms() { try { details.value = JSON.stringify((await syri
 .identity strong { font-size: 16px; }
 .identity span { color: var(--el-text-color-secondary); font-size: 13px; }
 .toolbar { gap: 6px; }
+.operation-toolbar { margin: 0 0 12px; }
 .toolbar :deep(.el-button + .el-button), .advanced-row :deep(.el-button + .el-button) { margin-left: 0; }
 .status-line { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 11px 0; border-block: 1px solid var(--el-border-color-lighter); }
 .status-line > div { min-width: 0; }

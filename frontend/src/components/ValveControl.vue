@@ -9,12 +9,11 @@
           <el-tag :type="state.binding_resolved ? 'success' : 'warning'">{{ state.binding_resolved ? '已匹配' : '待匹配' }}</el-tag>
           <el-tag :type="state.connected ? 'success' : 'info'">{{ state.connected ? '已连接' : '未连接' }}</el-tag>
         </div>
+        <DeviceConnectionControls :device-key="'valve:'+valveId" :connected="state.connected" :loading="busy" :connect-disabled="!state.binding_resolved" :disconnect-disabled="state.experiment_owned" hint="断开通信保持阀位" @connect="operate('connect')" @disconnect="operate('disconnect')" />
       </div>
     </template>
     <div class="controls">
-      <div class="row"><span>连接控制</span>
-        <el-button v-if="!state.connected" type="primary" :disabled="!state.binding_resolved || busy" @click="operate('connect')">连接设备</el-button>
-        <el-button v-else :disabled="busy || state.experiment_owned" @click="operate('disconnect')">断开通讯（保持阀位）</el-button>
+      <div class="row"><span>设备状态</span>
         <el-button :disabled="!state.connected || busy" @click="operate('status')">刷新状态</el-button>
       </div>
       <div class="row"><span>继电器状态</span><el-tag :type="state.read_ok ? 'success' : 'warning'">{{ position }}</el-tag></div>
@@ -31,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import { computed, ref } from 'vue'
 import valveArtwork from '../assets/theme/valve.webp'
 import { ElMessage, ElMessageBox } from 'element-plus'
