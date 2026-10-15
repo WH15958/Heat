@@ -864,7 +864,7 @@ async function startPumpChannel(pumpId: string, channel: number) {
       ch.mode !== 'FLOW_MODE' && ch.intervalTime > 0 ? ch.intervalTimeUnit : undefined,
     )
     if (!res.data.success) {
-      ElMessage.error(`通道 ${channel} 启动失败: 泵设备返回失败`)
+      ElMessage.error(res.data.error || `通道 ${channel} 启动失败: 泵设备返回失败`)
       return
     }
     const modeLabel = PUMP_MODES.find(m => m.value === ch.mode)?.label || ch.mode

@@ -1322,6 +1322,13 @@ class DeviceManager:
         effective_volume_unit = VolumeUnit(volume_unit) if volume_unit is not None else VolumeUnit.ML
         effective_interval_time_unit = TimeUnit(interval_time_unit) if interval_time_unit is not None else TimeUnit.SECOND
 
+        if mode == PumpRunMode.TIME_SPEED:
+            return self._start_pump_time_speed(
+                pump, device_id, channel, flow_rate, effective_flow_unit,
+                run_time, effective_time_unit, repeat_count, interval_time,
+                effective_interval_time_unit, abort_event,
+            )
+
         if not self._set_pump_flow_and_mode(pump, device_id, channel, flow_rate, effective_flow_unit, mode):
             return False
 
@@ -1360,6 +1367,102 @@ class DeviceManager:
         result = pump.start_channel(channel)
         logger.info(f"Pump {device_id} CH{channel}: start result={result}")
         return result
+
+    def _start_pump_time_speed(self, pump, device_id, channel, flow_rate, flow_unit,
+                               run_time, time_unit, repeat_count, interval_time,
+                               interval_time_unit, abort_event) -> bool:
+        """Configure in mode 2, then verify the final configuration before/after START."""
+        from src.protocols.pump_params import PumpRunMode
+
+        stage = "配置"
+        start_attempted = False
+        flow_label = ("uL/min", "mL/min", "L/min", "RPM")[int(flow_unit)]
+        time_labels = ("秒", "分钟", "小时")
+        mode_check = (6, 2, False, "模式（定时定速=2）")
+        flow_checks = [(110, flow_rate, True, f"流量（{flow_label}）"),
+                       (112, int(flow_unit), False, "流量单位（0=uL/min,1=mL/min,2=L/min,3=RPM）")]
+        checks = [mode_check,
+                  (107, run_time, True, f"运行时间（{time_labels[int(time_unit)]}）"),
+                  (109, int(time_unit), False, "时间单位（0=秒,1=分钟,2=小时）"),
+                  (100, repeat_count, False, "重复次数")]
+        operations = [
+            ("模式", pump.set_run_mode, (channel, PumpRunMode.TIME_SPEED)),
+            ("运行时间及单位", pump.set_run_time, (channel, run_time, time_unit)),
+            ("重复次数", pump.set_repeat_count, (channel, repeat_count)),
+        ]
+        if interval_time is not None:
+            operations.append(("间隔及单位", pump.set_interval_time,
+                               (channel, interval_time, interval_time_unit)))
+            checks.extend([(101, interval_time, True, f"间隔（{time_labels[int(interval_time_unit)]}）"),
+                           (103, int(interval_time_unit), False, "间隔单位（0=秒,1=分钟,2=小时）")])
+        operations.append(("流量及单位", pump.set_flow_rate, (channel, flow_rate, flow_unit)))
+        checks.extend(flow_checks)
+
+        def cancelled():
+            return abort_event is not None and abort_event.is_set()
+
+        def fail(reason):
+            error = f"通道 {channel}：{stage}失败：{reason}"
+            if start_attempted:
+                # Already under the manager's pump lock; do not recursively call manager.stop.
+                try:
+                    stopped = pump.stop_channel(channel)
+                    stop_error = pump.last_command_error
+                    error += "；停止已确认" if stopped else f"；停止未确认：{stop_error or '停止命令返回失败'}"
+                except Exception as exc:
+                    error += f"；停止未确认：{exc}"
+            else:
+                error += "；未启动"
+            pump.last_command_error = error
+            logger.error("Pump %s: %s", device_id, error)
+            return False
+
+        def verify(items):
+            for offset, expected, is_float, label in items:
+                if cancelled():
+                    return fail("收到停止请求，启动已取消")
+                verify_value = pump.wait_for_float_value if is_float else pump.wait_for_register_value
+                try:
+                    matched = verify_value(get_channel_address(offset, channel), expected,
+                                           label=label)
+                except Exception as exc:
+                    return fail(f"{label} expected={expected} readback=读取异常（{exc}）")
+                if not matched:
+                    return fail(pump.last_command_error)
+            return True
+
+        try:
+            for label, setter, args in operations:
+                stage = f"配置{label}"
+                if cancelled():
+                    return fail("收到停止请求，启动已取消")
+                pump.last_command_error = None
+                logger.info("Pump %s CH%s: %s expected=%s", device_id, channel, stage, args[1:])
+                if not setter(*args):
+                    return fail(f"{label} expected={args[1:]} readback=未核验；"
+                                f"{pump.last_command_error or '写入返回失败'}")
+                if label == "模式" and not verify([mode_check]):
+                    return False
+
+            stage = "启动前最终核验"
+            if not verify(checks):
+                return False
+            if cancelled():
+                return fail("收到停止请求，启动已取消")
+            stage = "启动确认"
+            start_attempted = True
+            if not pump.start_channel(channel):
+                return fail(pump.last_command_error or "启动命令返回失败")
+            stage = "启动后核验"
+            # Time may already be counting down; verify only stable mode/flow parameters.
+            if not verify([mode_check, *flow_checks]):
+                return False
+            if cancelled():
+                return fail("收到停止请求，启动已取消")
+            logger.info("Pump %s CH%s: TIME_SPEED final verification passed", device_id, channel)
+            return True
+        except Exception as exc:
+            return fail(str(exc))
 
     def _validate_pump_start_params(
         self,
