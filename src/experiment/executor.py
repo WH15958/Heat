@@ -7,6 +7,7 @@ from src.experiment.actions import (
     ActionType,
     WaitType,
 )
+from src.experiment.progress import ActivityProgress
 from src.devices.microwave import MicrowaveSegment
 from src.devices.syringe_pump import is_initialization_pending
 from src.utils.logger import get_logger
@@ -47,6 +48,10 @@ class StepExecutor:
         self._current_step = None
         self.last_device_result = None
         self.release_resources_on_cleanup = True
+        self.activity = ActivityProgress(self._wait_clock)
+        self._activity_step = None
+        self._activity_children = []
+        self._cleanup_count = 0
 
     async def reserve_valves(self, steps):
         ids = {s.params["device_id"] for s in steps if s.enabled and s.type == ActionType.VALVE_SWITCH}
@@ -115,6 +120,7 @@ class StepExecutor:
         """Timestamp actual orchestration pause transitions, never pending requests."""
         if paused and self._paused_at is None:
             self._pause_generation += 1
+            self.activity.stable_seconds = 0.0
             self._paused_at = time.monotonic()
         elif not paused and self._paused_at is not None:
             self._paused_total += time.monotonic() - self._paused_at
@@ -153,7 +159,31 @@ class StepExecutor:
             sleep_time = min(remaining, 0.05)
             await asyncio.sleep(sleep_time)
 
+    @property
+    def activity_snapshot(self):
+        if self._activity_step is None or self.activity.step_id != self._activity_step.id:
+            return None
+        observation = self.activity.snapshot()
+        for child in self._activity_children:
+            observation["devices"].update(child.activity.snapshot()["devices"])
+        return observation
+
+    @property
+    def cleanup_in_progress(self):
+        return self._cleanup_count > 0
+
     async def execute(self, step: ExperimentStep) -> bool:
+        self._activity_step = step
+        self.activity.reset(step)
+        self._activity_children = []
+        success = False
+        try:
+            success = await self._execute(step)
+            return success
+        finally:
+            self.activity.finish(success)
+
+    async def _execute(self, step: ExperimentStep) -> bool:
         """执行一个步骤
 
         Args:
@@ -225,11 +255,13 @@ class StepExecutor:
                     result = await asyncio.to_thread(self._dm.valve_operation, device_id, "switch",
                                                      position == "NC", self._valve_owner, self._should_stop)
                     self.last_device_result = {"device_type": "valve", "target_position": position, **result}
+                    self.activity.device(device_id, result)
                     if not result.get("read_ok") or result.get("relay_energized") is not (position == "NC"):
                         return False
                 except Exception:
                     state = await asyncio.to_thread(self._dm.valve_status, device_id)
                     self.last_device_result = {"device_type": "valve", "target_position": position, **state}
+                    self.activity.device(device_id, state)
                     raise
 
             elif step.type == ActionType.HEATER_SET_TEMP:
@@ -384,6 +416,8 @@ class StepExecutor:
                     return False
                 # The synchronous driver returned success only after START readback.
                 self._pump_start_confirmed.add(pump_key)
+                if run_time is not None and time_unit in (0, 1, 2):
+                    self.activity.pump_started(run_time * (1, 60, 3600)[time_unit])
 
             elif step.type == ActionType.PUMP_STOP:
                 device_id = step.params["device_id"]
@@ -452,6 +486,13 @@ class StepExecutor:
             return False
 
     async def stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
+        self._cleanup_count += 1
+        try:
+            return await self._stop_active_devices(preserve_heaters=preserve_heaters)
+        finally:
+            self._cleanup_count -= 1
+
+    async def _stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
         """Stop attempted devices; successful guided groups may retain batch heaters."""
         self._pump_start_confirmed.clear()
         loop = asyncio.get_running_loop()
@@ -529,6 +570,7 @@ class StepExecutor:
         """Upper-layer coordination; each synchronous controller retains its own lock."""
         abort = False
         children = []
+        self._activity_children = children
         tasks = []
         feeds = step.params["feeds"]
         if self._should_stop() or await self._wait_for_resume() is None:
@@ -571,13 +613,19 @@ class StepExecutor:
         return success and not self._should_stop()
 
     async def _wait_syringe(self, device_id, timeout):
+        self.activity.state = "waiting"
         deadline = time.monotonic() + timeout
         control = self._dm.syringe(device_id)
         while time.monotonic() < deadline:
             if self._should_stop():
                 return False
-            state = await asyncio.to_thread(control.read)
+            try:
+                state = await asyncio.to_thread(control.read)
+            except Exception:
+                self.activity.device(device_id, {"read_ok": False})
+                raise
             self.last_device_result = state
+            self.activity.device(device_id, state)
             pending = is_initialization_pending(state.get("action"), state.get("busy"), state.get("fault_code"))
             if not state.get("read_ok") or (state.get("fault_code") and not pending):
                 self._last_error = state.get("fault_description") or state.get("read_error")
@@ -695,6 +743,7 @@ class StepExecutor:
             self._last_error = "微波保护保温必须指定设备并使用非负整秒"
             return False
         started = self._wait_clock()
+        self.activity.started = started
         while True:
             if self._should_stop():
                 return False
@@ -705,6 +754,9 @@ class StepExecutor:
             try:
                 data = await asyncio.to_thread(self._dm.read_microwave_data, condition.device_id)
                 self.last_device_result = data
+                self.activity.device(condition.device_id, data)
+                self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": None}],
+                    {condition.device_id: data.get("material_temperature") if data.get("read_ok") is not False else None})
                 if not self._valid_microwave_state(data, require_control=False):
                     return False
                 remaining = condition.seconds - (self._wait_clock() - started)
@@ -716,6 +768,8 @@ class StepExecutor:
                 if remaining <= 0:
                     return True
             except Exception as exc:
+                self.activity.device(condition.device_id, {"read_ok": False})
+                self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": None}], {})
                 self._last_error = "微波保温状态读取失败：" + str(exc)
                 return False
             paused = await self._pause_aware_sleep(min(max(0, next_poll - self._wait_clock()), remaining))
@@ -749,8 +803,11 @@ class StepExecutor:
                         raise ValueError(f'{target["device_id"]} 温度无效或读取失败')
                     readings[target["device_id"]] = data
             except Exception as exc:
+                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, condition.tolerance)
                 self._last_error = "前驱体温度读取失败：" + str(exc)
                 return False
+            if len(readings) == len(condition.targets):
+                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, condition.tolerance)
             self.last_device_result = {"device_type": "heater_pair", "heaters": readings}
             if self._should_stop():
                 return False
@@ -765,10 +822,12 @@ class StepExecutor:
                    for t in condition.targets):
                 if stable_since is None:
                     stable_since = now
+                self.activity.stable_seconds = now - stable_since
                 if now - stable_since >= condition.seconds:
                     return True
             else:
                 stable_since = None
+                self.activity.stable_seconds = 0.0
             if await self._pause_aware_sleep(1.0) is None:
                 return False
 
@@ -778,6 +837,7 @@ class StepExecutor:
         Args:
             condition: 等待条件
         """
+        self.activity.wait(condition)
         if condition.type == WaitType.SYRINGE_PUMP_COMPLETE:
             return await self._wait_syringe(condition.device_id, condition.timeout)
         if condition.type == WaitType.MICROWAVE_MONITORED_HOLD:
@@ -876,6 +936,8 @@ class StepExecutor:
                         None, self._dm.read_microwave_data, condition.device_id
                     )
                     material_temperature = data.get("material_temperature")
+                    self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": target_temperature}],
+                        {condition.device_id: material_temperature if data.get("read_ok") is not False else None}, None if cooling else condition.tolerance)
                     self.last_device_result = data
                     if not cooling and not self._valid_microwave_state(data):
                         return False
@@ -911,6 +973,7 @@ class StepExecutor:
                         )
                         return True
                 except Exception as e:
+                    self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": target_temperature}], {})
                     logger.warning(
                         f"Microwave temperature wait read failed for "
                         f"{condition.device_id}: {e}"
@@ -996,6 +1059,7 @@ class StepExecutor:
                         None, self._dm.read_pump_status, condition.device_id
                     )
                     ch_data = status["channels"].get(str(condition.channel))
+                    self.activity.device(condition.device_id, ch_data or {"read_ok": False})
                     if not ch_data or ch_data.get("read_ok") is not True:
                         paused_duration = await self._pause_aware_sleep(1.0)
                         if paused_duration is None:
@@ -1009,6 +1073,7 @@ class StepExecutor:
                         )
                         return True
                 except Exception as e:
+                    self.activity.device(condition.device_id, {"read_ok": False})
                     logger.warning(f"Pump wait read failed for {condition.device_id} CH{condition.channel}: {e}")
                 paused_duration = await self._pause_aware_sleep(1.0)
                 if paused_duration is None:

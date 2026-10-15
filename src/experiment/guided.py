@@ -15,6 +15,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.experiment.progress import guided_activity
 from src.experiment.editor import validate_source
 from src.experiment.engine import ExperimentEngine, ExperimentState
 from src.experiment.executor import StepExecutor
@@ -341,6 +342,7 @@ class GuidedBatch:
         self.task = None
         self.persistence_failure = None
         self.priming_stop_pending = False
+        self._priming_cleanup_count = 0
         self.record = dict(batch_id=self.batch_id, experiment_name=spec.experiment_name, state="idle", request=spec.model_dump(),
             created_at=datetime.now(timezone.utc).isoformat(), current_group=0,
             total_groups=len(self.recipes), groups=[],
@@ -386,9 +388,13 @@ class GuidedBatch:
         result["state"] = self.state.value
         result["pause_pending"] = bool(self.engine and self.engine.pause_pending)
         result["cleanup_pending"] = self.cleanup_pending
+        result["stop_requested"] = self.stopping
+        result["cleanup_in_progress"] = bool(getattr(self.executor, "cleanup_in_progress", False) or self._priming_cleanup_count)
         p = self.progress
         result["progress"] = dict(current_step=p.current_step, total_steps=p.total_steps,
                                   step_id=p.step_id, elapsed=p.elapsed) if p else None
+        if p and getattr(p, "activity", None):
+            result["progress"]["activity"] = guided_activity(self.executor._activity_step, p.activity)
         if p:
             labels = {"feed_both": "两路前驱体进料", "microwave_config": "设置微波反应温度",
                 "heat_both_stable": "两路温度同时在目标 ±3℃ 内持续 30 秒",
@@ -631,6 +637,13 @@ class GuidedBatch:
         return success
 
     async def stop_priming_devices(self):
+        self._priming_cleanup_count += 1
+        try:
+            return await self._stop_priming_devices()
+        finally:
+            self._priming_cleanup_count -= 1
+
+    async def _stop_priming_devices(self):
         """Failure stops both syringe pumps, including the not-yet-started one."""
         success = True
         for did in ("syringe_pump1", "syringe_pump2"):

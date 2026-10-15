@@ -31,6 +31,7 @@ class ExperimentProgress:
     message: str = ""
     pause_pending: bool = False
     cleanup_pending: bool = False
+    activity: Optional[dict] = None
 
 
 class ExperimentEngine:
@@ -78,6 +79,9 @@ class ExperimentEngine:
         )
         end_time = self._end_time if self._end_time is not None else time.monotonic()
         elapsed = end_time - self._start_time if self._start_time is not None else 0
+        activity = getattr(self._executor, "activity_snapshot", None)
+        if activity and self._state in (ExperimentState.RUNNING, ExperimentState.PAUSED) and (not step or activity["step_id"] != step.id):
+            activity = None
         return ExperimentProgress(
             current_step=self._current_step,
             total_steps=len(self._steps),
@@ -86,6 +90,7 @@ class ExperimentEngine:
             elapsed=elapsed,
             pause_pending=self.pause_pending,
             cleanup_pending=self.cleanup_pending,
+            activity=activity,
         )
 
     @property
@@ -107,6 +112,9 @@ class ExperimentEngine:
         if any(s.wait.type == WaitType.MICROWAVE_MONITORED_HOLD and
                (not s.enabled or s.on_error != "stop") for s in steps):
             raise ValueError("微波保护保温必须启用且失败停止")
+        if isinstance(self._executor, StepExecutor):
+            self._executor.activity.reset()
+            self._executor._activity_children = []
         self._steps = [s for s in steps if s.enabled]
         self._current_step = 0
         self._experiment_name = name

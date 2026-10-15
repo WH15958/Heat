@@ -8,6 +8,7 @@ import * as vue from 'vue'
 import * as batch from '../src/experiment/batch'
 import * as drain from '../src/experiment/drainEstimate'
 import * as priming from '../src/experiment/priming'
+import * as progress from '../src/experiment/guidedProgress'
 
 // Exercise the real page handlers and reactivity without hardware or a server.
 const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', import.meta.url), 'utf8')
@@ -19,6 +20,7 @@ function page(fill = true, fresh = false) {
   let getOverride: (() => Promise<any>) | undefined
   const calls: any[][] = [], dialogs: string[] = []
   let confirm = async () => {}
+  let postOverride:((url:string)=>Promise<any>)|undefined
   let snapshot: any = { state: 'idle' }, readFailure = false
   let postResponse: any = { batch_id: 'new', state: 'running', phase: 'priming' }
   const imports: Record<string, any> = {
@@ -26,15 +28,16 @@ function page(fill = true, fresh = false) {
     'vue-router': { useRoute: () => route, useRouter: () => ({ push: () => {}, replace: async (value:any) => { route.query=value.query } }) },
     'element-plus': { ElMessageBox: { confirm: async (text: string) => { dialogs.push(text); await confirm() } } },
     axios: {
-      post: async (url: string, body: any) => { calls.push([url, body]); return { data: postResponse } },
+      post: async (url: string, body: any) => { calls.push([url, body]); if(postOverride)return postOverride(url); return { data: postResponse } },
       get: async (url: string) => { calls.push([url]); if(readFailure)throw new Error('offline'); if(getOverride)return getOverride(); return { data: snapshot } },
     },
     '../experiment/batch': batch,
     '../experiment/drainEstimate': drain,
     '../experiment/priming': priming,
+    '../experiment/guidedProgress': progress,
   }
   const exports = {} as any
-  runInNewContext(compiled, { exports, require: (name: string) => {
+  runInNewContext(compiled, { exports, document:{querySelector:()=>null}, require: (name: string) => {
     assert.ok(name in imports, name)
     return imports[name]
   } })
@@ -55,7 +58,7 @@ function page(fill = true, fresh = false) {
     state.validatedKey.value = state.requestKey.value
     state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = true
   }
-  return { state, calls, dialogs, ready, route, readWith: (fn:()=>Promise<any>)=>{getOverride=fn}, confirmation: (fn: () => Promise<void>) => { confirm = fn },
+  return { state, calls, dialogs, ready, route, postWith:(fn:(url:string)=>Promise<any>)=>{postOverride=fn}, readWith: (fn:()=>Promise<any>)=>{getOverride=fn}, confirmation: (fn: () => Promise<void>) => { confirm = fn },
     response: (value: any) => { postResponse = value },
     snapshot: (value: any) => { snapshot = value }, failRead: (value: boolean) => { readFailure = value }, dispose: () => scope.stop() }
 }
@@ -179,7 +182,6 @@ test('refresh restores one progress screen and reports completed, active and pen
     assert.equal(p.state.showProgress.value, true)
     assert.equal(p.state.completedGroups.value, 1)
     assert.equal(p.state.executionStage.value, 3)
-    assert.equal(p.state.displayedStep.value, 10)
     assert.equal(p.state.elapsedLabel.value, '0:04:03')
     assert.equal(p.state.currentDevice.value, '微波反应仪')
     assert.equal(p.state.progressGroups.value[1].state, 'paused')
@@ -216,7 +218,6 @@ test('progress highlights the executed phase and preserves failures without inve
     assert.equal(p.state.progressGroups.value[0].state, 'failed')
     p.state.batch.value = { ...snapshot, state: 'completed', phase: 'experiments', groups: [{ index: 1, state: 'completed' }], progress: { current_step: 24, total_steps: 24 } }
     assert.equal(p.state.completedGroups.value, 1)
-    assert.equal(p.state.displayedStep.value, 24)
     assert.equal(p.state.executionStage.value, -1)
     assert.equal(p.state.currentStepLabel.value, '全部实验组已完成')
   } finally { p.dispose() }
@@ -473,5 +474,84 @@ test('names validate, invalidate confirmation, trim requests and leave legacy re
   p.snapshot({batch_id:'legacy',state:'completed',request})
   await s.refreshBatch()
   assert.equal(s.experimentName.value,'');assert.equal(s.primeReady.value,false)
+ }finally{p.dispose()}
+})
+
+
+test('stop supersedes a pending pause and late responses cannot overwrite its feedback',async()=>{
+ const p=page();let release!:(value:any)=>void
+ try{
+  p.state.batch.value={batch_id:'race',state:'running',phase:'experiments'}
+  p.postWith(url=>url.endsWith('/pause')?new Promise(resolve=>{release=resolve}):Promise.resolve({data:{success:true}}))
+  const pause=p.state.controlBatch('pause')
+  assert.equal(p.state.pendingControl.value,'pause')
+  await p.state.controlBatch('pause')
+  assert.equal(p.calls.filter(c=>c[0].endsWith('/pause')).length,1)
+  p.snapshot({batch_id:'race',state:'stopped',phase:'experiments'})
+  await p.state.controlBatch('stop')
+  const feedback=p.state.controlFeedback.value
+  release({data:{success:true}});await pause
+  assert.equal(p.state.batch.value.state,'stopped')
+  assert.equal(p.state.controlFeedback.value,feedback)
+  assert.equal(p.state.pendingControl.value,'')
+ }finally{p.dispose()}
+})
+
+test('uncertain command is reconciled by reads without automatic retries',async()=>{
+ const p=page()
+ try{
+  p.state.batch.value={batch_id:'uncertain',state:'running',phase:'experiments'}
+  p.snapshot(p.state.batch.value)
+  p.postWith(async()=>{throw new Error('offline')})
+  await p.state.controlBatch('pause')
+  assert.match(p.state.controlFeedback.value,/结果未确认/)
+  assert.equal(p.state.pendingControl.value,'pause')
+  p.snapshot({batch_id:'uncertain',state:'running',pause_pending:true})
+  await p.state.refreshBatch()
+  assert.match(p.state.controlFeedback.value,/等待当前反应结束/)
+  p.snapshot({batch_id:'uncertain',state:'paused'})
+  await p.state.refreshBatch()
+  assert.equal(p.state.controlFeedback.value,'已暂停')
+  assert.equal(p.calls.filter(c=>c.length===2).length,1)
+ }finally{p.dispose()}
+})
+
+test('field failures navigate to their page, expand capacity, preserve inputs and legal zero',async()=>{
+ const p=page()
+ try{
+  await vue.nextTick()
+  p.state.priming.value.find((f:any)=>f.key==='reactor_available_ml').value=null
+  await vue.nextTick()
+  p.state.stage.value=6
+  await p.state.validate()
+  assert.equal(p.state.stage.value,5)
+  assert.equal(p.state.advancedOpen.value,true)
+  assert.ok(p.state.fieldErrors.value.reactor_available_ml)
+  assert.equal(p.state.axes.value[0].start,30)
+  p.state.fixed.value.find((f:any)=>f.key==='wait').value=0
+  assert.ok(!p.state.fieldIssues(4).some((i:any)=>i.key==='wait'))
+  p.state.axes.value[2].start=null
+  await vue.nextTick();p.state.focusIssues(6);await vue.nextTick()
+  assert.equal(p.state.stage.value,1)
+  assert.ok(p.state.fieldErrors.value.va)
+ }finally{p.dispose()}
+})
+
+
+test('explicit device failure and request rejection are distinguished from uncertain network results',async()=>{
+ const p=page()
+ try{
+  p.state.batch.value={batch_id:'reject',state:'running'};p.snapshot(p.state.batch.value)
+  p.response({success:false})
+  await p.state.controlBatch('stop')
+  assert.match(p.state.controlFeedback.value,/设备处理未确认/)
+  assert.doesNotMatch(p.state.controlFeedback.value,/连接异常/)
+  p.snapshot({batch_id:'reject',state:'stopped',cleanup_pending:true});await p.state.refreshBatch()
+  assert.match(p.state.controlFeedback.value,/清理未确认/)
+  p.state.batch.value={batch_id:'reject',state:'running'};p.snapshot(p.state.batch.value)
+  p.postWith(async()=>{throw {response:{status:409,data:{detail:'当前批次不可暂停'}}}})
+  await p.state.controlBatch('pause')
+  assert.equal(p.state.pendingControl.value,'')
+  assert.match(p.state.controlFeedback.value,/请求未接受.*不可暂停/)
  }finally{p.dispose()}
 })
