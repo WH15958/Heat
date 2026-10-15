@@ -500,6 +500,10 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 ### 引导批次预充接口与状态
 
+正式组的 `microwave_config` 与手动托管采用同样的五段覆盖策略：五个自动功率硬件段均写入当前组目标温度，设备段时长为 `ceil(heating_timeout) + hold_seconds + 60`，复用同步驱动的逐段写后读回；任一配置失败不执行后续 start。上层仍等待到温、按原请求监督保温并显式停止，不写未经确认的起止段寄存器。新编译的批次及导出 YAML 使用该策略，已保存的历史计划不改写；HMI实际方案映射及启动计时重置须实机确认。
+
+引擎首次进入 completed/failed/stopped 时冻结 `progress.elapsed`，新运行启动时重置，暂停仍计入累计用时。批次检查点保存 progress，服务重启后可读取最后保存的用时。终态新建清空表单，沿用参数新建只复制保存值；两者清除名称、校验和启动确认，保留旧批次记录；恢复锁定沿用 acknowledge-interrupted，解除时保留原失败原因，不改写为服务中断。
+
 `POST /api/guided/start` 无 `priming_batch_id` 时创建完整批次，初始化与预充成功后自动执行正式流程，任何准备失败或停止均不进入正式组。`POST /api/guided/prime` 保留为单独执行前置预充的接口；`/start` 携带 `priming_batch_id` 时只启动该批次签名匹配且预充成功的正式流程。创建整批和单独预充共用锁内的就绪、占用及服务中断检查；执行中重复启动返回 409，不创建第二个运动任务。`/preview` 增加 `priming` 流程，仍只校验、不控制硬件。`/prime` 携带已有批次 ID 且签名一致时返回现状，不重发运动。
 
 GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵容量）、`prime_cycles`（默认 2，1–10）、`prime_drain_seconds`（必填，0.1–9999 秒）、`prime_drain_flow`（必填，0.01–9999 mL/min），以及必填正数 `reactor_available_ml`、`source_available_a_ml`、`source_available_b_ml`、`waste_available_ml`。请求新增必填 `initialization_a/b` 对象，各含 `direction`（Z/Y）和 `initialization_code`，复用 SyringeCommand 校验并在编译时检查容量适用性；新增 `initialization_confirmed`（默认 false）。启动预充和正式运行均要求三项现场确认 `initialization_confirmed`、`priming_confirmed`、`plumbing_confirmed` 为 true。初始化参数纳入预充签名，三项确认标志不纳入签名；缺少初始化参数的旧请求被拒绝，旧记录仅供查看。容量校验涵盖预充总量、正式单组量、整批耗液和清洗废液。
@@ -522,6 +526,15 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 软件回归入口：`tests/test_automation_safety_fixes.py`（时钟、状态联锁、暂停/停止、容量/流量、真实临时 CSV、文件保存），并执行既有后端和前端回归。实机验收按微波和注射泵验收文档回填，不用模拟器结果标记实机通过。
 
-引导式正式组启用 `keep_heaters_on_completion=True`：移除反应前 heater.stop，成功组完成仅调用 `stop_active_devices(preserve_heaters=True)` 清理其他活动设备，保留加热器跟踪及批次资源。选择性清理不缓存为全停机，且仅在外层保留资源时生效；选择性清理失败则执行全清理并判本组失败。普通实验、预充、失败/停止默认全清理；整批 finally 关闭加热器。下一组重新设置目标并等待到温，暂停期间持续保温。批次 cleanup_required 包含未停止的活动设备，最终加热器停机失败必须持久化恢复锁定，服务重启也不能绕过。新排液时间进入完整请求签名，旧记录不回填或复用预充资格。
+引导式正式组启用 `keep_heaters_on_completion=True`：移除反应前 heater.stop，成功组完成仅调用 `stop_active_devices(preserve_heaters=True)` 清理其他活动设备，保留加热器跟踪及批次资源。选择性清理不缓存为全停机，且仅在外层保留资源时生效；选择性清理失败则执行全清理并判本组失败。预充成功同样保留加热器；单独预充的 ready 等待期间继续保温并保持占用。普通实验及失败/停止仍全清理；整批 finally 关闭加热器。下一组重新设置目标并等待到温，暂停期间持续保温。批次 cleanup_required 包含未停止的活动设备，最终加热器停机失败必须持久化恢复锁定，服务重启也不能绕过。新排液时间进入完整请求签名，旧记录不回填或复用预充资格。
 
-引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=heating_timeout（默认600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
+引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=precursor_timeout（默认3600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
+
+加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_duration` 和 `prime_heat_both_stable`（第一组目标、±3℃、30秒、precursor_timeout），然后才吸排液；`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=heated_precursors_v2` 及 heater1/2 配置，旧预充签名不再匹配；复用现有 YAML 动作和等待类型。
+
+引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。`prime_heat_duration` 在两路 heater.start 后使用既有 duration 等待，暂停扣时、停止可中断；之后才进入 `prime_heat_both_stable`。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 heated_precursors_v2。
+
+
+引导式 `GuidedRequest.experiment_name` 必填：严格字符串，去除首尾空格后1–80个Unicode字符，拒绝控制字符、格式控制及行/段分隔符，允许重名。名称纳入请求签名，保存到批次/计划顶层及流程metadata；运行name分别为“名称 · 预充”和“名称 · 第 N 组”，沿用现有历史接口及导出。旧记录只读兼容，不自动补名称，不复用旧预充资格；新请求缺少名称返回422。ID生成规则不变。
+
+引导页使用 `?new=1` 标记新表单，独立于 `/api/guided/current` 返回的最近批次。终态轮询不覆盖新表单；运行/暂停、清理、恢复或持久化错误优先展示旧批次。每次刷新及显式切换递增响应序号，过期响应不得恢复参数。成功启动清除新建标记；刷新新建页不保留草稿。现场恢复确认只解除锁定并保留结果页，不自动续跑或创建新批次。

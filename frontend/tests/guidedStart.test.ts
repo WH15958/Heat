@@ -14,17 +14,20 @@ const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', impo
 const script = compileScript(parse(source).descriptor, { id: 'guided-start-test' }).content
 const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
-function page(fill = true) {
+function page(fill = true, fresh = false) {
+  const route = { query: fresh ? {new: '1'} : {} as any }
+  let getOverride: (() => Promise<any>) | undefined
   const calls: any[][] = [], dialogs: string[] = []
   let confirm = async () => {}
   let snapshot: any = { state: 'idle' }, readFailure = false
+  let postResponse: any = { batch_id: 'new', state: 'running', phase: 'priming' }
   const imports: Record<string, any> = {
     vue: { ...vue, onMounted: () => {}, onUnmounted: () => {} },
-    'vue-router': { useRouter: () => ({ push: () => {} }) },
+    'vue-router': { useRoute: () => route, useRouter: () => ({ push: () => {}, replace: async (value:any) => { route.query=value.query } }) },
     'element-plus': { ElMessageBox: { confirm: async (text: string) => { dialogs.push(text); await confirm() } } },
     axios: {
-      post: async (url: string, body: any) => { calls.push([url, body]); return { data: { batch_id: 'new', state: 'running', phase: 'priming' } } },
-      get: async (url: string) => { calls.push([url]); if(readFailure)throw new Error('offline'); return { data: snapshot } },
+      post: async (url: string, body: any) => { calls.push([url, body]); return { data: postResponse } },
+      get: async (url: string) => { calls.push([url]); if(readFailure)throw new Error('offline'); if(getOverride)return getOverride(); return { data: snapshot } },
     },
     '../experiment/batch': batch,
     '../experiment/drainEstimate': drain,
@@ -39,6 +42,8 @@ function page(fill = true) {
   const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
   state.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} } }
   if(fill) {
+    state.experimentName.value='测试实验'
+    state.primeHeatMinutes.value=0
     state.axes.value.forEach((a:any,i:number)=>{a.start=[30,30,0.1,0.1,30,1][i]})
     state.speedA.value=state.speedB.value=100
     state.repeats.value=1
@@ -50,9 +55,77 @@ function page(fill = true) {
     state.validatedKey.value = state.requestKey.value
     state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = true
   }
-  return { state, calls, dialogs, ready, confirmation: (fn: () => Promise<void>) => { confirm = fn },
+  return { state, calls, dialogs, ready, route, readWith: (fn:()=>Promise<any>)=>{getOverride=fn}, confirmation: (fn: () => Promise<void>) => { confirm = fn },
+    response: (value: any) => { postResponse = value },
     snapshot: (value: any) => { snapshot = value }, failRead: (value: boolean) => { readFailure = value }, dispose: () => scope.stop() }
 }
+
+test('new experiment clears parameters but preserves the terminal record and sends no control', async () => {
+  const p = page()
+  try {
+    await vue.nextTick()
+    const request = JSON.parse(p.state.requestKey.value)
+    p.snapshot({ batch_id: 'failed', state: 'failed', request, error: '设备未初始化', progress: { elapsed: 12 } })
+    await p.state.refreshBatch()
+    p.ready()
+    p.state.returnToSetup()
+    assert.equal(p.state.showProgress.value, false)
+    assert.equal(p.state.stage.value, 0)
+    assert.equal(p.state.experimentName.value, '')
+    assert.ok(p.state.axes.value.every((a:any)=>a.start===null&&a.end===null&&a.interval===null&&a.list===''))
+    assert.ok(p.state.fixed.value.every((f:any)=>f.value===null))
+    assert.ok(p.state.priming.value.every((f:any)=>f.value===null))
+    assert.equal(p.state.primeHeatMinutes.value, null)
+    assert.equal(p.state.repeats.value, null)
+    assert.equal(p.state.speedA.value, null)
+    assert.equal(p.state.newDraft.value, true)
+    assert.equal(p.route.query.new, '1')
+    assert.equal(p.state.batch.value.error, '设备未初始化')
+    assert.equal(p.state.validatedKey.value, '')
+    assert.equal(p.state.initializationConfirmed.value, false)
+    assert.equal(p.state.plumbingConfirmed.value, false)
+    assert.equal(p.state.primingConfirmed.value, false)
+    await p.state.refreshBatch()
+    assert.equal(p.state.showProgress.value, false)
+    assert.ok(p.calls.every(c => c.length === 1))
+  } finally { p.dispose() }
+})
+
+test('return to setup cannot bypass an active run, recovery, cleanup or persistence lock', () => {
+  const p = page()
+  try {
+    for(const state of [{ state: 'running' }, { state: 'paused', phase: 'ready' },
+      { state: 'failed', recovery_required: true }, { state: 'failed', cleanup_pending: true },
+      { state: 'failed', persistence_status: 'error' }]) {
+      p.state.batch.value = state
+      p.state.showProgress.value = true
+      p.state.returnToSetup()
+      assert.equal(p.state.showProgress.value, true)
+    }
+    assert.equal(p.calls.length, 0)
+  } finally { p.dispose() }
+})
+
+test('recovery cancellation keeps the failure; successful acknowledgement keeps the result until new experiment', async () => {
+  const p = page()
+  try {
+    const failed = { batch_id: 'failed', state: 'failed', recovery_required: true, error: '设备未初始化' }
+    p.state.batch.value = failed
+    p.state.showProgress.value = true
+    p.confirmation(async () => { throw 'cancel' })
+    await p.state.acknowledgeInterrupted()
+    assert.equal(p.calls.length, 0)
+    assert.equal(p.state.showProgress.value, true)
+    p.confirmation(async () => {})
+    p.response({ ...failed, recovery_required: false, cleanup_pending: false })
+    await p.state.acknowledgeInterrupted()
+    assert.equal(p.calls.length, 1)
+    assert.equal(p.calls[0][0], '/api/guided/failed/acknowledge-interrupted')
+    assert.equal(p.state.showProgress.value, true)
+    assert.equal(p.state.batch.value.state, 'failed')
+    assert.equal(p.state.batch.value.error, failed.error)
+  } finally { p.dispose() }
+})
 
 test('preparation page advances without priming; one click sends a complete batch start', async () => {
   const p = page()
@@ -176,6 +249,7 @@ test('blank defaults permit stepwise entry without coercing empty fields to zero
     assert.equal(s.initialization.value[0].initialization_code,0)
     assert.ok(Number.isNaN(s.primeTotal.value))
     s.nextStage();assert.equal(s.stage.value,0)
+    s.experimentName.value='测试实验'
     s.axes.value[0].start=30;s.axes.value[1].start=30
     s.nextStage();assert.equal(s.stage.value,1)
     s.nextStage();assert.equal(s.stage.value,1)
@@ -284,5 +358,120 @@ test('batch locks explain disabled start and remain enforced across the confirma
   p.confirmation(async()=>{s.batch.value={state:'failed',recovery_required:true}})
   await s.startBatch();assert.equal(p.calls.length,0)
   assert.match(s.error.value,/变化/)
+ }finally{p.dispose()}
+})
+
+
+test('precharge heating time is required, signed, reset on edits and restored without filling legacy values', async () => {
+ const p=page(),s=p.state
+ try {
+  s.primeHeatMinutes.value=null
+  assert.match(s.stepError(5),/预充前加热时间/)
+  s.primeHeatMinutes.value=0
+  assert.equal(s.stepError(5),'')
+  s.primeHeatMinutes.value=0.001
+  assert.match(s.stepError(5),/整秒/)
+  s.primeHeatMinutes.value=30
+  await vue.nextTick();p.ready()
+  const key=s.requestKey.value
+  assert.equal(s.requestBody.value.prime_heat_minutes,30)
+  s.primeHeatMinutes.value=45;await vue.nextTick()
+  assert.notEqual(key,s.requestKey.value)
+  assert.equal(s.validatedKey.value,'')
+  const request=JSON.parse(s.requestKey.value)
+  p.snapshot({state:'stopped',phase:'priming',request})
+  s.primeHeatMinutes.value=null
+  await s.refreshBatch()
+  assert.equal(s.primeHeatMinutes.value,45)
+ }finally{p.dispose()}
+ const legacy=page()
+ try{
+  const request=JSON.parse(legacy.state.requestKey.value)
+  delete request.prime_heat_minutes
+  legacy.snapshot({state:'paused',phase:'ready',request,priming:{status:'completed'}})
+  await legacy.state.refreshBatch()
+  assert.equal(legacy.state.primeHeatMinutes.value,null)
+  assert.equal(legacy.state.primeReady.value,false)
+ }finally{legacy.dispose()}
+})
+
+
+test('reuse copies saved parameters into a named new batch, without reusing priming', async () => {
+ const p=page(),s=p.state
+ try{
+  const request=JSON.parse(s.requestKey.value)
+  p.snapshot({batch_id:'old',state:'stopped',phase:'experiments',request,priming:{status:'completed'}})
+  await s.refreshBatch()
+  s.axes.value[0].start=99
+  s.returnToSetup(true)
+  assert.equal(s.axes.value[0].start,30)
+  assert.equal(s.experimentName.value,'')
+  assert.equal(s.primeReady.value,false)
+  assert.equal(s.requestBody.value.priming_batch_id,undefined)
+  assert.match(s.stepError(0),/实验名称/)
+  s.experimentName.value='另一次实验'
+  await vue.nextTick();p.ready()
+  await s.startBatch()
+  const start=p.calls.find(c=>c[0]==='/api/guided/start')!
+  assert.equal(start[1].experiment_name,'另一次实验')
+  assert.equal(start[1].priming_batch_id,undefined)
+  assert.equal(s.newDraft.value,false)
+  assert.equal(p.route.query.new,undefined)
+ }finally{p.dispose()}
+})
+
+test('fresh URL ignores terminal records on reload but restores active and recovery batches', async () => {
+ for(const snapshot of [{state:'completed'},{state:'running'}, {state:'paused',phase:'ready'},
+  {state:'failed',recovery_required:true},{state:'failed',cleanup_pending:true},{state:'failed',persistence_status:'error'}]){
+  const original=page(),p=page(false,true),s=p.state
+  try{
+   p.snapshot({batch_id:'saved',request:JSON.parse(original.state.requestKey.value),...snapshot})
+   await s.refreshBatch()
+   const blocked=snapshot.state!=='completed'
+   assert.equal(s.showProgress.value,blocked)
+   assert.equal(s.newDraft.value,!blocked)
+   assert.equal(s.experimentName.value,blocked?'测试实验':'')
+   assert.equal(s.axes.value[0].start,blocked?30:null)
+  }finally{p.dispose();original.dispose()}
+ }
+})
+
+test('a stale poll cannot restore parameters after new or overwrite a newer response', async () => {
+ const p=page(),s=p.state
+ try{
+  const old={batch_id:'old',state:'stopped',request:JSON.parse(s.requestKey.value)}
+  p.snapshot(old);await s.refreshBatch()
+  let resolve!:(value:any)=>void
+  p.readWith(()=>new Promise(done=>{resolve=done}))
+  const pending=s.refreshBatch()
+  s.returnToSetup()
+  resolve({data:old});await pending
+  assert.equal(s.experimentName.value,'');assert.equal(s.axes.value[0].start,null)
+  const stale=s.refreshBatch(),finishOld=resolve
+  const recent=s.refreshBatch()
+  resolve({data:{...old,batch_id:'newer',state:'running'}});await recent
+  finishOld({data:old});await stale
+  assert.equal(s.batch.value.batch_id,'newer')
+  assert.equal(s.showProgress.value,true)
+ }finally{p.dispose()}
+})
+
+test('names validate, invalidate confirmation, trim requests and leave legacy records unnamed', async () => {
+ const p=page(),s=p.state
+ try{
+  for(const name of ['', '   ', '字'.repeat(81),'a\nb','a\tb','a\u0000b','a\u2028b']){
+   s.experimentName.value=name
+   assert.match(s.stepError(0),/实验名称/)
+  }
+  s.experimentName.value='  脱气对比 🧪  '
+  assert.equal(s.stepError(0),'')
+  assert.equal(s.requestBody.value.experiment_name,'脱气对比 🧪')
+  await vue.nextTick();p.ready()
+  s.experimentName.value='另一名称';await vue.nextTick()
+  assert.equal(s.validatedKey.value,'');assert.equal(s.plumbingConfirmed.value,false)
+  const request=JSON.parse(s.requestKey.value);delete request.experiment_name
+  p.snapshot({batch_id:'legacy',state:'completed',request})
+  await s.refreshBatch()
+  assert.equal(s.experimentName.value,'');assert.equal(s.primeReady.value,false)
  }finally{p.dispose()}
 })

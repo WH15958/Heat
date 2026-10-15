@@ -118,7 +118,7 @@ def test_generated_wait_and_parser_contract():
     step = next(s for s in data['steps'] if s['id'] == 'heat_both_stable')
     assert step['wait']['tolerance'] == 3
     assert step['wait']['seconds'] == 30
-    assert step['wait']['timeout'] == 600
+    assert step['wait']['timeout'] == 3600
     assert validate_source(yaml.safe_dump(data))['valid']
     for change in (dict(targets=[]), dict(seconds=0), dict(timeout=0), dict(tolerance=True),
                    dict(targets=[dict(device_id='heater1', target_temperature=30)]*2),
@@ -175,20 +175,60 @@ def test_initialization_parameters_order_once_per_batch(prepared_env):
     asyncio.run(run())
 
 
+def test_guided_batch_initializes_each_pump_once_through_busy_code_7(prepared_env, tmp_path):
+    from types import SimpleNamespace
+    from src.devices.syringe_pump import SyringePumpDevice
+    from src.utils.config import SyringePumpConfig
+    from src.web.syringe_control import SyringeController
+    from test_syringe_pump import InitializingProtocol
+
+    async def run():
+        dm = FakeManager()
+        for did in dm.syringes:
+            config = SyringePumpConfig(device_id=did)
+            device = SyringePumpDevice(config)
+            device.handle = SimpleNamespace(is_open=True)
+            device.protocol = InitializingProtocol()
+            dm.syringes[did] = SyringeController(config, tmp_path, device)
+        def command(did, params, owner):
+            dm.calls.append((params['action'], did))
+            return dm.syringe(did).command(params, owner)
+        dm.syringe_command = command
+        request = spec(initialization_b=dict(direction='Z', initialization_code=17))
+        await guided.preflight(dm, request, before_initialization=True)
+        batch = guided.GuidedBatch(dm, request)
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'completed', batch.record.get('error')
+        assert batch.record['priming']['completed_cycles'] == [request.prime_cycles]*2
+        steps = batch.record['priming']['steps']
+        for index, did in enumerate(dm.syringes):
+            assert dm.calls.count(('initialize', did)) == 1
+            result = steps[index+1]['device_result']
+            assert result['action']['result'] == 'completed'
+            assert result['position_trusted'] and result['position'] == 0
+            assert result['valve_position'] == 0
+        syringe_calls = [c for c in dm.calls if c[0] in ('initialize', 'aspirate', 'dispense')]
+        assert syringe_calls[:3] == [('initialize', 'syringe_pump1'),
+                                     ('initialize', 'syringe_pump2'), ('aspirate', 'syringe_pump1')]
+        assert batch.record['groups'][0]['state'] == 'completed'
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('failure', ['read_error', 'timeout'])
 def test_stability_failure_blocks_formal_feed_in_real_batch(prepared_env, monkeypatch, failure):
     fake_clock(monkeypatch)
     monkeypatch.setattr(execution.asyncio, 'get_running_loop', asyncio.get_running_loop, raising=False)
-    monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
     async def run():
         dm = FakeManager()
-        batch = guided.GuidedBatch(dm, spec(heating_timeout=2))
+        batch = guided.GuidedBatch(dm, spec(precursor_timeout=2))
         await batch.start(prime_only=True)
         await batch.task
         assert batch.record['phase'] == 'ready'
         start = len(dm.calls)
+        monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
         dm.read_heater_data = Mock(side_effect=IOError('sensor failed')) if failure == 'read_error' else Mock(return_value=dict(pv=0))
-        await batch.begin_experiments(spec(heating_timeout=2))
+        await batch.begin_experiments(spec(precursor_timeout=2))
         await batch.task
         assert batch.state.value == 'failed'
         assert not any(c[0] in ('aspirate', 'dispense', 'microwave_start', 'pump_start') for c in dm.calls[start:])
@@ -236,7 +276,8 @@ def test_automatic_start_rechecks_trusted_zero_after_priming(prepared_env):
         assert batch.state.value == 'failed'
         assert batch.record['recovery_required']
         assert not batch.record['groups']
-        assert not any(c[0] in ('heat', 'microwave_start') for c in dm.calls)
+        assert not any(c[0] == 'microwave_start' for c in dm.calls)
+        assert not batch.executor._active_heaters
     asyncio.run(run())
 
 
@@ -293,3 +334,134 @@ def test_signature_and_explicit_initialization_confirmation(prepared_env):
         body = spec(initialization_confirmed=False).model_dump()
         assert client.post('/api/guided/prime', json=body).status_code == 409
     assert not dm.calls
+
+
+@pytest.mark.parametrize('failure', ['read_error', 'timeout'])
+def test_heated_priming_stability_failure_blocks_all_liquid(prepared_env, monkeypatch, failure):
+    fake_clock(monkeypatch)
+    monkeypatch.setattr(execution.asyncio, 'get_running_loop', asyncio.get_running_loop, raising=False)
+    monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
+    async def run():
+        dm = FakeManager()
+        dm.read_heater_data = Mock(side_effect=IOError('sensor failed')) if failure == 'read_error' else Mock(return_value=dict(pv=0))
+        batch = guided.GuidedBatch(dm, spec(precursor_timeout=2))
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'failed'
+        assert not any(c[0] in ('aspirate', 'dispense', 'microwave_start', 'pump_start') for c in dm.calls)
+        assert all(('heater_stop', did) in dm.calls for did in ('heater1', 'heater2'))
+    asyncio.run(run())
+
+
+def test_hot_priming_liquid_cannot_drain_and_stop_cleans_heaters(prepared_env):
+    async def run():
+        dm = FakeManager()
+        original = dm.syringe_command
+        def warm_liquid(did, params, owner):
+            result = original(did, params, owner)
+            if params['action'] == 'dispense':
+                dm.temperature = 60
+            return result
+        dm.syringe_command = warm_liquid
+        batch = guided.GuidedBatch(dm, spec())
+        await batch.start()
+        from test_guided import until
+        await until(lambda: batch.record.get('last_step') == 'prime_recheck_temperature')
+        assert not any(c[0] == 'pump_start' for c in dm.calls)
+        assert batch.executor._active_heaters == {'heater1', 'heater2'}
+        assert await batch.stop()
+        assert not batch.executor._active_heaters
+        assert not batch.record['groups']
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('value', [None, -1, 1441, 0.001, float('inf'), True])
+def test_precharge_heat_minutes_reject_invalid(value):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        spec(prime_heat_minutes=value)
+
+
+def test_precharge_time_required_and_changes_signature():
+    from pydantic import ValidationError
+    body=spec().model_dump()
+    del body['prime_heat_minutes']
+    with pytest.raises(ValidationError):
+        guided.GuidedRequest(**body)
+    assert guided.priming_signature(spec(prime_heat_minutes=30)) != guided.priming_signature(spec(prime_heat_minutes=45))
+
+
+def test_precharge_heating_delay_precedes_stability_with_independent_timeout(prepared_env, monkeypatch):
+    clock=fake_clock(monkeypatch)
+    monkeypatch.setattr(execution.asyncio, 'get_running_loop', asyncio.get_running_loop, raising=False)
+    monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
+    async def run():
+        request=spec(prime_heat_minutes=30, precursor_timeout=60)
+        steps=guided.priming_recipe(request,'timing')['steps']
+        ids=[s['id'] for s in steps]
+        assert ids.index('prime_heat_1_start') < ids.index('prime_heat_duration') < ids.index('prime_heat_both_stable') < ids.index('prime_1_1_aspirate')
+        delay=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_duration')]]))['steps'][0]
+        stable=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_both_stable')]]))['steps'][0]
+        dm=Mock(read_heater_data=Mock(return_value=dict(pv=30)))
+        executor=execution.StepExecutor(dm)
+        assert await executor._wait_condition(delay.wait)
+        assert clock.now >= 1800
+        dm.read_heater_data.assert_not_called()
+        start=clock.now
+        assert await executor._wait_condition(stable.wait)
+        assert 30 <= clock.now-start < 32
+        assert stable.wait.timeout == 60
+        formal=guided.recipe(request.rows()[0],request,'timing',0)['steps']
+        assert not any(s['id']=='prime_heat_duration' for s in formal)
+        assert next(s for s in formal if s['id']=='heat_both_stable')['wait']['timeout']==60
+        assert next(s for s in formal if s['id']=='microwave_start')['wait']['timeout']==600
+    asyncio.run(run())
+
+
+def test_stop_during_precharge_heat_delay_blocks_priming(prepared_env):
+    async def run():
+        from test_guided import until
+        dm=FakeManager()
+        batch=guided.GuidedBatch(dm,spec(prime_heat_minutes=30))
+        await batch.start()
+        await until(lambda: batch.record.get('last_step')=='prime_heat_duration')
+        assert batch.executor._active_heaters=={'heater1','heater2'}
+        assert not any(c[0] in ('aspirate','dispense') for c in dm.calls)
+        await batch.pause()
+        assert batch.executor._active_heaters=={'heater1','heater2'}
+        assert await batch.stop()
+        assert not batch.executor._active_heaters
+        assert not any(c[0] in ('aspirate','dispense') for c in dm.calls)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('name', [None, '', '   ', '字'*81, 'a\nb', 'a\tb', 'a\x00b', 'a\u2028b', 123])
+def test_name_rejected_at_all_api_boundaries(name):
+    app = FastAPI()
+    dm = FakeManager()
+    app.state.device_manager = dm
+    app.include_router(api.router, prefix='/api')
+    with TestClient(app) as client:
+        body = spec().model_dump()
+        body['experiment_name'] = name
+        for endpoint in ('preview', 'prime', 'start'):
+            assert client.post('/api/guided/'+endpoint, json=body).status_code == 422
+        del body['experiment_name']
+        assert client.post('/api/guided/start', json=body).status_code == 422
+    assert not dm.calls
+
+
+def test_name_trims_and_flows_into_plan_without_replacing_identifiers():
+    request = spec(experiment_name='  脱气对比 🧪  ')
+    assert request.experiment_name == '脱气对比 🧪'
+    a = guided.GuidedBatch(FakeManager(), request)
+    b = guided.GuidedBatch(FakeManager(), request)
+    assert a.batch_id != b.batch_id
+    assert a.record['experiment_name'] == request.experiment_name
+    assert a.priming['name'] == '脱气对比 🧪 · 预充'
+    assert a.recipes[0]['name'] == '脱气对比 🧪 · 第 1 组'
+    assert a.recipes[0]['metadata']['experiment_name'] == request.experiment_name
+    assert a.recipes[0]['metadata']['batch_id'] == a.batch_id
+    assert a.recipes[0]['metadata']['sample_index'] == 1
+    assert guided.priming_signature(request) != guided.priming_signature(spec(experiment_name='另一次'))
+    assert spec(experiment_name='字'*80).experiment_name == '字'*80

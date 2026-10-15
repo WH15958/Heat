@@ -44,6 +44,7 @@ class ExperimentEngine:
         self._steps: List[ExperimentStep] = []
         self._current_step = 0
         self._start_time: Optional[float] = None
+        self._end_time: Optional[float] = None
         self._pause_event = asyncio.Event()
         self._pause_event.set()
         if isinstance(self._executor, StepExecutor):
@@ -75,7 +76,8 @@ class ExperimentEngine:
             if self._current_step < len(self._steps)
             else None
         )
-        elapsed = time.monotonic() - self._start_time if self._start_time else 0
+        end_time = self._end_time if self._end_time is not None else time.monotonic()
+        elapsed = end_time - self._start_time if self._start_time is not None else 0
         return ExperimentProgress(
             current_step=self._current_step,
             total_steps=len(self._steps),
@@ -150,6 +152,7 @@ class ExperimentEngine:
             raise
         self._state = ExperimentState.RUNNING
         self._start_time = time.monotonic()
+        self._end_time = None
         self._task = asyncio.create_task(self._run())
 
     async def _run(self):
@@ -388,6 +391,8 @@ class ExperimentEngine:
         run_status: str,
         cleanup_complete: bool = True,
     ):
+        if self._end_time is None:
+            self._end_time = time.monotonic()
         self._state = state
         self.pause_pending = False
         if isinstance(self._executor, StepExecutor):
