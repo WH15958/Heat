@@ -836,7 +836,7 @@ interval_time: 0
 
 `wait.device_id` 必须是已启用的微波仪；`wait.seconds` 必填且为非负整秒。步骤必须启用，`on_error` 必须为 `stop`；不能禁用或跳过该保护等待。它在编排层每秒读取物料温度、故障码和控制状态，读取失败、非有限或负温度、未知控制状态、故障立即失败并进入引擎停机清理。功率或电流暂时为零不是故障。
 
-到温等待 `microwave_temperature_reached` 同样检查有效温度、零故障码及有效且处于运行的控制状态。保护保温不依赖未验收的完成信号；微波控制提前结束超过一个轮询周期（1 秒）判失败，剩余时间 ≤1 秒允许正常结束边界，但软件仍监督至计时终点并显式 `microwave.stop`。寄存器保温时长须与软件保温时长一致；引导式自动生成时、分、秒，搭建式由编排者配置一致的时长。
+到温等待 `microwave_temperature_reached` 同样检查有效温度、零故障码及有效且处于运行的控制状态。保护保温不依赖未验收的完成信号；微波控制提前结束超过一个轮询周期（1 秒）判失败，剩余时间 ≤1 秒允许正常结束边界，但软件仍监督至计时终点并显式 `microwave.stop`。设备计时须覆盖软件升温和保温，不能在软件计时结束前退出控制。引导式每组将五个自动功率段全部设为本组目标温度，段时长为 `ceil(heating_timeout) + 保温秒数 + 60`，自动拆分时、分、秒；软件 `microwave_monitored_hold.seconds` 仍为用户设定的保温秒数。搭建式不自动扩展硬件段，由编排者配置适用的段参数及计时。
 
 普通 `duration` 保持普通等待语义，不提供微波故障监督。所有固定等待及通用等待超时采用单调时钟，按实际经过时间计算，调度延迟不补时，实际暂停不计时。引导式微波启动后，暂停请求只设置 `pause_pending=true`，升温和保护保温继续计时及监督；显式停止微波后才真正暂停。停止请求始终可中断。搭建式保持原暂停语义，不自动采用整段反应延后暂停策略。
 
@@ -847,3 +847,10 @@ interval_time: 0
 引导式固定 NO 收产物、NC 排废液，每轮清洗先切 NC 再注液。正式产物与清洗排液使用各自填写的时间生成 `pump.start`（TIME_QUANTITY，run_time 秒、time_unit=0、flow_unit=1），dispense_volume 为时间×流量÷60（volume_unit=1），等待 pump_complete 后显式 pump.stop_channel；清洗进液仍由体积/流量计算时间。metadata 中 theoretical_product_volume_ml 是 A+B 理论进样量，不能用排液名义排量代替样品体积。
 
 引导式 recipe 不在反应前停前驱体加热器；外层 GuidedBatch 在成功组间保留加热器，到整批结束/失败/停止时全停机。独立运行导出的单组 YAML 使用普通引擎，完成时仍清理全部活动设备，不能仅凭 YAML 推断有跨组保温。搭建式的阀位及 heater.stop 编排保持自由。
+
+引导式批次的预充 YAML 在两泵初始化后，使用现有 `heater.set_temperature`、`heater.start`、`heater_pair_stable` 按第一组目标加热（容差3℃、连续30秒），通过后才预充吸排。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
+
+引导式预充在两路 heater.start 后生成 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，结束后才执行双路稳定到温等待（默认超时3600秒）；普通 YAML 等待类型和默认值保持原语义。
+
+
+引导式生成流程使用填写的实验名称：预充 `name` 为“名称 · 预充”，正式组为“名称 · 第 N 组”，`metadata.experiment_name` 保存整批名称。该字段属于追踪信息，不替代 `batch_id`、`sample_id` 或运行ID；普通 YAML 无需提供此字段，历史文件不迁移。

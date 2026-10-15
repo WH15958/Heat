@@ -1,35 +1,37 @@
 <template>
   <div class="guided">
-    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化与预充 → 前驱体加热与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ showProgress ? '查看参数' : '查看实验进度' }}</el-button><el-button @click="router.push('/experiment/editor')">自由编排</el-button></div></header>
+    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化 → 稳定到温与预充 → 到温复查与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ newDraft ? (showProgress ? '返回新实验设置' : '查看上次实验') : (showProgress ? '查看参数' : '查看实验进度') }}</el-button><el-button @click="router.push('/experiment/editor')">自由编排</el-button></div></header>
     <nav v-if="!showProgress"><button v-for="(name,i) in stages" :key="name" :class="{active:stage===i}"  :disabled="i>stage" @click="goBack(i)"><b>{{ i+1 }}</b>{{ name }}</button></nav>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <section v-if="showProgress" class="run-panel" aria-label="实验进度">
-      <div class="run-heading"><div><h3>{{ stateLabel }}</h3><p class="batch-id">批次 {{ batch.batch_id }}</p></div><div class="run-actions">
+      <div class="run-heading"><div><h3>{{ batch.experiment_name || batch.request?.experiment_name || batch.name || '未命名实验' }}</h3><p>{{ stateLabel }}</p><p class="batch-id">批次 {{ batch.batch_id }}</p></div><div class="run-actions">
         <el-button v-if="batch.state==='running'&&!batch.pause_pending" :disabled="controlling" @click="controlBatch('pause')">暂停批次</el-button>
         <el-button v-if="(batch.state==='paused'||batch.pause_pending)&&batch.phase!=='ready'" :disabled="controlling" @click="controlBatch('resume')">{{ batch.pause_pending ? '取消暂停请求' : '继续批次' }}</el-button>
-        <el-button v-if="activeRun||batch.cleanup_pending" type="danger" :disabled="controlling" @click="controlBatch('stop')">停止批次</el-button>
+        <el-button v-if="activeRun||batch.cleanup_pending" type="danger" :disabled="controlling" @click="controlBatch('stop')">停止本批次</el-button>
+        <el-button v-if="terminalRun&&!batch.recovery_required" :disabled="controlling||batch.cleanup_pending||batch.persistence_status==='error'" type="primary" @click="returnToSetup()">新建实验</el-button>
+        <el-button v-if="terminalRun&&!batch.recovery_required" :disabled="controlling||batch.cleanup_pending||batch.persistence_status==='error'" @click="returnToSetup(true)">沿用本次参数新建</el-button>
         <el-button v-if="batch.phase==='ready'" @click="showProgress=false;stage=6">前往批次确认</el-button>
       </div></div>
       <el-alert v-if="refreshError" :title="refreshError" type="warning" :closable="false" />
       <el-alert v-if="batch.pause_pending" title="已请求暂停：当前反应继续，停止微波后暂停；随后不收集、不清洗、不进入下一组。" type="warning" :closable="false" />
-      <el-alert v-else-if="batch.state==='paused'&&batch.phase!=='ready'" :title="batch.phase==='priming'?'预充已暂停；已发出的注射泵动作完成后，等待继续，不发送下一步。':'实验已暂停，等待继续；前驱体加热器保持保温。'" type="info" :closable="false" />
+      <el-alert v-else-if="batch.state==='paused'&&batch.phase!=='ready'" :title="batch.phase==='priming'?'预充已暂停；前驱体保持已启动的加热，已发出的泵动作完成后等待继续。':'实验已暂停，等待继续；前驱体加热器保持保温。'" type="info" :closable="false" />
       <el-alert v-if="batch.error" :title="batch.error" type="error" :closable="false" />
       <el-alert v-if="batch.persistence_status==='error'" title="记录保存失败，禁止继续运行" type="error" :closable="false" />
       <el-alert v-if="batch.state==='completed'&&batch.cleanup_pending" title="实验流程已结束，设备清理仍待确认。" type="warning" :closable="false" />
-      <div v-if="batch.recovery_required" class="notice"><p>需要现场检查设备停止、残留和液路，解除恢复锁定后才能开始新批次。</p><el-button type="warning" :disabled="controlling" @click="acknowledgeInterrupted">现场已检查，解除恢复锁定</el-button></div>
+      <div v-if="batch.recovery_required" class="notice"><p>需要现场检查设备停止、残留和液路，解除恢复锁定后才能开始新批次。解除锁定后可新建实验，原记录保留。</p><el-button type="warning" :disabled="controlling" @click="acknowledgeInterrupted">现场已检查，解除锁定</el-button></div>
       <div class="run-summary">
         <div><small>整批完成组数</small><strong>{{ completedGroups }} / {{ batch.total_groups || 0 }}</strong><progress :value="completedGroups" :max="batch.total_groups||1" aria-label="已完成实验组数"></progress></div>
         <div><small>当前实验组</small><strong>{{ batch.phase==='priming'||batch.phase==='ready' ? '批次准备' : `第 ${batch.current_group || 0} 组` }}</strong><span>{{ phaseLabel }}</span></div>
-        <div><small>预充 / 当前组累计用时</small><strong>{{ elapsedLabel }}</strong><span>含暂停时间 · 每 2 秒更新 · {{ lastRefresh ? new Date(lastRefresh).toLocaleTimeString() : '等待状态' }}</span></div>
+        <div><small>预充 / 当前组累计用时</small><strong>{{ elapsedLabel }}</strong><span>{{ terminalRun ? '已结束 · 用时已固定' : '含暂停时间' }} · 状态每 2 秒更新 · {{ lastRefresh ? new Date(lastRefresh).toLocaleTimeString() : '等待状态' }}</span></div>
       </div>
       <div class="current-operation" role="status" aria-live="polite"><small>当前步骤</small><h3>{{ currentStepLabel }}</h3><p v-if="batch.progress?.total_steps">{{ batch.phase==='priming'?'批次准备':'当前组' }}步骤 {{ displayedStep }} / {{ batch.progress.total_steps }} · {{ currentDevice }}</p></div>
       <ol class="run-stages"><li v-for="(name,i) in executionStages" :key="name" :class="{current:i===executionStage}"><b>{{ i+1 }}</b>{{ name }}<small v-if="i===executionStage">{{ batch.state==='running'?'进行中':stateLabel }}</small></li></ol>
       <div v-if="batch.phase==='priming'||batch.phase==='ready'" class="notice">已完成预充循环：A {{ batch.priming?.completed_cycles?.[0] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次，B {{ batch.priming?.completed_cycles?.[1] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次。初始化与预充每批只执行一次。</div>
-      <h4>各组进度与实验条件</h4><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（μL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th></tr></thead><tbody><tr v-for="g in progressGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td></tr></tbody></table></div>
+      <h4>各组进度与实验条件</h4><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th></tr></thead><tbody><tr v-for="g in progressGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td></tr></tbody></table></div>
       <p><small>整批进度按完成组数统计。升温和降温耗时取决于实测温度；不估算剩余完成时间。产物瓶仍由现场逐组更换。</small></p>
     </section>
     <div v-else class="layout"><main :inert="activeRun">
-      <section v-if="stage<=2"><h3>{{ stages[stage] }}</h3><p>{{ stageDescriptions[stage] }}</p><div class="notice device-summary">{{ deviceSummary }}</div><div v-for="a in stageAxes" :key="a.key" class="axis"><div class="axis-heading"><strong>{{ a.label }}</strong><span>实验条件</span></div><div class="axis-controls"><label>设置方式<select v-model="a.mode"><option value="fixed">固定值</option><option value="range">范围与间隔</option><option value="list">指定数值</option></select></label><label v-if="a.mode!=='list'">{{ a.mode==='fixed'?'数值':'起点' }}<span class="number-unit"><input v-model.number="a.start" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><template v-if="a.mode==='range'"><label>终点<span class="number-unit"><input v-model.number="a.end" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><label>间隔<span class="number-unit"><input v-model.number="a.interval" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label></template><label v-if="a.mode==='list'">逗号分隔<span class="number-unit"><input v-model="a.list" placeholder="多个数值用逗号分隔" /><span>{{ a.unit }}</span></span></label></div></div><div v-if="stage===1" class="grid settings"><label>A 进料速度<span class="number-unit"><input v-model.number="speedA" type="number" placeholder="请输入" /><span>Hz</span></span></label><label>B 进料速度<span class="number-unit"><input v-model.number="speedB" type="number" placeholder="请输入" /><span>Hz</span></span></label></div><p>支持固定值、范围与间隔或指定数值。请按实际实验填写。</p></section>
+      <section v-if="stage<=2"><label v-if="stage===0" class="experiment-name">实验名称<input v-model="experimentName" placeholder="请输入实验名称" /></label><h3>{{ stages[stage] }}</h3><p>{{ stageDescriptions[stage] }}</p><div class="notice device-summary">{{ deviceSummary }}</div><div v-for="a in stageAxes" :key="a.key" class="axis"><div class="axis-heading"><strong>{{ a.label }}</strong><span>实验条件</span></div><div class="axis-controls"><label>设置方式<select v-model="a.mode"><option value="fixed">固定值</option><option value="range">范围与间隔</option><option value="list">指定数值</option></select></label><label v-if="a.mode!=='list'">{{ a.mode==='fixed'?'数值':'起点' }}<span class="number-unit"><input v-model.number="a.start" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><template v-if="a.mode==='range'"><label>终点<span class="number-unit"><input v-model.number="a.end" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><label>间隔<span class="number-unit"><input v-model.number="a.interval" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label></template><label v-if="a.mode==='list'">逗号分隔<span class="number-unit"><input v-model="a.list" placeholder="多个数值用逗号分隔" /><span>{{ a.unit }}</span></span></label></div></div><div v-if="stage===1" class="grid settings"><label>A 进料速度<span class="number-unit"><input v-model.number="speedA" type="number" placeholder="请输入" /><span>Hz</span></span></label><label>B 进料速度<span class="number-unit"><input v-model.number="speedB" type="number" placeholder="请输入" /><span>Hz</span></span></label></div><p>支持固定值、范围与间隔或指定数值。请按实际实验填写。</p></section>
       <section v-if="stage===3"><h3>降温与产物收集</h3>
         <div class="notice compact-notice"><strong>反应液 ≤45℃ 后自动收集</strong><p>NO 收产物，NC 排废液；请现场核对接管并逐组换瓶。</p><small>流量和时间按现场标定，时间需覆盖死体积与排空余量。</small></div>
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
@@ -45,9 +47,12 @@
       </section>
       <section v-if="stage===5">
         <h3>批次准备</h3>
-        <p>开始实验后自动初始化 A/B、预充并排废液，每批一次，不启动加热。</p>
+        <p>先初始化 A/B，再按第一组目标加热脱气；设定时间结束且双路稳定到温后才预充。前驱体持续保温；预充液 ≤45℃ 后排废，每批一次。</p>
         <div class="form-group initialization-group"><h4>泵初始化</h4><div class="grid"><div v-for="(item,i) in initialization" :key="i" class="pump-initialization"><strong>泵 {{ i===0?'A':'B' }}</strong><label>方向<select v-model="item.direction"><option value="Z">Z：左吸右排</option><option value="Y">Y：右吸左排</option></select></label><label>代码<select v-model.number="item.initialization_code"><option v-for="code in initializationCodes" :key="code" :value="code">{{ code }}</option></select></label></div></div></div>
-        <div class="form-group"><h4>预充与排气</h4><div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span></label></div>
+        <div class="form-group"><h4>预充与排气</h4>
+          <label class="preheat-field">预充前加热时间<span class="number-unit"><input v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span></label>
+          <p><small>从两路加热启动后计时，暂停不计时。时间到后检查目标 ±3℃、稳定30秒；未达标继续等待，最多60分钟。填0表示不额外等待。</small></p>
+          <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span></label></div>
           <div class="estimate-actions"><el-button @click="estimatePrimingTime">估算预充排液时间</el-button><small>理论值，需现场确认排空余量。</small></div>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
         </div>
@@ -60,7 +65,7 @@
         <p v-if="primeReady">已有本批次预充结果，开始自动实验时将沿用，不重复初始化或预充。修改参数或维护设备前请先停止批次。</p>
         <details><summary>预充流程预览</summary><pre>{{ previewPrime }}</pre></details>
       </section>
-      <section v-if="stage===6"><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td></tr></tbody></table></div><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 45℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤45℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>记录本组结果，加热器保持运行并自动进入下一组；新组按目标调整温度。整批结束、失败或停止时关闭加热器。换瓶由现场安排，程序不等待确认。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组的完整实验流程</summary><p>完整流程由后端生成。校验不连接或启动硬件；开始实验才会执行。</p><pre>{{ fragment }}</pre></details></section>
+      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td></tr></tbody></table></div><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 45℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤45℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>记录本组结果，加热器保持运行并自动进入下一组；新组按目标调整温度。整批结束、失败或停止时关闭加热器。换瓶由现场安排，程序不等待确认。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组的完整实验流程</summary><p>完整流程由后端生成。校验不连接或启动硬件；开始实验才会执行。</p><pre>{{ fragment }}</pre></details></section>
     </main><aside class="batch-sidebar">
       <h3>本批实验</h3>
       <template v-if="validatedKey===requestKey&&!plan.error">
@@ -79,7 +84,7 @@
         <label class="confirm-check"><input v-model="primingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对设备、容量及前驱体相容性</label>
         <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液</label>
         <small>修改参数后，需重新校验并勾选三项确认。</small>
-        <details class="batch-details"><summary>查看启动说明</summary><p>请先在装置控制页连接全部设备。系统会按预充页确认的方向与代码依次初始化两台注射泵，再预充、排液；成功后自动开始实验。反应液降至 45℃及以下后自动收集。</p></details>
+        <details class="batch-details"><summary>查看启动说明</summary><p>请先在装置控制页连接全部设备。系统会按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，设定时间结束且稳定到温后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 45℃及以下后自动收集。</p></details>
       </div>
       <template v-if="stage===6">
         <el-button type="primary" :loading="controlling" :disabled="controlling||!!startBlockReason" aria-describedby="start-status" @click="startBatch">开始自动实验</el-button>
@@ -93,12 +98,13 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {ElMessageBox} from 'element-plus'
-import {useRouter} from 'vue-router'
+import {useRoute,useRouter} from 'vue-router'
 import axios from 'axios'
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
+const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
 const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；物料到温后开始保温计时，每秒检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
 const stageAxes=computed(()=>axes.value.slice(stage.value*2,stage.value*2+2))
@@ -129,6 +135,7 @@ const setting=(key:string)=>numeric(fixed.value.find(s=>s.key===key)!.value)
 const plan=computed(()=>{try{if(!Number.isInteger(repeats.value)||numeric(repeats.value)<1)throw new Error('重复次数须为正整数');const rows=combinations(axes.value.map(completeAxis));if(rows.length*numeric(repeats.value)>200)throw new Error('最多 200 组，请缩小范围');if(rows.some(r=>r.some((v,i)=>i===2||i===3?v<=0:v<0)))throw new Error('进样量须大于零，温度与时间不能为负');rows.forEach(r=>microwaveHoldSeconds(r[5]!));return{rows:rows.flatMap(r=>Array.from({length:numeric(repeats.value)},()=>r)),counts:axes.value.map(a=>valuesFor(a).length),error:''}}catch(e){return{rows:[] as number[][],counts:[] as number[],error:String(e)}}})
 function goBack(i:number){if(i>=0&&i<=stage.value){stage.value=i;error.value=''}}
 function stepError(step:number):string {
+ if(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(experimentName.value)||Array.from(experimentName.value.trim()).length<1||Array.from(experimentName.value.trim()).length>80)return '请填写实验名称：1–80 个字符，不能包含换行或控制字符'
  if(roles.some(r=>!chosen[r.key]||!registry.value[r.group]?.[chosen[r.key]!]))return '固定装置配置缺失，请检查设备配置后再继续'
  if(chosen.heaterA===chosen.heaterB||chosen.pumpA===chosen.pumpB)return '两路须选择不同的加热器和注射泵'
  try{
@@ -147,6 +154,8 @@ function stepError(step:number):string {
   if(step>=4){try{const seconds=estimateDrainSeconds(setting('volume'),setting('flow'));if(seconds<0.1||seconds>9999)throw new Error()}catch{return '清洗进液时间超出有效范围，请检查体积和流量'}}
  }
  if(step>=5){
+  if(!Number.isFinite(primeHeatMinutes.value))return '请填写预充前加热时间'
+  try{microwaveHoldSeconds(numeric(primeHeatMinutes.value))}catch{return '预充前加热时间须为 0–1440 分钟，且能换算为整秒'}
   for(const p of priming.value.slice(0,5))if(!Number.isFinite(p.value)||numeric(p.value)<=0)return `请填写有效的${p.label}`
   if(!Number.isInteger(primeValue('prime_cycles'))||primeValue('prime_cycles')>10)return '预充循环次数须为 1–10 的整数'
   if(primeValue('prime_drain_seconds')<0.1||primeValue('prime_drain_seconds')>9999)return '预充排液时间须为 0.1–9999 秒'
@@ -159,8 +168,9 @@ const total=(i:number)=>Number(plan.value.rows.reduce((s,r)=>s+r[i]!,0).toPrecis
 const plumbingConfirmed=ref(false),drainDirection=ref('CW'),cleanDirection=ref('CW')
 const previewPrime=ref(''),previewYaml=ref<string[]>([]),validatedKey=ref(''),controlling=ref(false),batch=ref<any>({state:'idle'})
 const activeRun=computed(()=>['running','paused'].includes(batch.value.state)&&batch.value.phase!=='ready')
+const terminalRun=computed(()=>['completed','failed','stopped','interrupted'].includes(batch.value.state))
 const showProgress=ref(false),lastRefresh=ref(0),refreshError=ref('')
-const executionStages=['初始化与预充','前驱体加热','吸液与进料','微波升温与保温','降温与收集','清洗与排液']
+const executionStages=['初始化、加热与预充','正式进料前稳定到温','吸液与进料','微波升温与保温','降温与收集','清洗与排液']
 const executionStage=computed(()=>{
  if(batch.value.phase==='priming'||batch.value.phase==='ready')return 0
  const id=batch.value.progress?.step_id||''
@@ -171,7 +181,7 @@ const executionStage=computed(()=>{
  if(id.startsWith('clean_'))return 5
  return -1
 })
-const phaseLabel=computed(()=>batch.value.phase==='priming'?'初始化与预充':batch.value.phase==='ready'?'预充完成，待正式启动':'正式实验')
+const phaseLabel=computed(()=>batch.value.phase==='priming'?'初始化、加热与预充':batch.value.phase==='ready'?'预充完成，待正式启动':'正式实验')
 const completedGroups=computed(()=>(batch.value.groups||[]).filter((g:any)=>g.state==='completed').length)
 const displayedStep=computed(()=>Math.min((batch.value.progress?.current_step??0)+1,batch.value.progress?.total_steps||0))
 const elapsedLabel=computed(()=>{
@@ -216,6 +226,7 @@ const primeFields:NumberField[]=[
  {key:'source_available_b_ml',label:'B 可用前驱体量',unit:'mL',value:null},
  {key:'waste_available_ml',label:'废液瓶剩余容量',unit:'mL',value:null}
 ]
+const primeHeatMinutes=ref<InputNumber>(null)
 const priming=ref(primeFields),primingConfirmed=ref(false),initializationConfirmed=ref(false)
 const initialization=ref([{direction:'Z',initialization_code:0},{direction:'Z',initialization_code:0}])
 const initializationCodes=[0,1,2,...Array.from({length:31},(_,i)=>i+10)]
@@ -224,17 +235,18 @@ const primeTotal=computed(()=>(primeValue('prime_volume_a')+primeValue('prime_vo
 const advancedOpen=ref(false)
 const advancedMissing=computed(()=>priming.value.slice(5).some(p=>!Number.isFinite(p.value)||numeric(p.value)<=0))
 function estimatePrimingTime(){try{const cycles=primeValue('prime_cycles');if(!Number.isInteger(cycles)||cycles<1||cycles>10||primeValue('prime_volume_a')<=0||primeValue('prime_volume_b')<=0)throw new Error('请填写有效的预充体积及循环次数');const seconds=estimateDrainSeconds(primeTotal.value,primeValue('prime_drain_flow'));if(seconds<0.1||seconds>9999)throw new Error('排液时间须为 0.1–9999 秒');priming.value.find(p=>p.key==='prime_drain_seconds')!.value=seconds;error.value=''}catch(e){showError(e)}}
-const primeReady=computed(()=>batch.value.request?.initialization_a!=null&&batch.value.request?.initialization_b!=null&&batch.value.request?.product_port==='NO'&&batch.value.request?.product_drain_seconds!=null&&batch.value.request?.clean_drain_seconds!=null&&batch.value.request?.prime_drain_seconds!=null&&batch.value.request?.prime_drain_flow!=null&&batch.value.phase==='ready'&&batch.value.state==='paused'&&!batch.value.recovery_required&&batch.value.priming?.status==='completed'&&JSON.stringify(batch.value.request&&requestWithoutFlags(batch.value.request))===JSON.stringify(requestWithoutFlags(requestBody.value)))
+const primeReady=computed(()=>!newDraft.value&&batch.value.request?.experiment_name!=null&&batch.value.request?.prime_heat_minutes!=null&&batch.value.request?.initialization_a!=null&&batch.value.request?.initialization_b!=null&&batch.value.request?.product_port==='NO'&&batch.value.request?.product_drain_seconds!=null&&batch.value.request?.clean_drain_seconds!=null&&batch.value.request?.prime_drain_seconds!=null&&batch.value.request?.prime_drain_flow!=null&&batch.value.phase==='ready'&&batch.value.state==='paused'&&!batch.value.recovery_required&&batch.value.priming?.status==='completed'&&JSON.stringify(batch.value.request&&requestWithoutFlags(batch.value.request))===JSON.stringify(requestWithoutFlags(requestBody.value)))
 function requestWithoutFlags(r:any){const keys=Object.keys(requestBody.value).filter(k=>!['plumbing_confirmed','priming_confirmed','initialization_confirmed','priming_batch_id'].includes(k));return Object.fromEntries(keys.map(k=>[k,r[k]]))}
 const labels:Record<string,string>={idle:'未运行',pending:'待执行',running:'执行中',paused:'已暂停',completed:'已完成',failed:'失败',stopped:'已停止',interrupted:'服务中断'}
 const stateLabel=computed(()=>labels[batch.value.state]||batch.value.state)
-const requestBody=computed(()=>({axes:axes.value.map(a=>valuesFor(a)),repeats:repeats.value,initialization_a:initialization.value[0],initialization_b:initialization.value[1],speed_a:speedA.value,speed_b:speedB.value,product_port:productPort,drain_flow:setting('drainFlow'),product_drain_seconds:setting('productTime'),clean_drain_seconds:setting('cleanTime'),clean_volume:setting('volume'),clean_flow:setting('flow'),clean_dwell:setting('wait'),clean_cycles:setting('cycles'),drain_direction:drainDirection.value,clean_direction:cleanDirection.value,...Object.fromEntries(priming.value.map(p=>[p.key,p.value]))}))
+const requestBody=computed(()=>({experiment_name:experimentName.value.trim(),prime_heat_minutes:primeHeatMinutes.value,axes:axes.value.map(a=>valuesFor(a)),repeats:repeats.value,initialization_a:initialization.value[0],initialization_b:initialization.value[1],speed_a:speedA.value,speed_b:speedB.value,product_port:productPort,drain_flow:setting('drainFlow'),product_drain_seconds:setting('productTime'),clean_drain_seconds:setting('cleanTime'),clean_volume:setting('volume'),clean_flow:setting('flow'),clean_dwell:setting('wait'),clean_cycles:setting('cycles'),drain_direction:drainDirection.value,clean_direction:cleanDirection.value,...Object.fromEntries(priming.value.map(p=>[p.key,p.value]))}))
 const requestKey=computed(()=>{try{return JSON.stringify(requestBody.value)}catch{return ''}})
 const startBlockReason=computed(()=>{
  if(stage.value!==6)return '请前往批次确认页'
  if(activeRun.value)return '已有批次运行中，请先停止或查看实验进度'
  if(batch.value.recovery_required)return '请在实验进度页完成现场检查并解除恢复锁定'
- if(batch.value.cleanup_pending)return '设备清理尚未完成，请查看实验进度'
+ if(batch.value.persistence_status==='error')return '记录保存未确认，请查看实验进度'
+ if(batch.value.cleanup_pending||batch.value.cleanup_required)return '设备清理尚未完成，请查看实验进度'
  if(batch.value.phase==='ready'&&!primeReady.value)return '当前参数与已有预充结果不匹配，请先停止旧批次'
  const issue=stepError(6)
  if(issue)return issue
@@ -248,34 +260,79 @@ const startBlockReason=computed(()=>{
  return missing.length?'待确认：'+missing.join('；'):''
 })
 const fragment=computed(()=>previewYaml.value[selected.value]||'请先生成并校验完整批次。')
-watch([axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,initialization],()=>{report.value='';selected.value=0;validatedKey.value='';previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false},{deep:true})
+watch([experimentName,axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,primeHeatMinutes,initialization],()=>{report.value='';selected.value=0;validatedKey.value='';previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false},{deep:true})
 function showError(e:any){const detail=e.response?.data?.detail;error.value=Array.isArray(detail)?detail.map(d=>`${d.loc?.slice(1).join('.') || '参数'}：${d.msg}`).join('；'):String(detail||e.message||e)}
 async function validate(){validating.value=true;report.value='';try{const issue=stepError(6);if(issue)throw new Error(issue);if(advancedMissing.value)throw new Error('请在可用容量中填写有效的容积和储液量');const key=requestKey.value;const {data}=await axios.post('/api/guided/preview',requestBody.value);if(key!==requestKey.value)return;previewYaml.value=data.yaml;previewPrime.value=JSON.stringify(data.priming,null,2);validatedKey.value=key;report.value=`后端已生成并校验 ${data.total_groups} 组完整流程，尚未启动设备。`}catch(e){advancedOpen.value=advancedMissing.value;showError(e)}finally{validating.value=false}}
-let restored=false
-async function refreshBatch(){try{batch.value=(await axios.get('/api/guided/current')).data;lastRefresh.value=Date.now();refreshError.value='';if(!restored&&batch.value.request){const r=batch.value.request;axes.value.forEach((a,i)=>{const values=r.axes[i];a.mode=values.length===1?'fixed':'list';a.start=values[0];a.list=values.join(',')});repeats.value=r.repeats;speedA.value=r.speed_a;speedB.value=r.speed_b;drainDirection.value=r.drain_direction;cleanDirection.value=r.clean_direction;const mapping:Record<string,string>={drainFlow:'drain_flow',productTime:'product_drain_seconds',cleanTime:'clean_drain_seconds',volume:'clean_volume',flow:'clean_flow',wait:'clean_dwell',cycles:'clean_cycles'};fixed.value.forEach(s=>s.value=r[mapping[s.key]!]??null);const displayDrain=primingDrainForDisplay(r);priming.value.forEach(p=>p.value=displayDrain[p.key as keyof typeof displayDrain]??r[p.key]??p.value);if(r.initialization_a&&r.initialization_b)initialization.value=[{...r.initialization_a},{...r.initialization_b}];stage.value=batch.value.phase==='ready'?6:5;showProgress.value=true;restored=true}}catch{refreshError.value='进度读取失败，当前显示为上次收到的状态。请检查后端连接。'}}
+let restoredBatchId:string|null=null, refreshSequence=0
+function restoreParameters(r:any){
+ experimentName.value=r.experiment_name??''
+ primeHeatMinutes.value=r.prime_heat_minutes??null;axes.value.forEach((a,i)=>{const values=r.axes[i];a.mode=values.length===1?'fixed':'list';a.start=values[0];a.end=a.interval=null;a.list=values.join(',')});repeats.value=r.repeats;speedA.value=r.speed_a;speedB.value=r.speed_b;drainDirection.value=r.drain_direction;cleanDirection.value=r.clean_direction;const mapping:Record<string,string>={drainFlow:'drain_flow',productTime:'product_drain_seconds',cleanTime:'clean_drain_seconds',volume:'clean_volume',flow:'clean_flow',wait:'clean_dwell',cycles:'clean_cycles'};fixed.value.forEach(s=>s.value=r[mapping[s.key]!]??null);const displayDrain=primingDrainForDisplay(r);priming.value.forEach(p=>p.value=displayDrain[p.key as keyof typeof displayDrain]??r[p.key]??null);if(r.initialization_a&&r.initialization_b)initialization.value=[{...r.initialization_a},{...r.initialization_b}]
+}
+function requiresAttention(value:any){return ['running','paused'].includes(value.state)||value.recovery_required||value.cleanup_pending||value.cleanup_required||value.persistence_status==='error'}
+async function refreshBatch(force=false){
+ if(controlling.value&&!force)return
+ const sequence=++refreshSequence
+ try{
+  const {data}=await axios.get('/api/guided/current')
+  if(sequence!==refreshSequence)return
+  batch.value=data;lastRefresh.value=Date.now();refreshError.value=''
+  if(newDraft.value&&!requiresAttention(data))return
+  const interruptedDraft=newDraft.value
+  if(interruptedDraft){newDraft.value=false;void router.replace({query:{...route.query,new:undefined}})}
+  if(data.request&&(interruptedDraft||restoredBatchId!==data.batch_id)){
+   restoreParameters(data.request)
+   stage.value=data.phase==='ready'?6:5;showProgress.value=true;restoredBatchId=data.batch_id
+  }else if(interruptedDraft){showProgress.value=true}
+ }catch{if(sequence===refreshSequence)refreshError.value='进度读取失败，当前显示为上次收到的状态。请检查后端连接。'}
+}
 async function startBatch(){
  if(controlling.value)return
  controlling.value=true
  try{
   const key=requestKey.value
   if(startBlockReason.value)throw new Error(startBlockReason.value)
-  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按设定参数预充并排废液，消耗前驱体；成功后自动开始加热、进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
+  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，等待设定加热时间结束且稳定到温，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
+  ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
+  newDraft.value=false;restoredBatchId=batch.value.batch_id
+  void router.replace({query:{...route.query,new:undefined}})
   showProgress.value=true
   lastRefresh.value=Date.now()
   refreshError.value=''
   error.value=''
  }catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}
 }
-async function controlBatch(action:string){controlling.value=true;try{const {data}=await axios.post(`/api/guided/${batch.value.batch_id}/${action}`,{});if(data.success===false)throw new Error('停止或记录保存未确认成功，请检查设备及后端状态');await refreshBatch()}catch(e){showError(e)}finally{controlling.value=false}}
-async function acknowledgeInterrupted(){controlling.value=true;try{await ElMessageBox.confirm('请在现场确认所有设备已停止。请同时检查预充残留、气泡和液路。此操作只解除恢复锁定，不恢复原批次。','确认中断后的设备状态',{type:'warning'});await axios.post(`/api/guided/${batch.value.batch_id}/acknowledge-interrupted`,{devices_stopped_confirmed:true});await refreshBatch()}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
+async function controlBatch(action:string){controlling.value=true;try{const {data}=await axios.post(`/api/guided/${batch.value.batch_id}/${action}`,{});if(data.success===false)throw new Error('停止或记录保存未确认成功，请检查设备及后端状态');await refreshBatch(true)}catch(e){showError(e)}finally{controlling.value=false}}
+function defaultInitializationCode(i:number){const capacity=registry.value.syringe_pumps?.[`syringe_pump${i+1}`]?.capacity_ml;return capacity==null||capacity>=2.5?0:capacity>=0.5?1:2}
+function returnToSetup(reuse=false){
+ if(controlling.value||!terminalRun.value||batch.value.recovery_required||batch.value.cleanup_pending||batch.value.cleanup_required||batch.value.persistence_status==='error')return
+ ++refreshSequence
+ if(reuse&&batch.value.request)restoreParameters(batch.value.request)
+ else{
+  axes.value.forEach(a=>{a.mode='fixed';a.start=a.end=a.interval=null;a.list=''})
+  fixed.value.forEach(f=>{f.value=null});priming.value.forEach(p=>{p.value=null})
+  repeats.value=speedA.value=speedB.value=primeHeatMinutes.value=null
+  initialization.value=[0,1].map(i=>({direction:'Z',initialization_code:defaultInitializationCode(i)}))
+  drainDirection.value=cleanDirection.value='CW';cleanChannel.value=3;drainChannel.value=4
+  Object.assign(chosen,{heaterA:'heater1',heaterB:'heater2',pumpA:'syringe_pump1',pumpB:'syringe_pump2',reaction:'microwave1',liquid:'pump1'})
+ }
+ experimentName.value=''
+ plumbingConfirmed.value=primingConfirmed.value=initializationConfirmed.value=false
+ validatedKey.value='';report.value='';previewYaml.value=[];previewPrime.value='';selected.value=0
+ error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true
+ void router.replace({query:{...route.query,new:'1'}})
+}
+async function acknowledgeInterrupted(){controlling.value=true;try{await ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'});++refreshSequence;batch.value=(await axios.post(`/api/guided/${batch.value.batch_id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
+
 let statusTimer:ReturnType<typeof setInterval>|undefined
 onMounted(()=>{void refreshBatch();statusTimer=setInterval(()=>{void refreshBatch()},2000)})
 onUnmounted(()=>{if(statusTimer)clearInterval(statusTimer)})
-onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if(!batch.value.request){initialization.value.forEach((item,i)=>{const capacity=registry.value.syringe_pumps?.[`syringe_pump${i+1}`]?.capacity_ml;if(capacity!=null)item.initialization_code=capacity>=2.5?0:capacity>=0.5?1:2})}const missing=roles.filter(r=>!registry.value[r.group]?.[chosen[r.key]!]);if(missing.length)error.value='配置缺少固定装置：'+missing.map(r=>r.label).join('、')}catch{error.value='读取装置失败，请检查后端服务。'}})
+onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if(newDraft.value||!batch.value.request){initialization.value.forEach((item,i)=>{item.initialization_code=defaultInitializationCode(i)})}const missing=roles.filter(r=>!registry.value[r.group]?.[chosen[r.key]!]);if(missing.length)error.value='配置缺少固定装置：'+missing.map(r=>r.label).join('、')}catch{error.value='读取装置失败，请检查后端服务。'}})
 </script>
 <style scoped>
+.experiment-name{display:flex;flex-direction:column;gap:8px;max-width:420px;margin-bottom:24px}
+
 .estimate strong{display:block;margin:16px 0 12px}.estimate .el-button{margin-bottom:12px}
 .guided{max-width:1400px;margin:auto;padding:12px 12px 104px;color:#243e58}header{display:flex;justify-content:space-between;align-items:center;gap:20px}h2{font-size:28px;margin:0}p{color:#667e94;line-height:1.7}nav{display:flex;gap:8px;margin:24px 0;flex-wrap:wrap}nav button{flex:1;min-width:115px;padding:14px 8px;border:1px solid #ccddeb;border-radius:10px;background:white;color:#526b83;cursor:pointer}nav b{flex-shrink:0;display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#e8f2fc;margin-right:10px}nav button:disabled{opacity:.45;cursor:not-allowed}nav .active{background:#edf7ff;border-color:#409eff;color:#1680d6}.layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:20px}section,aside{padding:24px;border:1px solid #dce7f1;border-radius:14px;background:#ffffffef}aside{align-self:start;position:sticky;top:90px}aside h3{margin:0 0 8px}aside p{font-size:13px;margin:12px 0}aside .el-button{width:100%}section h3{margin:0 0 10px}section>p{margin:8px 0 16px}header .el-button{flex-shrink:0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}label{display:flex;flex-direction:column;gap:8px;font-size:13px}small{color:#6d8499}input,select{min-width:0;max-width:100%;padding:10px;border:1px solid #c3d6e7;border-radius:7px;background:white;color:#243e58}.notice{margin-top:18px;padding:18px;background:#eef5fb;border-radius:10px;line-height:1.8}.axis{margin-top:18px;padding:20px;border:1px solid #dce7f1;border-radius:12px;background:#fbfdff}.axis-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.axis-heading strong{font-size:15px}.axis-heading span{font-size:12px;color:#73899d}.axis-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end}.axis-controls input,.axis-controls select{width:100%;box-sizing:border-box;height:42px}.axis-controls label{min-width:0}.axis-controls label:last-child:first-child{grid-column:span 2}.settings{margin-top:24px}.device-summary{margin-bottom:24px;font-size:13px}.estimate{margin-top:20px;padding:18px;background:#eaf5ff;border:1px solid #cbe4fa;border-radius:10px}.estimate p{margin:8px 0}.estimate small{line-height:1.7;display:block}.confirm-check{flex-direction:row;align-items:flex-start;line-height:1.6;margin:12px 0}.confirm-check input{flex-shrink:0;width:16px;height:16px;margin:3px 0 0;padding:0}.count{font-size:62px;color:#1688e8;font-weight:700}.count small{font-size:20px}.table{overflow:auto;max-height:450px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:12px;text-align:left;border-bottom:1px solid #dce7f1}th{background:#eff6fc}.selected{background:#e7f4ff}li{line-height:1.9;font-size:14px}pre{background:#172c40;color:#e0edf8;padding:16px;overflow:auto;max-height:350px}details{margin-top:20px}footer{position:fixed;z-index:20;left:50%;bottom:16px;transform:translateX(-50%);width:min(calc(100% - 32px),1400px);box-sizing:border-box;display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0;padding:12px 16px;border:1px solid #dce7f1;border-radius:14px;background:#fff;box-shadow:0 8px 28px rgba(41,83,121,.16)}footer .el-button{margin:0}@media(max-width:1000px){.layout{grid-template-columns:1fr}aside{position:static}}@media(max-width:760px){.axis-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.grid{grid-template-columns:1fr}nav,header{flex-wrap:wrap}nav button{min-width:130px}footer{bottom:8px;width:calc(100% - 16px);padding:8px;gap:8px}footer .el-button{flex:1;min-width:0;padding-left:8px;padding-right:8px}}
 

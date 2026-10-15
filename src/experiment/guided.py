@@ -7,12 +7,13 @@ import math
 import os
 import tempfile
 import uuid
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.experiment.editor import validate_source
 from src.experiment.engine import ExperimentEngine, ExperimentState
@@ -39,6 +40,18 @@ class GuidedInitialization(BaseModel):
 
 class GuidedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    experiment_name: str
+
+    @field_validator("experiment_name")
+    @classmethod
+    def check_name(cls, value):
+        if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in value):
+            raise ValueError("实验名称不能包含换行或控制字符")
+        value = value.strip()
+        if not 1 <= len(value) <= 80:
+            raise ValueError("实验名称须为 1–80 个字符")
+        return value
+
     # A/B temperatures, A/B volumes, reaction temperature, holding minutes.
     axes: list[list[float]] = Field(min_length=6, max_length=6)
     repeats: int = Field(default=1, ge=1, le=200)
@@ -55,11 +68,13 @@ class GuidedRequest(BaseModel):
     drain_direction: Literal["CW", "CCW"] = "CW"
     clean_direction: Literal["CW", "CCW"] = "CW"
     heating_timeout: float = Field(default=600, gt=0, le=7200)
+    precursor_timeout: float = Field(default=3600, gt=0, le=7200)
     cooling_timeout: float = Field(default=3600, gt=0, le=7200)
     syringe_timeout: float = Field(default=120, gt=0, le=3600)
     plumbing_confirmed: bool = False
     prime_volume_a: float = Field(default=2, gt=0, le=5)
     prime_volume_b: float = Field(default=2, gt=0, le=5)
+    prime_heat_minutes: float = Field(ge=0, le=1440)
     prime_cycles: int = Field(default=2, ge=1, le=10)
     prime_drain_seconds: float = Field(ge=0.1, le=9999)
     prime_drain_flow: float = Field(ge=0.01, le=9999)
@@ -75,6 +90,7 @@ class GuidedRequest(BaseModel):
 
     @model_validator(mode="after")
     def check_axes(self):
+        hold_seconds(self.prime_heat_minutes)
         count = self.repeats
         for index, values in enumerate(self.axes):
             if not values or len(values) > 200:
@@ -128,9 +144,10 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
     config = ConfigManager().load()
+    fields["priming_protocol"] = "heated_precursors_v2"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
-        config.pumps, config.microwaves) for device in group
-        if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1")]
+        config.pumps, config.microwaves, config.heaters) for device in group
+        if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2")]
     return hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
@@ -146,6 +163,16 @@ def priming_recipe(spec, batch_id):
         add(f"prime_initialize_{n}", "syringe_pump.initialize",
             dict(device_id=f"syringe_pump{n}", confirm=True, timeout=spec.syringe_timeout,
                  **initialization.model_dump()))
+    # Prime with the first group's heated precursors, retaining heat for formal feeding.
+    for n in (0, 1):
+        add(f"prime_heat_{n}_set", "heater.set_temperature",
+            dict(device_id=f"heater{n+1}", temperature=spec.axes[n][0]))
+        add(f"prime_heat_{n}_start", "heater.start", dict(device_id=f"heater{n+1}"))
+    add("prime_heat_duration", "wait", wait=dict(type="duration",
+        seconds=hold_seconds(spec.prime_heat_minutes)))
+    add("prime_heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
+        targets=[dict(device_id=f"heater{n+1}", target_temperature=spec.axes[n][0]) for n in (0, 1)],
+        tolerance=3, seconds=30, timeout=spec.precursor_timeout))
     for n, (volume, speed) in enumerate(((spec.prime_volume_a, spec.speed_a),
                                        (spec.prime_volume_b, spec.speed_b)), 1):
         for cycle in range(1, spec.prime_cycles+1):
@@ -164,8 +191,8 @@ def priming_recipe(spec, batch_id):
         direction=spec.drain_direction, repeat_count=1),
         dict(type="pump_complete", device_id="pump1", channel=4, timeout=seconds+60))
     add("prime_drain_stop", "pump.stop_channel", dict(device_id="pump1", channel=4))
-    return dict(name="批次前驱体预充（非正式样品）", steps=steps,
-                metadata=dict(batch_id=batch_id, run_kind="priming", condition_id="PRIMING",
+    return dict(name=f"{spec.experiment_name} · 预充", steps=steps,
+                metadata=dict(batch_id=batch_id, experiment_name=spec.experiment_name, run_kind="priming", condition_id="PRIMING",
                               notes="前驱体预充维护记录，非正式样品，不用于表征或 planner 反馈",
                               priming_signature=priming_signature(spec),
                               theoretical_volume_ml=(spec.prime_volume_a+spec.prime_volume_b)*spec.prime_cycles,
@@ -200,7 +227,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         add(f"heat_{n}_start", "heater.start", dict(device_id=did))
     add("heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
         targets=[dict(device_id=f"heater{n+1}", target_temperature=row[n]) for n in (0, 1)],
-        tolerance=3, seconds=30, timeout=spec.heating_timeout))
+        tolerance=3, seconds=30, timeout=spec.precursor_timeout))
     feeds = []
     for n, speed in enumerate((spec.speed_a, spec.speed_b)):
         feed = dict(device_id=f"syringe_pump{n+1}", volume=row[n+2], unit="mL",
@@ -234,8 +261,8 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         add(f"clean_{cycle}_dwell", "wait", wait=dict(type="duration", seconds=spec.clean_dwell))
         pump(f"clean_{cycle}_out", 4, spec.clean_volume, spec.drain_flow, spec.drain_direction,
              spec.clean_drain_seconds)
-    return dict(name=f"引导式实验 第{index+1}组", steps=steps, metadata=dict(
-        batch_id=batch_id, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
+    return dict(name=f"{spec.experiment_name} · 第 {index+1} 组", steps=steps, metadata=dict(
+        batch_id=batch_id, experiment_name=spec.experiment_name, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
         guided_parameters=row, product_port=spec.product_port,
         theoretical_product_volume_ml=row[2]+row[3],
         product_drain_seconds=spec.product_drain_seconds, clean_drain_seconds=spec.clean_drain_seconds,
@@ -314,7 +341,7 @@ class GuidedBatch:
         self.task = None
         self.persistence_failure = None
         self.priming_stop_pending = False
-        self.record = dict(batch_id=self.batch_id, state="idle", request=spec.model_dump(),
+        self.record = dict(batch_id=self.batch_id, experiment_name=spec.experiment_name, state="idle", request=spec.model_dump(),
             created_at=datetime.now(timezone.utc).isoformat(), current_group=0,
             total_groups=len(self.recipes), groups=[],
             error=None, persistence_status="ok", phase="priming", recovery_required=False,
@@ -340,6 +367,8 @@ class GuidedBatch:
 
     def save(self):
         self.record["state"] = self.state.value
+        if self.engine:
+            self.record["progress"] = self.snapshot()["progress"]
         self.record["pause_pending"] = bool(self.engine and self.engine.pause_pending)
         self.record["cleanup_required"] = bool((self.engine and self.engine.cleanup_pending)
             or self.executor._active_heaters or self.executor._active_microwaves
@@ -379,11 +408,20 @@ class GuidedBatch:
                 parts = p.step_id.split("_")
                 prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤45℃",
                     "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
+                    "prime_heat_duration": f"预充前加热脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
+                    "prime_heat_both_stable": "加热时间已到，等待两路目标 ±3℃ 并稳定 30 秒",
+                    **{f"prime_heat_{n}_{action}": f"预充前{verb}前驱体 {name}"
+                       for n, name in enumerate(("A", "B"))
+                       for action, verb in (("set", "设置温度："), ("start", "开始加热："))},
                     "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度 ≤45℃",
                     "prime_drain": "预充排废液", "prime_drain_stop": "停止预充排液"}
                 result["progress"]["step_label"] = prime_labels.get(p.step_id, label)
                 if p.step_id in ("prime_initialize_1", "prime_initialize_2"):
                     result["progress"]["device_id"] = "syringe_pump" + parts[2]
+                elif p.step_id in ("prime_heat_both_stable", "prime_heat_duration"):
+                    result["progress"]["device_id"] = "heater1 / heater2"
+                elif p.step_id.startswith("prime_heat_"):
+                    result["progress"]["device_id"] = f"heater{int(parts[2])+1}"
                 elif len(parts) == 4 and parts[1] in ("1", "2"):
                     result["progress"].update(device_id="syringe_pump"+parts[1], cycle=int(parts[2]),
                         step_label=f"注射泵{parts[1]} 第{parts[2]}次 " + ("吸取" if parts[3] == "aspirate" else "排出"))
@@ -400,7 +438,7 @@ class GuidedBatch:
         self.state = ExperimentState.RUNNING
         try:
             # Immutable recipe snapshot, separate from small mutable checkpoints.
-            atomic_record(dict(batch_id=self.batch_id, request=self.spec.model_dump(),
+            atomic_record(dict(batch_id=self.batch_id, experiment_name=self.spec.experiment_name, request=self.spec.model_dump(),
                                priming=self.priming, recipes=self.recipes), Path(self.directory or BATCH_DIR) / "plans")
         except Exception as exc:
             self.record["persistence_status"] = "error"
@@ -425,7 +463,8 @@ class GuidedBatch:
             if self.record["priming"]["status"] != "completed":
                 self.record["phase"] = "priming"
                 self.record["priming"]["status"] = "running"
-                self.engine = ExperimentEngine(self.executor, ExperimentLogger(save_log=True))
+                self.engine = ExperimentEngine(self.executor, ExperimentLogger(save_log=True),
+                                               keep_heaters_on_completion=True)
                 self.engine.load_steps(parse_experiment_data(self.priming)["steps"], self.priming["name"],
                     filename=self.batch_id+"_priming.yaml", metadata=self.priming["metadata"])
                 self.engine.on_progress(self.checkpoint)

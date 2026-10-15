@@ -19,12 +19,12 @@ from src.web.api import devices, valves, syringe_pumps
 
 
 def spec(**kwargs):
-    values = dict(axes=[[30], [30], [0.1], [0.2], [30], [0]],
+    values = dict(experiment_name="测试实验", axes=[[30], [30], [0.1], [0.2], [30], [0]],
         product_port="NO", drain_flow=1, product_drain_seconds=60, clean_drain_seconds=90,
         clean_volume=1, clean_flow=1,
         clean_dwell=0, clean_cycles=1, plumbing_confirmed=True, priming_confirmed=True,
         reactor_available_ml=20, source_available_a_ml=100, source_available_b_ml=100, waste_available_ml=500,
-        prime_drain_seconds=480, prime_drain_flow=1)
+        prime_drain_seconds=480, prime_drain_flow=1, prime_heat_minutes=0)
     values.update(initialization_a=dict(direction="Z", initialization_code=0),
                   initialization_b=dict(direction="Z", initialization_code=0), initialization_confirmed=True)
     return guided.GuidedRequest(**{**values, **kwargs})
@@ -246,7 +246,11 @@ class GuidedTests(unittest.TestCase):
         self.assertEqual(product["params"]["flow_rate"], 3)
         self.assertEqual(data["metadata"]["theoretical_volume_ml"], 10.5)
         self.assertEqual(data["metadata"]["waste_port"], "NC")
-        self.assertFalse(any(s["type"] in ("heater.start", "microwave.start") for s in data["steps"]))
+        self.assertFalse(any(s["type"] == "microwave.start" for s in data["steps"]))
+        ids = [s["id"] for s in data["steps"]]
+        self.assertLess(ids.index("prime_initialize_2"), ids.index("prime_heat_0_set"))
+        self.assertLess(ids.index("prime_heat_both_stable"), ids.index("prime_1_1_aspirate"))
+        self.assertLess(ids.index("prime_recheck_temperature"), ids.index("prime_drain"))
         for changes in (dict(reactor_available_ml=7), dict(source_available_a_ml=3),
                         dict(waste_available_ml=8), dict(prime_cycles=0), dict(prime_drain_seconds=0), dict(prime_drain_flow=0),
                         dict(prime_drain_seconds=10000), dict(prime_drain_flow=float("inf"))):
@@ -254,6 +258,41 @@ class GuidedTests(unittest.TestCase):
                 spec(**changes)
         with self.assertRaises(ValueError):
             guided.compile_plan(spec(prime_volume_a=3))
+
+    def test_heated_priming_targets_first_group_and_versioned_signature(self):
+        request = spec(axes=[[40, 50], [35], [0.1], [0.1], [30], [0]])
+        import hashlib
+        import json
+        with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
+            current = guided.priming_signature(request)
+        fields = json.loads(digest.call_args.args[0])
+        self.assertEqual(fields.pop("priming_protocol"), "heated_precursors_v2")
+        self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
+        fields["devices"] = [d for d in fields["devices"] if d["device_id"] not in ("heater1", "heater2")]
+        legacy = hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        self.assertNotEqual(current, legacy)
+        data = guided.priming_recipe(request, "heated")
+        wait = next(s["wait"] for s in data["steps"] if s["id"] == "prime_heat_both_stable")
+        self.assertEqual([t["target_temperature"] for t in wait["targets"]], [40, 35])
+        self.assertEqual((wait["tolerance"], wait["seconds"], wait["timeout"]), (3, 30, request.precursor_timeout))
+        formal = guided.recipe(request.rows()[0], request, "heated", 0)["steps"]
+        self.assertLess([s["id"] for s in formal].index("heat_both_stable"),
+                        [s["id"] for s in formal].index("aspirate_0"))
+
+    def test_priming_stability_failure_never_aspirates_and_stops_heaters(self):
+        async def scenario():
+            dm = FakeManager()
+            batch = guided.GuidedBatch(dm, spec())
+            with patch("src.experiment.executor.StepExecutor._wait_heater_pair_stable", new=AsyncMock(return_value=False)):
+                await batch.start()
+                await batch.task
+            self.assertEqual(batch.state.value, "failed")
+            self.assertTrue(batch.record["recovery_required"])
+            self.assertFalse(any(c[0] in ("aspirate", "dispense", "microwave_start") for c in dm.calls))
+            for did in ("heater1", "heater2"):
+                self.assertIn(("heater_stop", did), dm.calls)
+            self.assertFalse(batch.executor._active_heaters)
+        asyncio.run(scenario())
 
     def test_prime_then_explicit_start_and_signature(self):
         async def scenario():
@@ -265,7 +304,9 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(batch.record["priming"]["completed_cycles"], [2, 2])
             self.assertTrue(batch.cleanup_pending)
             self.assertEqual(batch.record["groups"], [])
-            self.assertFalse(any(c[0] in ("heat", "microwave_start") for c in dm.calls))
+            self.assertFalse(any(c[0] == "microwave_start" for c in dm.calls))
+            self.assertEqual(batch.executor._active_heaters, {"heater1", "heater2"})
+            self.assertFalse(any(c[0] == "heater_stop" for c in dm.calls))
             prime_calls = [c for c in dm.calls if c[0] in ("aspirate", "dispense")]
             self.assertEqual(prime_calls, [(action, did) for did in ("syringe_pump1", "syringe_pump2")
                                           for _ in range(2) for action in ("aspirate", "dispense")])
@@ -334,7 +375,8 @@ class GuidedTests(unittest.TestCase):
             self.assertIn(("pump_stop", 4), dm.calls)
             with self.assertRaises(ValueError):
                 await batch.begin_experiments(spec())
-            self.assertFalse(any(c[0] in ("heat", "microwave_start", "pump_start") for c in dm.calls))
+            self.assertFalse(any(c[0] in ("microwave_start", "pump_start") for c in dm.calls))
+            self.assertFalse(batch.executor._active_heaters)
         asyncio.run(scenario())
 
     def test_priming_valve_and_drain_failures_never_enter_experiments(self):
@@ -347,7 +389,9 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(batch.record["priming"]["status"], "failed")
             self.assertTrue(batch.record["recovery_required"])
             self.assertEqual(batch.record["groups"], [])
-            self.assertFalse(any(c[0] in ("heat", "microwave_start") for c in dm.calls))
+            self.assertFalse(any(c[0] == "microwave_start" for c in dm.calls))
+            self.assertFalse(batch.executor._active_heaters)
+            self.assertTrue(all(("heater_stop", did) in dm.calls for did in ("heater1", "heater2")))
             self.assertIn(("syringe_stop", "syringe_pump1"), dm.calls)
             self.assertIn(("syringe_stop", "syringe_pump2"), dm.calls)
             self.assertIn(("pump_stop", 4), dm.calls)
@@ -484,8 +528,16 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(client.post("/api/guided/prime", json=spec().model_dump()).status_code, 409)
             path = f"/api/guided/{bid}/acknowledge-interrupted"
             self.assertEqual(client.post(path, json={"devices_stopped_confirmed": False}).status_code, 409)
+            failure = record["error"]
+            elapsed = record["progress"]["elapsed"]
+            time.sleep(0.02)
+            self.assertEqual(client.get(f"/api/guided/{bid}").json()["progress"]["elapsed"], elapsed)
             self.assertEqual(client.post(path, json={"devices_stopped_confirmed": True}).status_code, 200)
             self.assertFalse(client.get(f"/api/guided/{bid}").json()["recovery_required"])
+            saved = api.read_record(bid)
+            self.assertEqual(saved["error"], failure)
+            self.assertEqual(saved["progress"]["elapsed"], elapsed)
+            self.assertEqual(saved["state"], "failed")
             self.assertEqual(client.post("/api/guided/start", json=spec(priming_batch_id=bid).model_dump()).status_code, 409)
 
     def test_two_groups_complete_without_bottle_confirmation(self):
@@ -543,7 +595,7 @@ class GuidedTests(unittest.TestCase):
             self.assertIn(("syringe_stop", "syringe_pump2"), dm.calls)
             self.assertFalse(any(c[0] == "microwave_start" for c in dm.calls))
             self.assertFalse(batch.executor._active_heaters)
-            self.assertFalse(any(c[0] == "heat" for c in dm.calls))
+            self.assertTrue(all(("heater_stop", did) in dm.calls for did in ("heater1", "heater2")))
         asyncio.run(scenario())
 
     def test_failed_plan_persistence_dispatches_nothing(self):
@@ -660,11 +712,25 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(result["state"], "completed", result.get("error"))
             self.assertEqual(result["priming"]["status"], "completed")
             self.assertEqual(len(result["groups"]), 2)
+            self.assertEqual(result["experiment_name"], "测试实验")
+            saved = client.get(f"/api/guided/{bid}/plan").json()
+            self.assertEqual(saved["experiment_name"], "测试实验")
+            self.assertEqual(saved["recipes"][0]["name"], "测试实验 · 第 1 组")
+            from src.experiment.experiment_logger import list_experiment_runs, get_experiment_run
+            runs = list_experiment_runs()
+            expected = {"测试实验 · 预充", "测试实验 · 第 1 组", "测试实验 · 第 2 组"}
+            self.assertEqual({r["experiment_name"] for r in runs}, expected)
+            for entry in runs:
+                run = get_experiment_run(entry["run_id"])
+                self.assertEqual(run["metadata"]["experiment_name"], "测试实验")
+                self.assertEqual(run["metadata"]["batch_id"], bid)
+                self.assertTrue(run["metadata"]["sample_id"])
+
             self.assertEqual(dm.calls.count(("initialize", "syringe_pump1")), 1)
             self.assertEqual(dm.calls.count(("initialize", "syringe_pump2")), 1)
             self.assertEqual(dm.calls.count(("aspirate", "syringe_pump1")), 4)
             prime_drain = dm.calls.index(("pump_start", 4))
-            self.assertLess(prime_drain, dm.calls.index(("heat", "heater1")))
+            self.assertLess(dm.calls.index(("heat", "heater1")), prime_drain)
             calls = list(dm.calls)
             client.get("/api/guided/current")
             client.get(f"/api/guided/{bid}")
