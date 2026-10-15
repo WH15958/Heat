@@ -901,6 +901,12 @@ class StepExecutor:
                     data = await loop.run_in_executor(
                         None, self._dm.read_heater_data, condition.device_id
                     )
+                    if self._should_stop():
+                        return False
+                    if self._is_paused():
+                        continue
+                    if self._wait_clock() - start_time > condition.timeout:
+                        return False
                     pv = data["pv"]
                     sv = data["sv"]
                     if abs(pv - sv) <= condition.tolerance:
@@ -1008,6 +1014,12 @@ class StepExecutor:
                     if data.get("fault_code"):
                         self._last_error = f"Microwave fault: {data['fault_code']}"
                         return False
+                    if self._should_stop():
+                        return False
+                    if self._is_paused():
+                        continue
+                    if self._wait_clock() - start_time > condition.timeout:
+                        return False
                     if self._microwave_completion_confirmed(data):
                         logger.info(f"Microwave {condition.device_id} completed")
                         return True
@@ -1058,6 +1070,12 @@ class StepExecutor:
                     status = await loop.run_in_executor(
                         None, self._dm.read_pump_status, condition.device_id
                     )
+                    if self._should_stop():
+                        return False
+                    if self._is_paused():
+                        continue
+                    if self._wait_clock() - start_time > condition.timeout:
+                        return False
                     ch_data = status["channels"].get(str(condition.channel))
                     self.activity.device(condition.device_id, ch_data or {"read_ok": False})
                     if not ch_data or ch_data.get("read_ok") is not True:

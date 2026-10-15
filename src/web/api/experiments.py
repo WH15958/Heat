@@ -1,11 +1,13 @@
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from src.experiment.parser import parse_experiment, parse_experiment_content, list_experiments, _validate_filename
 from src.experiment import parser as experiment_parser
-from src.experiment.engine import ExperimentEngine
+from src.experiment.yaml_recovery import PersistentExperimentEngine as ExperimentEngine
+from src.experiment import yaml_recovery
 from src.experiment.editor import read_source, write_source, validate_source, source_path, SourceConflict
 from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger, list_experiment_runs, get_experiment_run, delete_experiment_run, delete_all_experiment_runs
@@ -82,6 +84,55 @@ class StartExperimentRequest(BaseModel):
 class SourceRequest(BaseModel):
     content: str = Field(max_length=1_000_000)
     revision: str | None = None
+
+
+def recovery_records():
+    try:
+        return yaml_recovery.records(_engines)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(503, '普通实验恢复记录不可读，请检查存储，禁止启动') from exc
+
+
+def require_yaml_recovered():
+    if any(r['recovery_required'] or r['cleanup_required'] for r in recovery_records()):
+        raise HTTPException(409, '普通实验占用或中断锁定，请在实验页面确认设备停止并解除锁定')
+
+
+class YamlRecoveryConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    devices_stopped_confirmed: bool
+
+
+@router.get('/recovery/pending')
+async def pending_recovery():
+    return [r for r in recovery_records() if r['recovery_required']]
+
+
+@router.post('/recovery/{recovery_id}/acknowledge')
+async def acknowledge_recovery(recovery_id: str, body: YamlRecoveryConfirmation):
+    async with _source_lock:
+        record = next((r for r in recovery_records() if r['recovery_id'] == recovery_id), None)
+        if not record or not record['recovery_required'] or not body.devices_stopped_confirmed:
+            raise HTTPException(409, '仅在现场确认设备已停止后解除中断锁定')
+        live = next((e for e in _engines.values() if isinstance(e, ExperimentEngine)
+                     and e.record and e.record['recovery_id'] == recovery_id), None)
+        if live:
+            if live._task and not live._task.done():
+                raise HTTPException(409, '请先停止仍在执行的实验')
+            if not await live.stop() and live._cleanup_result is not True:
+                raise HTTPException(409, '设备停止未确认，不能解除锁定')
+            record = dict(live.record)
+        record.update(recovery_required=False, cleanup_required=False, persistence_status='ok',
+                      state='stopped', acknowledged_at=datetime.now(timezone.utc).isoformat(),
+                      error='人工确认停止，未恢复或重放实验')
+        try:
+            yaml_recovery.write_record(record)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(503, '恢复确认无法保存，保留锁定') from exc
+        if live:
+            live.record.update(record)
+            _cleanup_engine(record['filename'], live)
+        return {'success': True}
 
 
 @router.post('/validate')
@@ -164,6 +215,7 @@ async def start_experiment(filename: str, body: StartExperimentRequest, request:
 
 
 async def _start_experiment_locked(filename: str, body: StartExperimentRequest, request: Request):
+    require_yaml_recovered()
     from src.web.api.microwave_program import require_recovered
     require_recovered()
     from src.web.api.guided import records
@@ -249,6 +301,7 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
     exp_logger.on_log(on_log_event)
 
     engine = ExperimentEngine(executor, exp_logger=exp_logger)
+    engine.record = yaml_recovery.new_record(filename, source_content)
     engine.load_steps(data["steps"], name=data["name"], filename=filename, metadata=data.get("metadata", {}))
 
     def on_progress(progress):
@@ -276,7 +329,6 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
     try:
         await engine.start()
     except Exception as e:
-        _cleanup_engine(filename, engine)
         logger.error(f"Failed to start experiment {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start experiment: {e}")
     return {

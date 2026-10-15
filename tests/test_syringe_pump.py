@@ -73,9 +73,9 @@ def test_bad_responses_never_retry(mode, response):
     assert len(wire.writes) == 1
 
 
-def test_oem_sequence_rotates_without_repeat_bit():
+def test_oem_sequence_is_fixed_as_documented_on_manual_page_20():
     p = SyringeProtocol(Wire(b""))
-    assert [p.frame("Q")[2] for _ in range(9)] == [49, 50, 51, 52, 53, 54, 55, 49, 50]
+    assert [p.frame("Q")[2] for _ in range(9)] == [49] * 9
 
 
 @pytest.mark.parametrize("program", ["gP1G0", "gP1", "P3001", "D1", "BP1",

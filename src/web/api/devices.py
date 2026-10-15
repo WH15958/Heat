@@ -13,13 +13,11 @@ from src.experiment.parameter_models import (
 )
 
 async def protect_guided_devices(request: Request):
-    # Serialize manual writes with batch registration. Reads never take this lock.
+    # Serialize manual writes with experiment registration. Reads never take this lock.
     if request.method not in ("POST", "PUT", "DELETE") or request.url.path.endswith("/emergency_stop"):
         yield
         return
     from src.web.api.experiments import _engines, _source_lock, control_generation, check_control_generation
-    from src.experiment.guided import GuidedBatch
-    from src.experiment.microwave_program import MicrowaveProgramRun
     generation = control_generation()
     async with _source_lock:
         check_control_generation(generation)
@@ -27,15 +25,17 @@ async def protect_guided_devices(request: Request):
         if request.url.path.endswith("/command"):
             is_stop = (await request.json()).get("action") == "stop"
         check_control_generation(generation)
-        batches = [b for b in _engines.values() if isinstance(b, (GuidedBatch, MicrowaveProgramRun))
-                   and (b.state.value in ("running", "paused") or b.cleanup_pending)]
+        batches = [b for b in _engines.values()
+                   if b.state.value in ("running", "paused") or b.cleanup_pending]
         if batches:
             if is_stop:
                 for batch in batches:
                     batch.request_stop()
             else:
-                raise HTTPException(409, "批次或微波托管程序占用装置；请先停止再手动操作")
+                raise HTTPException(409, "实验、批次或微波托管程序占用装置；请先停止并确认清理完成再手动操作")
         if not is_stop and not request.url.path.endswith(("/connect", "/disconnect", "/refresh_bindings")):
+            from src.web.api.experiments import require_yaml_recovered
+            require_yaml_recovered()
             from src.web.api.microwave_program import require_recovered
             require_recovered()
         yield

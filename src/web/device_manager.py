@@ -913,6 +913,8 @@ class DeviceManager:
             heaters[did] = self._binding_enriched_payload({
                 "connected": h.is_connected(),
                 "status": h.status.name,
+                "min_temperature": h.config.min_temperature,
+                "max_temperature": min(h.config.max_temperature, h.config.safety_limit),
             }, self._heater_bindings.get(did), h.config.connection_params.get("port"))
         pumps = {}
         for did, p in self._pumps.items():

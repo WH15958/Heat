@@ -150,7 +150,8 @@
             <div ref="reportFlowChartRef" style="width: 100%; height: 320px"></div>
           </el-card>
           <el-card shadow="never" v-if="hasPumpData">
-            <template #header><span>累计体积曲线</span></template>
+            <template #header><span>估算累计体积曲线</span></template>
+            <p>由有效运行采样估算，并非实测液量。未知区间后不再累计；RPM、未知或混合单位不估算体积。</p>
             <div ref="reportVolumeChartRef" style="width: 100%; height: 320px"></div>
           </el-card>
         </div>
@@ -272,7 +273,7 @@ const FLOW_UNIT_LABELS: Record<string, string> = {
 }
 
 function flowUnitLabel(unit: string | undefined): string {
-  return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
+  return FLOW_UNIT_LABELS[unit || ''] || '单位未知/混合'
 }
 
 const VOLUME_UNIT_MAP: Record<string, string> = {
@@ -283,7 +284,7 @@ const VOLUME_UNIT_MAP: Record<string, string> = {
 }
 
 function volumeUnitLabel(flowUnit: string | undefined): string {
-  return VOLUME_UNIT_MAP[flowUnit || 'ML_MIN'] || 'mL'
+  return VOLUME_UNIT_MAP[flowUnit || ''] || ''
 }
 
 function flowYAxisName(sd: SensorData): string {
@@ -301,12 +302,16 @@ function flowYAxisName(sd: SensorData): string {
 
 function effectivePumpFlow(chdata: ChannelSensorData): TimePoint[] {
   return (chdata.flow_rate || []).map((point, index) => {
-    const readOk = chdata.read_ok?.[index]?.v
-    const running = chdata.running?.[index]?.v
-    if (readOk === false || running === false || running === null) {
+    const readOk = chdata.read_ok?.[index]
+    const running = chdata.running?.[index]
+    if (readOk?.v !== true || readOk.t !== point.t || running?.t !== point.t
+      || typeof running.v !== 'boolean' || !FLOW_UNIT_LABELS[chdata.flow_unit || '']) {
+      return { t: point.t, v: null }
+    }
+    if (running.v === false) {
       return { t: point.t, v: 0 }
     }
-    return point
+    return { t: point.t, v: Number.isFinite(point.v) ? point.v : null }
   })
 }
 
@@ -319,9 +324,9 @@ function volumeYAxisName(sd: SensorData): string {
   }
   if (units.size === 1) {
     const vu = volumeUnitLabel([...units][0])
-    return vu ? `累计体积(${vu})` : '累计体积'
+    return vu ? `估算累计体积(${vu})` : '估算累计体积（单位不支持）'
   }
-  return '累计体积'
+  return '估算累计体积'
 }
 
 const hasSensorData = computed(() => {
@@ -532,7 +537,7 @@ function renderReportCharts() {
           const t = params[0]?.data?.[0]
           let s = `时间: ${t}s<br/>`
           for (const p of params) {
-            s += `${p.seriesName}: ${p.data[1]?.toFixed(2)}<br/>`
+            s += `${p.seriesName}: ${p.data[1]?.toFixed(2) ?? '未知'}<br/>`
           }
           return s
         }},
@@ -558,18 +563,21 @@ function renderReportCharts() {
             legend.push(name)
             const colorIdx = (parseInt(chid) - 1) % colors.length
             channelVolumeUnits[name] = volumeUnitLabel(chdata.flow_unit)
-            const cumulative: [number, number][] = []
+            const cumulative: [number, number | null][] = []
             let vol = 0.0
+            let known = !!channelVolumeUnits[name]
             const flowPoints = effectivePumpFlow(chdata)
             for (let i = 0; i < flowPoints.length; i++) {
               const cur = flowPoints[i]
-              if (i > 0) {
+              known = known && cur.v !== null && Number.isFinite(cur.t)
+              if (i > 0 && known) {
                 const prev = flowPoints[i - 1]
                 const dt = (cur.t - prev.t) / 60.0
-                const avgRate = (Number(prev.v ?? 0) + Number(cur.v ?? 0)) / 2.0
+                known = dt >= 0
+                const avgRate = (prev.v! + cur.v!) / 2.0
                 vol += avgRate * dt
               }
-              cumulative.push([cur.t, parseFloat(vol.toFixed(4))])
+              cumulative.push([cur.t, known ? parseFloat(vol.toFixed(4)) : null])
             }
             series.push({
               name,
@@ -589,9 +597,9 @@ function renderReportCharts() {
           const t = params[0]?.data?.[0]
           let s = `时间: ${t}s<br/>`
           for (const p of params) {
-            const vu = channelVolumeUnits[p.seriesName] || 'mL'
+            const vu = channelVolumeUnits[p.seriesName] || ''
             const unitStr = vu ? ` ${vu}` : ''
-            s += `${p.seriesName}: ${p.data[1]?.toFixed(2)}${unitStr}<br/>`
+            s += `${p.seriesName}: ${p.data[1]?.toFixed(2) ?? '未知'}${unitStr}<br/>`
           }
           return s
         }},

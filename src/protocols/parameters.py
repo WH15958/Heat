@@ -216,19 +216,19 @@ PARAMETER_DEFINITIONS: Dict[int, ParameterDefinition] = {
         decimal_places=1, read_only=True
     ),
     ParameterCode.SV_READ: ParameterDefinition(
-        code=76, name="SV", description="实时给定值(只读)", 
+        code=75, name="SV", description="实时给定值(只读)",
         decimal_places=1, read_only=True
     ),
     ParameterCode.MV_ALARM: ParameterDefinition(
-        code=77, name="MV+Alarm", description="输出值+报警状态",
+        code=76, name="MV+Alarm", description="输出值+报警状态",
         decimal_places=0, read_only=True
     ),
     ParameterCode.OUTPUT_STATUS: ParameterDefinition(
-        code=78, name="Status", description="输出端口状态+工作状态",
+        code=77, name="Status", description="输出端口状态+工作状态",
         decimal_places=0, read_only=True
     ),
     ParameterCode.ROOM_TEMP: ParameterDefinition(
-        code=79, name="RoomTemp", description="室温补偿(只读)", 
+        code=78, name="RoomTemp", description="室温补偿(只读)",
         decimal_places=1, read_only=True
     ),
 }

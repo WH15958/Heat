@@ -26,7 +26,7 @@
 
 ## 命令、参数、返回与入口对应
 
-所有命令都通过帧层处理状态字；只使用 Q 的 busy/ready 位判定忙闲。OEM 为 STX、地址、序列号、命令、ETX、XOR；返回地址为主机 `0`，不要求回显泵地址。DT 为 `/地址命令\r`，返回 `/0<状态><数据>\x03\r\n`。读写有界超时、分包接收、错误地址/校验/状态拒绝，不自动重发运动。
+所有命令都通过帧层处理状态字；只使用 Q 的 busy/ready 位判定忙闲。OEM 为 STX、地址、固定序号 ASCII `1`（`0x31`）、命令、ETX、XOR；原件印刷第20页明确规定序号为定值，不循环计数。返回地址为主机 `0`，不要求回显泵地址。DT 为 `/地址命令\r`，返回 `/0<状态><数据>\x03\r\n`。读写有界超时、分包接收、错误地址/校验/状态拒绝，不自动重发运动。
 
 初始化命令已接受后，仅 `initialize` 动作为 `accepted/running`、Q 为 busy 且错误码为 7 时允许继续等待。驱动与实验等待/暂停健康检查共用此判定；原始 `fault_code=7`、`initialized=false` 和位置未确认状态保留，不冒充初始化成功。Q 空闲且无故障后仍须核对零位、方向对应阀位及缓冲完成，才建立可信位置；其他动作的代码 7、空闲时的代码 7、其他故障、读取失败、停止及超时均不适用该例外，不自动重发初始化。手动入口由现有上层监督器执行超时停止，引导式复用实验等待及失败清理。软件回归覆盖两种入口，真实归零、故障和停止行为仍须现场验收。
 
@@ -34,7 +34,7 @@
 
 | 手册命令 / 页 | 范围与返回 | 功能入口 | 对应测试 |
 | --- | --- | --- | --- |
-| OEM / DT，串口协议章 | 拨盘0..14；OEM序列1..7及XOR；DT帧尾 | 配置 protocol，帧层 | framing_and_fragmented_reply、bad_responses_never_retry、oem_sequence_rotates_without_repeat_bit |
+| OEM / DT，19–22 | 拨盘0..14；OEM序号固定ASCII 1及XOR；DT帧尾 | 配置 protocol，帧层 | framing_and_fragmented_reply、bad_responses_never_retry、oem_sequence_is_fixed_as_documented_on_manual_page_20、test_syringe_oem_sequence_is_fixed_per_manual_page_20 |
 | Z/Y，31–32 | 代码0/1/2或10..40；状态应答后等待Q、零位及阀位 | initialize，基础控制；YAML同名 | unknown_mode_blocks_motion_and_init_establishes_it、faults_block_motion |
 | A/P/D，32–33 | 额定行程0..3000/48000/24000；正数步；应答≠完成 | move / aspirate / dispense；程序A/P/D | aspirate_and_dispense_verify_target、stroke_and_resolution_limits、actual_position_mismatch_fails |
 | I/O/B，33–34 | Y3不带参数；Z下阀位4/0/8，Y下0/4/8 | valve；程序编辑 | bounded_nested_program、invalid_programs |

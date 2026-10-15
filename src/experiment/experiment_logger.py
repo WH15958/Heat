@@ -95,7 +95,7 @@ class ExperimentLogger:
         self._on_log = callback
 
     def record_sensor_data(self, realtime_payload: dict):
-        if not self._active_run or not realtime_payload:
+        if not self._active_run or realtime_payload is None:
             return
         elapsed = 0.0
         if self._active_run.started_at:
@@ -139,36 +139,40 @@ class ExperimentLogger:
                 {"t": point["t"], "v": hdata.get("sv")}
             )
             heaters_recorded += 1
-        for pid, pdata in (realtime_payload.get("pumps") or {}).items():
-            if pdata.get("error") or not pdata.get("channels"):
-                continue
+        pump_payload = realtime_payload.get("pumps") or {}
+        for pid in dict.fromkeys([*self._active_run.sensor_data["pumps"], *pump_payload]):
+            pdata = pump_payload.get(pid) or {}
             if pid not in self._active_run.sensor_data["pumps"]:
                 self._active_run.sensor_data["pumps"][pid] = {}
-            for chid, chdata in pdata["channels"].items():
+            channels = {} if pdata.get("error") else (pdata.get("channels") or {})
+            for chid in dict.fromkeys([*self._active_run.sensor_data["pumps"][pid], *channels]):
+                chdata = channels.get(chid) or {}
                 if chid not in self._active_run.sensor_data["pumps"][pid]:
                     self._active_run.sensor_data["pumps"][pid][chid] = {
                         "flow_rate": [],
                         "volume": [],
                         "running": [],
                         "read_ok": [],
-                        "flow_unit": chdata.get("flow_unit", "ML_MIN"),
+                        "flow_unit": chdata.get("flow_unit") or "UNKNOWN",
                     }
                 channel_series = self._active_run.sensor_data["pumps"][pid][chid]
-                read_ok = chdata.get("read_ok") is not False
+                read_ok = chdata.get("read_ok") is True
+                if read_ok and channel_series["flow_unit"] != (chdata.get("flow_unit") or "UNKNOWN"):
+                    channel_series["flow_unit"] = "MIXED"
                 channel_series.setdefault("running", []).append({
                     "t": point["t"],
-                    "v": bool(chdata.get("running")) if read_ok else None,
+                    "v": chdata.get("running") if read_ok and type(chdata.get("running")) is bool else None,
                 })
                 channel_series.setdefault("read_ok", []).append({
                     "t": point["t"], "v": read_ok,
                 })
                 channel_series["flow_rate"].append({
                     "t": point["t"],
-                    "v": chdata.get("flow_rate", 0) if read_ok else None,
+                    "v": chdata.get("flow_rate") if read_ok else None,
                 })
                 channel_series["volume"].append({
                     "t": point["t"],
-                    "v": chdata.get("volume", 0) if read_ok else None,
+                    "v": chdata.get("volume") if read_ok else None,
                 })
                 pumps_recorded += 1
         for mid, mdata in (realtime_payload.get("microwaves") or {}).items():

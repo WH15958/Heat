@@ -162,7 +162,7 @@ async function connectAll() {
 
 const STORAGE_KEY = 'heat_control_params'
 
-const { data: realtimeData, connected: wsConnected } = useWebSocket()
+const { data: realtimeData, fresh: wsConnected } = useWebSocket()
 watch(realtimeData, payload => {
   for (const [id, state] of Object.entries(payload?.valves || {})) {
     if (valves[id]) valves[id] = { ...valves[id], ...state }
@@ -218,6 +218,8 @@ interface HeaterDeviceState {
   bindingResolved?: boolean
   bindingError?: string | null
   targetTemp: number
+  minTemperature?: number
+  maxTemperature?: number
   starting: boolean
   stopping: boolean
 }
@@ -297,6 +299,7 @@ watch(controlDevices, items => {
 })
 
 function channelStatus(pumpId: string, ch: number) {
+  if (!wsConnected.value) return null
   const pumpData = realtimeData.value?.pumps?.[pumpId]
   if (!pumpData || pumpData.error) return null
   return pumpData.channels?.[String(ch)] || null
@@ -498,6 +501,8 @@ function applyDeviceData(data: any) {
     devices.heaters[id].bindingLabel = (info as any).binding_label
     devices.heaters[id].bindingResolved = (info as any).binding_resolved !== false
     devices.heaters[id].bindingError = (info as any).binding_error ?? null
+    devices.heaters[id].minTemperature = (info as any).min_temperature
+    devices.heaters[id].maxTemperature = (info as any).max_temperature
   }
   for (const [id, info] of Object.entries(data.pumps || {})) {
     const isNewPump = !devices.pumps[id]
@@ -602,7 +607,7 @@ onMounted(async () => {
   await refreshMicrowavePrograms()
   programTimer = setInterval(() => { void refreshMicrowavePrograms() }, 1000)
 })
-onUnmounted(() => { connectionBatch.cancel(); if (programTimer) clearInterval(programTimer) })
+onUnmounted(() => { connectionBatch.cancel(); cancelPumpStarts(); if (programTimer) clearInterval(programTimer) })
 
 function heaterConnectionPort(id: string): string {
   return realtimeData.value?.heaters?.[id]?.connection_port ?? devices.heaters[id]?.connectionPort ?? '--'
@@ -659,8 +664,7 @@ function flowUnitLabel(unit: number): string {
   return FLOW_UNITS.find(item => item.value === unit)?.label || '未知单位'
 }
 
-async function confirmPumpStart(pumpId: string, channel: number, effectiveFlowRate: number): Promise<boolean> {
-  const ch = devices.pumps[pumpId].channels[channel]
+async function confirmPumpStart(pumpId: string, channel: number, effectiveFlowRate: number, ch: ChannelConfig): Promise<boolean> {
   const effectiveFlowUnit = ch.mode === 'TIME_QUANTITY' ? 1 : ch.flowUnit
   try {
     await ElMessageBox.confirm(
@@ -733,6 +737,14 @@ async function disconnectHeater(id: string) {
 async function setTemp(id: string, temp: number) {
   const heater = devices.heaters[id]
   if (!ensureConnected(heater.connected, '加热器 ' + id, heaterConnectionPort(id))) return
+  if (!Number.isFinite(heater.minTemperature) || !Number.isFinite(heater.maxTemperature)) {
+    ElMessage.error('温度范围未确认，请刷新设备状态')
+    return
+  }
+  if (!Number.isFinite(temp) || temp < heater.minTemperature! || temp > heater.maxTemperature!) {
+    ElMessage.error(`目标温度须在 ${heater.minTemperature}–${heater.maxTemperature}°C 范围内`)
+    return
+  }
   if (!await confirmHeaterOperation(id, '设置目标温度', '目标温度：' + temp + '°C。')) return
   try {
     const res = await devicesApi.setTemperature(id, temp)
@@ -807,6 +819,7 @@ async function connectPump(id: string) {
 }
 
 async function disconnectPump(id: string) {
+  cancelPumpStarts(id)
   devices.pumps[id].loading = true
   try {
     const res = await devicesApi.disconnectPump(id)
@@ -823,10 +836,20 @@ async function disconnectPump(id: string) {
   }
 }
 
+const pendingPumpStarts = new Map<string, symbol>()
+
+function cancelPumpStarts(pumpId?: string) {
+  for (const key of pendingPumpStarts.keys()) {
+    if (!pumpId || key.startsWith(pumpId + ':')) pendingPumpStarts.delete(key)
+  }
+}
+
 async function startPumpChannel(pumpId: string, channel: number) {
   const pump = devices.pumps[pumpId]
   if (!ensureConnected(pump.connected, '蠕动泵 ' + pumpId, pumpConnectionPort(pumpId))) return
-  const ch = devices.pumps[pumpId].channels[channel]
+  const channelState = devices.pumps[pumpId].channels[channel]
+  if (channelState.starting || channelState.stopping || pump.stoppingAll || pump.loading) return
+  const ch = { ...channelState }
 
   if (ch.mode !== 'FLOW_MODE') {
     if (ch.repeatCount < 0 || ch.repeatCount > 9999) {
@@ -844,9 +867,13 @@ async function startPumpChannel(pumpId: string, channel: number) {
   }
 
   const effectiveFlowRate = ch.mode === 'TIME_QUANTITY' ? calcFlowRate(ch) : ch.flowRate
-  if (!await confirmPumpStart(pumpId, channel, effectiveFlowRate)) return
-  ch.starting = true
+  const key = `${pumpId}:${channel}`
+  const token = Symbol()
+  pendingPumpStarts.set(key, token)
+  channelState.starting = true
   try {
+    if (!await confirmPumpStart(pumpId, channel, effectiveFlowRate, ch)) return
+    if (pendingPumpStarts.get(key) !== token || !pump.connected) return
     const res = await devicesApi.startPump(
       pumpId,
       channel,
@@ -873,11 +900,13 @@ async function startPumpChannel(pumpId: string, channel: number) {
   } catch (e: any) {
     ElMessage.error(`通道 ${channel} 启动失败: ${e.response?.data?.detail || e.message}`)
   } finally {
-    ch.starting = false
+    pendingPumpStarts.delete(key)
+    channelState.starting = false
   }
 }
 
 async function stopPumpChannel(pumpId: string, channel: number) {
+  pendingPumpStarts.delete(`${pumpId}:${channel}`)
   const pump = devices.pumps[pumpId]
   if (!ensureConnected(pump.connected, '蠕动泵 ' + pumpId, pumpConnectionPort(pumpId))) return
   const ch = devices.pumps[pumpId].channels[channel]
@@ -897,6 +926,7 @@ async function stopPumpChannel(pumpId: string, channel: number) {
 }
 
 async function stopPumpAll(pumpId: string) {
+  cancelPumpStarts(pumpId)
   const pump = devices.pumps[pumpId]
   if (!ensureConnected(pump.connected, '蠕动泵 ' + pumpId, pumpConnectionPort(pumpId))) return
   try {
@@ -1168,6 +1198,7 @@ async function recoverMicrowaveProgram(id: string) {
 
 async function emergencyStop() {
   connectionBatch.cancel()
+  cancelPumpStarts()
   try {
     await ElMessageBox.confirm('确定要紧急停止所有设备吗？此操作不可撤销！', '紧急停止确认', {
       confirmButtonText: '确认紧急停止',

@@ -35,7 +35,7 @@ def test_engine_start_failure_does_not_leave_running_state():
     assert engine._task is None
 
 
-def test_start_experiment_cleans_engine_when_start_run_fails():
+def test_start_experiment_keeps_recovery_lock_when_start_run_fails():
     from fastapi import HTTPException
     from src.experiment import parser
     from src.web.api import experiments as exp_api
@@ -45,8 +45,10 @@ def test_start_experiment_cleans_engine_when_start_run_fails():
 
     original_start_run = exp_api.ExperimentLogger.start_run
     original_experiments_dir = parser.EXPERIMENTS_DIR
+    original_recovery_dir = exp_api.yaml_recovery.RECOVERY_DIR
     exp_api._engines.clear()
     tmp_dir = Path(tempfile.mkdtemp())
+    exp_api.yaml_recovery.RECOVERY_DIR = tmp_dir / 'yaml_runs'
     experiments_dir = tmp_dir / "experiments"
     experiments_dir.mkdir()
     filename = "start_failure_fixture.yaml"
@@ -71,10 +73,12 @@ def test_start_experiment_cleans_engine_when_start_run_fails():
                 raise AssertionError("start_experiment should raise HTTPException")
             except HTTPException as e:
                 assert e.status_code == 500
-            assert filename not in exp_api._engines
+            assert exp_api._engines[filename].cleanup_pending
+            assert exp_api.recovery_records()[0]['recovery_required']
         finally:
             exp_api.ExperimentLogger.start_run = original_start_run
             parser.EXPERIMENTS_DIR = original_experiments_dir
+            exp_api.yaml_recovery.RECOVERY_DIR = original_recovery_dir
             exp_api._engines.clear()
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -423,7 +427,7 @@ def test_successful_persistence_is_atomic_and_recorded():
 
 TESTS = [
     test_engine_start_failure_does_not_leave_running_state,
-    test_start_experiment_cleans_engine_when_start_run_fails,
+    test_start_experiment_keeps_recovery_lock_when_start_run_fails,
     test_generate_unique_sample_id_raises_when_existing_ids_unreadable,
     test_delete_history_removes_matching_sample_records_only,
     test_device_manager_payload_and_control_fixes,

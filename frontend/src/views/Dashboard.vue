@@ -43,8 +43,8 @@
           <template #header>
             <div class="card-header">
               <div class="device-heading"><img :src="heaterArtwork" alt="" /><div><h2>加热器</h2><span>{{ id }} 监测</span></div></div>
-              <el-tag :type="heater.error ? 'danger' : heater.run_status === 'RUNNING' ? 'success' : 'info'" size="small">
-                {{ heater.error ? '异常' : heater.run_status || deviceInfo('heaters', id)?.status }}
+              <el-tag :type="heater.error ? 'danger' : heater.run_status === 'RUN' ? 'success' : 'info'" size="small">
+                {{ heater.error ? '异常' : heaterStatusLabel(heater.run_status) }}
               </el-tag>
             </div>
           </template>
@@ -95,7 +95,7 @@
                 读取失败
               </el-tag>
               <el-tag v-else :type="ch.running ? 'success' : 'info'" size="small">
-                {{ ch.running ? '运行中' : '停止' }}
+                {{ ch.run_status === 'PAUSE' ? '暂停' : ch.running ? '运行中' : ch.run_status === 'STOP' ? '停止' : '未知' }}
               </el-tag>
               <span v-if="ch.read_ok !== false && ch.running" class="channel-detail">
                 {{ ch.flow_rate?.toFixed(1) ?? '0.0' }} {{ flowUnitLabel(ch.flow_unit) }}
@@ -224,7 +224,11 @@ import microwaveArtwork from '../assets/theme/microwave.webp'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 
-const { data: realtimeData, connected: wsConnected } = useWebSocket()
+const { data: realtimeData, fresh: wsConnected } = useWebSocket()
+
+function heaterStatusLabel(status?: string): string {
+  return ({ RUN: '运行', STOP: '停止', HOLD: '保持' } as Record<string, string>)[status || ''] || '状态未知'
+}
 const heaterTempChartRef = ref<HTMLElement>()
 const microwaveTempChartRef = ref<HTMLElement>()
 const flowChartRef = ref<HTMLElement>()

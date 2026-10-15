@@ -12,7 +12,7 @@ import SyringePumpControl from './SyringePumpControl.vue'
 const states = ref<Record<string, SyringeState>>({})
 const emit = defineEmits<{ devices: [states: Record<string, SyringeState>] }>()
 watch(states, value => emit('devices', value), { deep: true })
-const { data, connected } = useWebSocket()
+const { data, fresh: connected } = useWebSocket()
 function update(state: SyringeState) { states.value[state.device_id] = state }
 defineExpose({ update })
 watch(data, value => { if (value?.syringe_pumps) states.value = value.syringe_pumps })

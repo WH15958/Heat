@@ -25,7 +25,7 @@
         class="disconnect-alert"
       />
       <el-form-item label="目标温度">
-        <el-input-number v-model="heater.targetTemp" :min="0" :max="450" :step="1" :precision="1" />
+        <el-input-number v-model="heater.targetTemp" :min="heater.minTemperature" :max="heater.maxTemperature" :step="1" :precision="1" />
         <el-button type="primary" @click="$emit('setTemp', heaterId, heater.targetTemp)" style="margin-left: 10px">
           设置
         </el-button>
@@ -56,6 +56,8 @@ const props = defineProps<{
     bindingResolved?: boolean
     bindingError?: string | null
     targetTemp: number
+    minTemperature?: number
+    maxTemperature?: number
     starting: boolean
     stopping: boolean
   }

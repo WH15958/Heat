@@ -31,10 +31,11 @@
         <el-tag v-if="pump.connected && channelStatus(pumpId, ch)?.read_ok === false" type="danger" size="small">
           读取失败
         </el-tag>
-        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)?.running" type="success" size="small">
+        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)?.read_ok === true && channelStatus(pumpId, ch)?.running" type="success" size="small">
           运行中 {{ channelStatus(pumpId, ch)?.flow_rate }} {{ statusFlowUnitLabel(channelStatus(pumpId, ch)?.flow_unit) }}
         </el-tag>
-        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)" type="info" size="small">停止</el-tag>
+        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)?.read_ok === true && channelStatus(pumpId, ch)?.run_status === 'PAUSE'" type="warning" size="small">暂停</el-tag>
+        <el-tag v-else-if="pump.connected && channelStatus(pumpId, ch)?.read_ok === true && channelStatus(pumpId, ch)?.run_status === 'STOP'" type="info" size="small">停止</el-tag>
         <el-tag v-else-if="pump.connected" type="warning" size="small">状态未知</el-tag>
         <el-tag v-else type="info" size="small">未连接</el-tag>
       </div>
