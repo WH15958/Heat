@@ -761,4 +761,7 @@ class GuidedTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    from runtime_isolation import isolated_runtime
+
+    with isolated_runtime():
+        unittest.main()

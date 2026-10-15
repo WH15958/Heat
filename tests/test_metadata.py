@@ -1380,5 +1380,8 @@ def run_all():
 
 
 if __name__ == "__main__":
-    success = run_all()
-    sys.exit(0 if success else 1)
+    from runtime_isolation import isolated_runtime
+
+    with isolated_runtime():
+        success = run_all()
+        sys.exit(0 if success else 1)

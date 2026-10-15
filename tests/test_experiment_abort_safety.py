@@ -309,16 +309,19 @@ TESTS = [
 
 
 if __name__ == "__main__":
-    passed = 0
-    failed = 0
-    for test in TESTS:
-        try:
-            test()
-            passed += 1
-            print(f"[OK] {test.__name__}")
-        except Exception as e:
-            failed += 1
-            print(f"[FAIL] {test.__name__}: {e}")
-    print(f"\nResult: {passed} passed, {failed} failed")
-    if failed:
-        raise SystemExit(1)
+    from runtime_isolation import isolated_runtime
+
+    with isolated_runtime():
+        passed = 0
+        failed = 0
+        for test in TESTS:
+            try:
+                test()
+                passed += 1
+                print(f"[OK] {test.__name__}")
+            except Exception as e:
+                failed += 1
+                print(f"[FAIL] {test.__name__}: {e}")
+        print(f"\nResult: {passed} passed, {failed} failed")
+        if failed:
+            raise SystemExit(1)

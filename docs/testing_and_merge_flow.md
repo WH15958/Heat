@@ -96,6 +96,14 @@ python tests\test_hardware.py --port COMx --confirm-hardware-write
 - `output/` 是运行和测试产物
 - 不应纳入版本控制
 
+软件测试必须与真实运行数据隔离。`tests/runtime_isolation.py` 为 pytest 的每个测试提供独立临时目录；直接执行的 metadata、代码审查修复、引导批次、实验中止和微波 API 测试入口也使用同一隔离上下文，不依赖 pytest fixture。
+
+- 隔离实验 JSON 日志、`samples.csv`、引导批次及计划、微波托管记录、普通 YAML 恢复锁和 Campaign 数据；配方编辑使用仓库 YAML 的临时副本。
+- 保留真实持久化逻辑，以便验证保存失败和恢复行为。`ExperimentLogger(save_log=False)` 仅关闭实验 JSON，仍会读取样品编号并写 `samples.csv`，不能当作测试隔离开关。
+- 新增直接运行的持久化测试须使用 `isolated_runtime()`；子进程不会继承 Python 路径补丁，必须显式设置其临时存储位置。自定义存储路径也必须位于测试临时目录。
+- `python -m pytest tests/test_runtime_isolation.py -q` 验证默认日志、无 JSON 日志时的样品落盘、异常恢复路径，以及独立脚本不修改外层历史。
+- 清理旧污染须先备份，并按可核验的测试来源与精确运行 ID 处理；不得仅凭 `test`、失败状态、短耗时或空配方名删除。真实预充属于批次维护历史，应保留。
+
 ### 4.2 前端构建产物
 
 - `src/web/static/` 是被 Git 忽略的前端构建目录
