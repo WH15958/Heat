@@ -149,6 +149,8 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `POST /api/pump/{device_id}/start` 对通道、方向、模式、单位、有限数、协议流速范围（一般 `0.01-9999`，RPM 上限 `150`）、模式必填参数和重复间隔做请求校验；布尔值不能冒充数值，非法请求返回 `422`，不会调用设备管理器。
 - `DeviceManager` 在任何配置写入前检查通道启用状态和 `max_flow_rate`，并在 `/api/devices` 的泵通道元数据中暴露配置的 `tube_model`、`max_flow_rate` 和启用状态供前端约束输入；启动事务先确认 `n001=0`，再写入并读回方向、软管、模式和当前模式参数，最后写启动并确认 `n001=1`。默认要求读回与请求相同；经 HMI 规格确认的固件差异只能通过具体泵的 `tube_model_readback_overrides` 配置，不能硬编码为所有泵的全局协议规则。`pump1` 当前唯一覆盖为 `11 -> 13`。stop/disconnect/cleanup 会与同一泵的启动事务协调，主动断开和 cleanup 只有在 stop 确认成功后才释放串口。
 - 泵启动事务会读回使能、方向、模式、流速/单位及当前模式参数，最后读取 `n001` 确认启动；单通道停止和 `0010=0` 全停分别读取 `n001` 确认。非法枚举、超时或浮点读回异常均失败，缓存状态不能替代实读结果。
+- `TIME_SPEED=2` 在 `DeviceManager` 内使用独立配置顺序：停止并确认 → 通道/软管/方向 → 切换模式并确认 → 时间/单位、重复次数及本次指定的间隔/单位 → 流量/单位。它不借道 `FLOW_MODE`，不写分装体积，也不补写或重试配置。全部写完后、启动前重读 `n006`、`n107/n109`、`n100`、本次指定的 `n101/n103`、`n110/n112`；启动确认后只复核模式与流量/单位，不比较倒计时。复用同步驱动的有界读回（最多 3 次，间隔 0.25 秒，浮点 `rel_tol=1e-5/abs_tol=1e-4`）及现有泵锁/停止取消机制。启动后核验失败或启动确认失败会停止该通道并读回确认，保留原始原因和停止结果，不重发启动。其他模式及引导式 `TIME_QUANTITY=1` 流程不变。
+- 泵启动 API 保留原有响应字段，失败时可附加 `error`，包含通道、阶段及参数期望/读回证据；控制页直接显示该详情，实时值仍来自设备读回。YAML 的 `pump_start` 通过同一管理器路径执行，失败沿用执行器错误传播及清理流程。`tests/test_pump_time_speed.py` 用有状态寄存器模拟模式/时间联动与故障，不代表已证明固件按“15÷5”计算；实际协议拒绝原因查看 Modbus 日志，实机需按用户指南水测确认。
 - 泵 stop 使用请求代次取消更早进入但尚未拿到事务锁的 start，避免 stop 已返回成功后旧 start 再启动；`TIME_QUANTITY` 同时校验声明流量与体积/时间推导流量。
 - Modbus 读写除 CRC 外还必须匹配 slave、function、长度、byte count 和写响应 echo；CRC 正确但属于其他请求或设备的帧不能算成功。
 - `ConfigManager.load()` 对硬件配置验证失败时直接抛错；有限数、整数和布尔配置按声明类型严格校验，`connection.stopbits`、`connection.bytesize`、泵通道 `max_flow_rate` 和设备级 `tube_model_readback_overrides` 会透传到 Web/CLI 设备配置，不再静默忽略。读回覆盖的键和值必须是 `0-13` 的整数。
@@ -495,7 +497,7 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
 
-前端仅在显式按钮操作时发控制请求；定时读取状态及页面/WebSocket生命周期不启动或停止硬件。Campaign/planner 无自动连接。软件验证不替代设备验收。 BatchExperimentPage 启动成功或首次恢复批次时切换到集中进度视图，复用每 2 秒 GET /current；完成组数取 groups 的 completed 状态，当前步骤序号由后端零基 current_step 转为一基显示。各组待执行条件取批次 request 快照，执行结果取 groups；累计用时沿用 progress.elapsed（含暂停），不推算剩余时间。读取失败保留最后状态并提示过期，不触发控制请求。
+前端仅在显式按钮操作时发控制请求；定时读取状态及页面/WebSocket生命周期不启动或停止硬件。Campaign/planner 无自动连接。软件验证不替代设备验收。 BatchExperimentPage 启动成功或首次恢复批次时切换到集中进度视图，复用每 2 秒 GET /current；完成组数取 groups 的 completed 状态，当前动作由可选 progress.activity 展示；旧记录沿用 step_label。各组待执行条件取批次 request 快照，执行结果取 groups；累计用时沿用 progress.elapsed（含暂停），不推算剩余时间。读取失败保留最后状态并提示过期，不触发控制请求。
 
 
 ### 引导批次预充接口与状态
@@ -545,3 +547,15 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 控制页通过前端 connectionBatch 协调现有单设备 connect 和只读状态接口，无新增后端 API。按设备类型及 ID 顺序逐台连接，明确检查 success，并将连接成功后的读取失败区分为“已连接，状态未知”。单台普通失败继续，HTTP 409 占用/冲突中止后续请求；急停入口及页面卸载取消未发出的请求，不通过页面生命周期断开或停止设备。
 
 DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行状态禁用冲突操作，并登记当前单设备操作的 loading 状态，避免与批量连接交错。驱动、资源锁及实验占用检查继续由既有后端执行。测试通过模拟 API 执行真实控制页处理函数，不连接硬件。
+
+### 引导式只读动作快照（2026-10-16）
+
+`GET /api/guided/current` 和既有批次状态响应的 `progress` 增加可选 `activity`，现有字段、请求与 YAML 不变。快照包括 `step_id/state/wait_type`、`stage/title/description/device_ids/parameters`，以及可用的 `readings/devices`、`elapsed_seconds/duration_seconds/remaining_seconds/reference`、`stable_seconds/stable_required_seconds`。阶段标识依次为 preparation、stabilizing、feeding、reaction、collection、cleaning；未知动作不推断阶段。温度读数包含 device_id、value、target、read_ok、tolerance、sampled_at；读取失败的值为 null。
+
+`StepExecutor.activity_snapshot` 只复制执行时已有的观测；`ActivityProgress` 不访问设备。双路稳定循环记录实际稳定窗口，暂停清零；duration/monitored_hold 使用原暂停扣时单调时钟。泵在原 START 确认后记录单调时钟，reference=true 的剩余时长不因编排暂停冻结，也不参与完成判断。并行进料聚合子执行器已缓存的状态。切换步骤、装载新组时清除观测，步骤退出冻结快照，展示不改变驱动调用顺序或数量。引导层再按编译步骤生成动作说明，通用执行器不解释引导阶段。
+
+状态顶层新增 `stop_requested` 和 `cleanup_in_progress`；后者观察执行器清理及预充失败清理的在途调用。原 `cleanup_pending` 仍保留其资源/恢复含义，不能把它当作“正在清理”。已结束批次可能保留 stop_requested=true，客户端须优先判断终态。
+
+前端保持 2 秒轮询，不自行递减动作剩余时间；独立检查距成功响应是否超过 6 秒。控制命令使用响应序号，停止可以覆盖待确认的暂停/继续；较早响应不得覆盖停止反馈。网络失败只通过读取核对，不自动重发。字段定位由本地校验及 422 loc 映射，设备/跨字段错误仍为页面提示。
+
+历史页支持 `/history?batch_id=...`。使用日志 metadata.batch_id 与批次保存的 priming.run_id、groups[].run_id 取并集，绝不通过实验名称猜测关联。批次导出逐条读取并核对全部 run_id，沿用 `{exported_at,count,runs}` JSON 格式（另带 batch_id）；缺记录或读取/持久化错误整体失败。旧记录无 activity 时沿用步骤名称，不制造读数。

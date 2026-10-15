@@ -8,12 +8,14 @@
             <span v-if="selectedRuns.length > 0" class="selection-count">已选 {{ selectedRuns.length }} 条</span>
             <el-button size="small" type="primary" @click="exportSelectedRuns" :disabled="selectedRuns.length === 0" :loading="exporting">导出选中</el-button>
             <el-button size="small" type="danger" @click="deleteSelectedRuns" :disabled="selectedRuns.length === 0" :loading="deleting">删除选中</el-button>
-            <el-button size="small" type="danger" @click="deleteAll" :disabled="runs.length === 0" :loading="deleting">清空全部</el-button>
+            <el-button size="small" type="danger" @click="deleteAll" :disabled="runs.length === 0||!!batchFilter" :loading="deleting">清空全部</el-button>
             <el-button size="small" @click="loadRuns" :loading="loading">刷新</el-button>
           </div>
         </div>
       </template>
 
+      <p v-if="batchFilter">本批历史 · {{ batchFilter }}（含预充和正式组） <router-link to="/history">查看全部</router-link></p>
+      <el-alert v-if="historyError" :title="historyError" type="error" :closable="false" />
       <div v-if="runs.length === 0 && !loading" class="empty-state">
         暂无历史记录，运行实验后自动保存
       </div>
@@ -160,6 +162,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
+import {useRoute} from 'vue-router'
+import {batchRunIds} from '../experiment/guidedProgress'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import SyringeHistory from '../components/SyringeHistory.vue'
@@ -203,6 +207,7 @@ interface SensorData {
 }
 
 interface RunData {
+  metadata?: {batch_id?:string}
   run_id: string
   experiment_name: string
   experiment_file: string
@@ -223,6 +228,11 @@ interface RunData {
 }
 
 const runs = ref<RunData[]>([])
+const route=useRoute()
+const batchFilter=computed(()=>typeof route.query.batch_id==='string'?route.query.batch_id:'')
+const historyError=ref('')
+let historySequence=0
+watch(batchFilter,()=>{selectedRuns.value=[];void loadRuns()})
 const historyHeaderRef = ref<HTMLElement>()
 const historyTableShellRef = ref<HTMLElement>()
 const historyTableMaxHeight = ref<number>()
@@ -663,14 +673,24 @@ function exportRunText(data: RunData): string {
 }
 
 async function loadRuns() {
-  loading.value = true
+  const sequence=++historySequence, filter=batchFilter.value
+  loading.value = true;historyError.value=''
   try {
     const res = await axios.get('/api/experiments/history/runs')
-    runs.value = res.data
+    let data=res.data
+    if(filter){
+      const {data:batch}=await axios.get(`/api/guided/${encodeURIComponent(filter)}`)
+      const ids=batchRunIds(batch,data)
+      const missing=ids.filter(id=>!data.some((r:RunData)=>r.run_id===id))
+      if(sequence!==historySequence)return
+      if(missing.length)historyError.value='缺失记录：'+missing.join('、')
+      data=data.filter((r:RunData)=>ids.includes(r.run_id))
+    }
+    if(sequence===historySequence)runs.value = data
   } catch (e: any) {
-    ElMessage.error(`加载历史记录失败: ${e.message}`)
+    if(sequence===historySequence){runs.value=[];historyError.value=`加载历史记录失败: ${e.message}`}
   } finally {
-    loading.value = false
+    if(sequence===historySequence)loading.value = false
   }
 }
 
