@@ -37,6 +37,7 @@
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
         <p v-if="batch.request?.product_port==='NC'" class="notice compact-notice">历史批次仅供查阅；新批次须按 NO 收产物、NC 排废液重新确认并预充。</p>
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span></label></div>
+        <p><small>通道四排液建议：流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
         <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
       </section>
