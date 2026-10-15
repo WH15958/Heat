@@ -15,6 +15,7 @@ const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.Modu
 
 function page() {
   const calls: string[] = []
+  const starts: any[][] = []
   const unmount: (() => void)[] = []
   const registry: any = {
     heaters: { heater2: {}, heater1: {} }, pumps: { pump1: {} }, microwaves: { microwave1: {} },
@@ -31,6 +32,9 @@ function page() {
     return { data: { success: true } }
   }
   const api: any = { list: () => request('list'), emergencyStop: () => request('emergencyStop') }
+  api.startPump = (...args: any[]) => { starts.push(args); return request('start', 'pump1') }
+  api.stopPump = () => request('stop', 'pump1')
+  api.setTemperature = (id: string) => request('setTemperature', id)
   for (const kind of ['Heater', 'Pump', 'Microwave']) api[`connect${kind}`] = (id: string) => request('connect', id)
   api.readHeaterData = api.readPumpStatus = api.readMicrowaveData = (id: string) => request('read', id)
   api.valveOperation = (id: string, action: string) => request(action === 'status' ? 'read' : action, id)
@@ -41,8 +45,8 @@ function page() {
     '../composables/connectionBatch': connection,
     '../utils/microwaveProgram': program,
     '../utils/pumpCalculations': calculations,
-    '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), connected: vue.ref(false) }) },
-    'element-plus': { ElMessage: { error() {}, success() {} }, ElMessageBox: { confirm: async () => {} } },
+    '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), connected: vue.ref(false), fresh: vue.ref(false) }) },
+    'element-plus': { ElMessage: { error() {}, success() {}, info() {} }, ElMessageBox: { confirm: async () => { await behavior.confirm?.() } } },
   }
   const exports = {} as any
   runInNewContext(compiled, { exports, require: (name: string) => {
@@ -55,7 +59,7 @@ function page() {
   state.syringeGroup.value = { update: (item: any) => { state.syringeDevices.value[item.device_id] = item } }
   // Real registry entries always include their ID in syringe status.
   registry.syringe_pumps.syringe_pump1.device_id = 'syringe_pump1'
-  return { state, calls, registry, behavior, unmount: () => unmount.forEach(fn => fn()), dispose: () => scope.stop() }
+  return { state, calls, starts, registry, behavior, unmount: () => unmount.forEach(fn => fn()), dispose: () => scope.stop() }
 }
 
 test('connects all five device types serially in stable order using only connection/read APIs', async () => {
@@ -154,5 +158,63 @@ test('an ongoing individual device operation blocks the bulk action', async () =
     p.state.connectionBatch.pending.delete(token)
     await p.state.connectAll()
     assert.equal(p.state.connectionBatch.results.value.length, 6)
+  } finally { p.dispose() }
+})
+
+test('a pending pump confirmation blocks duplicate starts and sends the confirmed parameter snapshot', async () => {
+  const p = page()
+  try {
+    p.registry.pumps.pump1.connected = true
+    await p.state.refreshDevices()
+    const ch = p.state.devices.pumps.pump1.channels[1]
+    Object.assign(ch, { flowRate: 15, mode: 'TIME_SPEED', runTime: 5, timeUnit: 1 })
+    const confirmations: (() => void)[] = []
+    p.behavior.confirm = () => new Promise<void>(resolve => confirmations.push(resolve))
+    const first = p.state.startPumpChannel('pump1', 1)
+    const second = p.state.startPumpChannel('pump1', 1)
+    ch.runTime = 50
+    ch.flowUnit = 3
+    confirmations.forEach(resolve => resolve())
+    await Promise.all([first, second])
+    assert.equal(confirmations.length, 1)
+    assert.equal(p.starts.length, 1)
+    assert.equal(p.starts[0][5], 5)
+    assert.equal(p.starts[0][8], 1)
+  } finally { p.dispose() }
+})
+
+test('heater setpoint follows backend bounds and rejects unknown or out-of-range values', async () => {
+  const p = page()
+  try {
+    Object.assign(p.registry.heaters.heater1, { connected: true, min_temperature: 10, max_temperature: 70 })
+    await p.state.refreshDevices()
+    assert.equal(p.state.devices.heaters.heater1.maxTemperature, 70)
+    await p.state.setTemp('heater1', 71)
+    await p.state.setTemp('heater1', 9)
+    assert.ok(!p.calls.includes('setTemperature:heater1'))
+    await p.state.setTemp('heater1', 70)
+    assert.equal(p.calls.filter(call => call === 'setTemperature:heater1').length, 1)
+    p.state.devices.heaters.heater1.maxTemperature = undefined
+    await p.state.setTemp('heater1', 50)
+    assert.equal(p.calls.filter(call => call === 'setTemperature:heater1').length, 1)
+  } finally { p.dispose() }
+})
+
+for (const action of ['stop', 'stopAll', 'leave'] as const) test(`${action} while a pump confirmation is open cancels that unissued start`, async () => {
+  const p = page()
+  try {
+    p.registry.pumps.pump1.connected = true
+    await p.state.refreshDevices()
+    let confirm!: () => void
+    p.behavior.confirm = () => new Promise<void>(resolve => { confirm = resolve })
+    const pending = p.state.startPumpChannel('pump1', 1)
+    p.behavior.confirm = async () => {}
+    if (action === 'stop') await p.state.stopPumpChannel('pump1', 1)
+    if (action === 'stopAll') await p.state.stopPumpAll('pump1')
+    if (action === 'leave') p.unmount()
+    confirm()
+    await pending
+    assert.equal(p.starts.length, 0)
+    assert.equal(p.state.devices.pumps.pump1.channels[1].starting, false)
   } finally { p.dispose() }
 })

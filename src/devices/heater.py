@@ -310,6 +310,7 @@ class AIHeaterDevice(BaseDevice):
                     status_val, _ = protocol.read_parameter(
                         ParameterCode.OUTPUT_STATUS
                     )
+                    status_val = int(status_val)
                     run_status_val = status_val & 0x03
                     is_auto_tuning = bool(status_val & 0x04)
                     is_manual = bool(status_val & 0x08)

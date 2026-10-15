@@ -11,6 +11,7 @@ def test_elapsed_freezes_for_all_terminal_paths_and_resets_on_restart():
     async def scenario(outcome):
         clock = SimpleNamespace(monotonic=lambda: now[0])
         executor = Mock()
+        executor.activity_snapshot = None
         executor.execute = AsyncMock(return_value=outcome != "failed")
         executor.stop_active_devices = AsyncMock(return_value=True)
         if outcome == "exception":

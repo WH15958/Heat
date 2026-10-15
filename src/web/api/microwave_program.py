@@ -23,6 +23,8 @@ def records():
 
 
 def require_recovered():
+    from src.web.api.experiments import require_yaml_recovered
+    require_yaml_recovered()
     if any(r.get("recovery_required") for r in records()):
         raise HTTPException(409, "存在中断或失败的微波托管程序，请先现场确认停止并解除锁定")
 

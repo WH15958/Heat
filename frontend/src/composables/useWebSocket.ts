@@ -84,9 +84,18 @@ export interface RealtimeData {
 
 const sharedData = ref<RealtimeData | null>(null)
 const sharedConnected = ref(false)
+const sharedFresh = ref(false)
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let freshnessTimer: ReturnType<typeof setTimeout> | null = null
 let refCount = 0
+
+function invalidateData() {
+  if (freshnessTimer) clearTimeout(freshnessTimer)
+  freshnessTimer = null
+  sharedFresh.value = false
+  sharedData.value = null
+}
 
 function connect() {
   if (ws && ws.readyState !== WebSocket.CLOSED) {
@@ -94,26 +103,32 @@ function connect() {
   }
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(`${protocol}//${location.host}/ws`)
+  const socket = new WebSocket(`${protocol}//${location.host}/ws`)
+  ws = socket
 
-  ws.onopen = () => {
+  socket.onopen = () => {
+    if (ws !== socket) return
     sharedConnected.value = true
   }
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws !== socket) return
     sharedConnected.value = false
+    invalidateData()
     ws = null
     if (refCount > 0) {
       reconnectTimer = setTimeout(connect, 3000)
     }
   }
 
-  ws.onerror = (err) => {
+  socket.onerror = (err) => {
+    if (ws !== socket) return
     console.error('[WS] error', err)
-    ws?.close()
+    socket.close()
   }
 
-  ws.onmessage = (event) => {
+  socket.onmessage = (event) => {
+    if (ws !== socket) return
     try {
       const parsed = JSON.parse(event.data)
       if (parsed?.type !== 'realtime') return
@@ -125,6 +140,9 @@ function connect() {
         syringe_pumps: parsed.syringe_pumps ?? {},
         valves: parsed.valves ?? {},
       }
+      sharedFresh.value = true
+      if (freshnessTimer) clearTimeout(freshnessTimer)
+      freshnessTimer = setTimeout(invalidateData, 6000)
     } catch (e) {
       console.error('[WS] parse error:', e)
     }
@@ -142,6 +160,7 @@ function disconnect() {
     ws = null
   }
   sharedConnected.value = false
+  invalidateData()
 }
 
 export function useWebSocket() {
@@ -160,5 +179,5 @@ export function useWebSocket() {
     }
   })
 
-  return { data: sharedData, connected: sharedConnected }
+  return { data: sharedData, connected: sharedConnected, fresh: sharedFresh }
 }

@@ -50,7 +50,6 @@ class SyringeProtocol:
         if mode not in ("OEM", "DT"):
             raise ValueError("Protocol must be OEM or DT")
         self.mode, self.timeout = mode, timeout
-        self.sequence = 0
 
     def frame(self, command):
         data = command.encode("ascii")
@@ -58,8 +57,8 @@ class SyringeProtocol:
             raise ValueError("Invalid command length/characters")
         if self.mode == "DT":
             return b"/" + bytes([self.address]) + data + b"\r"
-        self.sequence = self.sequence % 7 + 1
-        frame = bytes([2, self.address, 0x30 + self.sequence]) + data + b"\x03"
+        # MSP1-CX manual p.20 defines a fixed ASCII '1', not a rolling sequence.
+        frame = bytes([2, self.address, 0x31]) + data + b"\x03"
         checksum = 0
         for b in frame:
             checksum ^= b

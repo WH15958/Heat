@@ -1,6 +1,13 @@
 <template>
   <div class="experiment-page">
     <ExperimentGuide />
+    <el-alert v-if="recoveryError" :title="recoveryError" type="error" :closable="false" show-icon />
+    <el-alert v-for="record in recoveryRecords" :key="record.recovery_id" type="error" :closable="false" show-icon
+      :title="`普通实验锁定：${record.filename}`">
+      <p>运行 {{ record.run_id || '尚未建立运行编号' }} · {{ record.error || '服务中断或停机未确认' }}。不会自动续跑。</p>
+      <el-button :loading="recovering === record.recovery_id" :disabled="!!recovering" @click="acknowledgeRecovery(record.recovery_id)">现场确认停止后解除锁定</el-button>
+    </el-alert>
+    <el-button v-if="recoveryError || recoveryRecords.length" @click="loadRecovery">刷新恢复状态</el-button>
     <el-button style="margin-bottom: 12px" type="primary" @click="router.push('/experiment/batch')">引导式实验</el-button>
     <el-row :gutter="20">
       <el-col :xs="24" :md="8">
@@ -44,7 +51,7 @@
                   inactive-text=""
                   style="margin-right: 12px"
                 />
-                <el-button type="success" @click="startExperiment" :disabled="isRunning || isPaused || cleanupPending" :loading="starting">
+                <el-button type="success" @click="startExperiment" :disabled="isRunning || isPaused || cleanupPending || recoveryBlocked" :loading="starting">
                   启动实验
                 </el-button>
                 <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning" :loading="pausing">
@@ -233,6 +240,44 @@ const pausing = ref(false)
 const resuming = ref(false)
 const stopping = ref(false)
 const saveLog = ref(true)
+const recoveryRecords = ref<{ recovery_id: string; filename: string; run_id?: string; error?: string }[]>([])
+const recoveryError = ref('')
+const recoveryLoaded = ref(false)
+const recovering = ref('')
+const recoveryBlocked = computed(() => !recoveryLoaded.value || !!recoveryError.value || recoveryRecords.value.length > 0)
+let recoverySequence = 0
+
+async function loadRecovery() {
+  const sequence = ++recoverySequence
+  try {
+    const { data } = await axios.get('/api/experiments/recovery/pending')
+    if (sequence !== recoverySequence) return
+    if (!Array.isArray(data)) throw new Error('恢复状态格式无效')
+    recoveryRecords.value = data
+    recoveryError.value = ''
+    recoveryLoaded.value = true
+  } catch (e: any) {
+    if (sequence === recoverySequence) recoveryError.value = `恢复状态未确认，禁止启动：${e.response?.data?.detail || e.message}`
+  }
+}
+
+async function acknowledgeRecovery(id: string) {
+  if (recovering.value) return
+  recovering.value = id
+  try {
+    try {
+      await ElMessageBox.confirm('请先到设备现场确认所有相关设备已停止，并核对液路与负载安全。解除锁定只允许重新操作，不会续跑或重放中断实验。', '现场停止确认', {
+        confirmButtonText: '已现场确认全部停止', cancelButtonText: '取消', type: 'warning',
+      })
+    } catch { return }
+    const { data } = await axios.post(`/api/experiments/recovery/${encodeURIComponent(id)}/acknowledge`, { devices_stopped_confirmed: true })
+    if (data.success !== true) throw new Error('解除锁定未确认')
+    await loadRecovery()
+  } catch (e: any) {
+    recoveryError.value = `解除锁定未确认：${e.response?.data?.detail || e.message}`
+    ElMessage.error(recoveryError.value)
+  } finally { recovering.value = '' }
+}
 const currentRunId = ref('')
 const currentSampleId = ref('')
 const currentMetadata = ref<Record<string, any>>({})
@@ -466,6 +511,7 @@ function connectWs() {
 }
 
 async function loadExperiments() {
+  void loadRecovery()
   experimentsLoading.value = true
   try {
     const res = await axios.get('/api/experiments/')
@@ -517,16 +563,19 @@ async function selectExperiment(filename: string) {
 }
 
 async function startExperiment() {
-  try {
-    await ElMessageBox.confirm(
-      `确定要启动实验 "${selectedExp.value?.name}" 吗？`,
-      '确认启动',
-      { confirmButtonText: '启动', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch { return }
-
+  if (starting.value) return
   starting.value = true
   try {
+    await loadRecovery()
+    if (recoveryBlocked.value || wsClosed) return
+    try {
+      await ElMessageBox.confirm(
+        `确定要启动实验 "${selectedExp.value?.name}" 吗？`,
+        '确认启动',
+        { confirmButtonText: '启动', cancelButtonText: '取消', type: 'info' },
+      )
+    } catch { return }
+    if (wsClosed) return
     const res = await axios.post(`/api/experiments/${selectedFilename.value}/start`, {
       save_log: saveLog.value,
     })
@@ -603,6 +652,7 @@ async function pollProgress() {
       return
     }
     progress.value = nextProgress
+    if (terminalStates.has(nextProgress.state) && nextProgress.cleanup_pending) await loadRecovery()
     if (terminalStates.has(progress.value.state) && !cleanupPending.value) stopPolling()
     else if (cleanupPending.value && !pollTimer) startPolling()
   } catch (e) {
