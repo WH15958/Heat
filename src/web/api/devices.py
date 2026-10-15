@@ -515,12 +515,17 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
             body.tube_model, body.flow_unit, body.time_unit, body.volume_unit,
             body.repeat_count, body.interval_time, body.interval_time_unit,
         )
-        return {
+        response = {
             "success": result,
             "channel": body.channel,
             "flow_rate": body.flow_rate,
             "mode": body.mode,
         }
+        if not result:
+            error = dm.get_last_command_error(device_id)
+            if error:
+                response["error"] = error
+        return response
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
