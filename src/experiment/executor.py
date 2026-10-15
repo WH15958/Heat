@@ -8,6 +8,7 @@ from src.experiment.actions import (
     WaitType,
 )
 from src.devices.microwave import MicrowaveSegment
+from src.devices.syringe_pump import is_initialization_pending
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -577,7 +578,8 @@ class StepExecutor:
                 return False
             state = await asyncio.to_thread(control.read)
             self.last_device_result = state
-            if not state.get("read_ok") or state.get("fault_code"):
+            pending = is_initialization_pending(state.get("action"), state.get("busy"), state.get("fault_code"))
+            if not state.get("read_ok") or (state.get("fault_code") and not pending):
                 self._last_error = state.get("fault_description") or state.get("read_error")
                 return False
             result = state.get("action", {}).get("result")
@@ -597,7 +599,8 @@ class StepExecutor:
     async def check_syringe_health(self):
         for device_id in self._active_syringes:
             state = await asyncio.to_thread(self._dm.syringe(device_id).read)
-            if not state.get("read_ok") or state.get("fault_code") or state.get("action", {}).get("result") in ("failed", "unknown", "stopped"):
+            pending = is_initialization_pending(state.get("action"), state.get("busy"), state.get("fault_code"))
+            if not state.get("read_ok") or (state.get("fault_code") and not pending) or state.get("action", {}).get("result") in ("failed", "unknown", "stopped"):
                 self.last_device_result = state
                 self._last_error = "Syringe fault or unknown state during experiment pause"
                 return False

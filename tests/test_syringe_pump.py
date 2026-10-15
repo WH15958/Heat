@@ -142,6 +142,24 @@ class FakeProtocol:
         return Reply(0x40 if self.busy else 0x60, "")
 
 
+class InitializingProtocol(FakeProtocol):
+    """The pump reports uninitialized until the accepted homing finishes."""
+    def __init__(self):
+        super().__init__()
+        self.error = 7
+        self.initializing = False
+
+    def exchange(self, cmd):
+        if cmd == 'Q' and self.initializing and self.busy == 0 and self.error == 7:
+            self.error = 0
+            self.initializing = False
+        reply = super().exchange(cmd)
+        if cmd.startswith(('Z', 'Y')):
+            self.initializing = True
+            self.error = 7
+        return reply
+
+
 @pytest.fixture
 def pump(tmp_path):
     cfg = SyringePumpConfig(connection=DeviceConnectionConfig(port="FAKE", address=1))
@@ -353,6 +371,119 @@ def test_unknown_mode_blocks_motion_and_init_establishes_it(pump):
     assert not pump.device.trusted
     state = finish(pump)
     assert state['microstep'] == 0 and state['position_trusted']
+
+
+@pytest.fixture
+def initializing_pump(pump):
+    pump.device.protocol = InitializingProtocol()
+    pump.device.mode = pump.device.orientation = None
+    pump.device.trusted = False
+    return pump
+
+
+@pytest.mark.parametrize('direction', ['Z', 'Y'])
+def test_manual_initialization_completes_on_first_command(initializing_pump, direction):
+    pump = initializing_pump
+    pump.command({'action': 'initialize', 'direction': direction, 'confirm': True})
+    state = pump.read()
+    assert state['busy'] is True and state['fault_code'] == 7
+    assert state['action']['result'] == 'running'
+    assert not state['initialized'] and not state['position_trusted']
+    assert state['microstep'] is None and state['orientation'] is None
+    state = finish(pump)
+    assert state['action']['result'] == 'completed'
+    assert state['fault_code'] == 0 and state['position_trusted']
+    assert state['position'] == 0 and state['valve_position'] == (0 if direction == 'Z' else 4)
+    assert state['microstep'] == 0 and state['orientation'] == direction
+    assert [c for c in pump.device.protocol.calls if not c.startswith(('Q', '?'))] == [direction + '0R']
+
+
+def test_experiment_waits_for_initialization_transition(initializing_pump):
+    pump = initializing_pump
+    dm = DeviceManager(); dm.syringe_pumps['syringe_pump1'] = pump
+    executor = StepExecutor(dm)
+    step = ExperimentStep('init', ActionType.SYRINGE_INITIALIZE,
+                          {'device_id': 'syringe_pump1', 'confirm': True})
+    assert asyncio.run(executor.execute(step))
+    assert executor.last_device_result['position_trusted']
+    assert pump.device.protocol.calls.count('Z0R') == 1
+    assert 'T' not in pump.device.protocol.calls
+
+
+@pytest.mark.parametrize('error,busy', [(1, True), (9, True), (10, True), (15, True), (7, False)])
+def test_initialization_transition_does_not_mask_faults(initializing_pump, error, busy):
+    pump = initializing_pump
+    pump.command({'action': 'initialize', 'confirm': True})
+    pump.device.protocol.error = error
+    pump.device.protocol.busy = int(busy)
+    pump.device.protocol.initializing = False
+    state = pump.read()
+    assert state['action']['result'] == 'failed'
+    assert not state['position_trusted']
+    dm = DeviceManager(); dm.syringe_pumps['syringe_pump1'] = pump
+    assert not asyncio.run(StepExecutor(dm)._wait_syringe('syringe_pump1', 1))
+
+
+@pytest.mark.parametrize('entry', ['manual', 'experiment'])
+def test_initialization_transition_timeout_still_stops(initializing_pump, entry):
+    pump = initializing_pump
+    pump.command({'action': 'initialize', 'confirm': True})
+    pump.device.protocol.busy = 100
+    pump.read()
+    if entry == 'manual':
+        pump.device.action['deadline'] = 0
+        pump.enforce_timeout()
+        assert pump.device.action['result'] == 'failed'
+    else:
+        dm = DeviceManager(); dm.syringe_pumps['syringe_pump1'] = pump
+        executor = StepExecutor(dm)
+        assert not asyncio.run(executor._wait_syringe('syringe_pump1', .01))
+        assert 'timeout' in executor.last_error
+    assert pump.device.protocol.calls.count('Z0R') == 1
+    assert 'T' in pump.device.protocol.calls
+    assert pump.device.stop_confirmed and not pump.device.trusted
+
+
+@pytest.mark.parametrize('failure', ['read', 'position', 'valve'])
+def test_initialization_still_requires_valid_completion(initializing_pump, failure):
+    pump = initializing_pump
+    pump.command({'action': 'initialize', 'confirm': True})
+    assert pump.read()['action']['result'] == 'running'
+    if failure == 'read':
+        pump.device.protocol.fail_command = 'Q'
+    elif failure == 'position':
+        pump.device.protocol.target = 100
+    else:
+        pump.device.protocol.valve = 4
+    state = pump.read()
+    assert state['action']['result'] in ('failed', 'unknown')
+    assert not state['position_trusted']
+    dm = DeviceManager(); dm.syringe_pumps['syringe_pump1'] = pump
+    assert not asyncio.run(StepExecutor(dm)._wait_syringe('syringe_pump1', 1))
+
+
+def test_uninitialized_motion_is_not_an_initialization_transition(pump):
+    pump.command({'action': 'aspirate', 'volume': 100})
+    pump.device.protocol.error = 7
+    state = pump.read()
+    assert state['busy'] and state['action']['result'] == 'failed'
+    assert not state['position_trusted']
+
+
+def test_initialization_pause_monitor_and_stop(initializing_pump):
+    pump = initializing_pump
+    dm = DeviceManager(); dm.syringe_pumps['syringe_pump1'] = pump
+    executor = StepExecutor(dm)
+    executor._active_syringes.add('syringe_pump1')
+    executor.set_pause_checker(lambda: True)
+    pump.command({'action': 'initialize', 'confirm': True})
+    pump.device.protocol.busy = 100
+    assert asyncio.run(executor.check_syringe_health())
+    assert pump.device.action['result'] == 'running'
+    assert pump.stop()
+    assert not asyncio.run(executor._wait_syringe('syringe_pump1', 1))
+    assert not pump.device.trusted
+    assert pump.device.protocol.calls.count('Z0R') == 1
 
 
 def test_two_pumps_are_isolated(pump, tmp_path):

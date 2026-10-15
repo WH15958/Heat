@@ -7,6 +7,13 @@ from src.protocols.syringe_pump import SyringeProtocol, ERRORS, FULL_STEPS, SETT
 from src.utils.serial_manager import get_serial_manager
 
 
+def is_initialization_pending(action, busy, fault_code):
+    """Code 7 is transient only while an accepted initialization is still busy."""
+    return bool(action and action.get("action") == "initialize"
+                and action.get("result") in ("accepted", "running")
+                and busy is True and fault_code == 7)
+
+
 class SyringePumpDevice:
     def __init__(self, config, serial_factory=serial.Serial):
         self.config = config
@@ -103,7 +110,7 @@ class SyringePumpDevice:
                 if r.error != q.error:
                     raise IOError("Status changed during snapshot")
                 result[{"target": "target_position", "valve": "valve_position"}.get(key, key)] = int(r.data)
-        if self.action and q.error:
+        if self.action and q.error and not is_initialization_pending(self.action, not q.ready, q.error):
             self.action["result"] = "failed"
         elif self.action and q.ready and self.action["result"] in ("accepted", "running"):
             buffer_ready = self.exchange("?10").data == "96"
