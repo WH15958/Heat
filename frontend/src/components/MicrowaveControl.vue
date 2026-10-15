@@ -13,6 +13,7 @@
           <el-tag type="success" size="small">配置写入可用</el-tag>
           <el-tag type="warning" size="small">启动/停止可用</el-tag>
         </div>
+        <DeviceConnectionControls :device-key="'microwave:'+microwaveId" :connected="microwave.connected" :loading="microwave.loading" :connect-disabled="microwave.bindingResolved === false" hint="确认停止后断开" @connect="$emit('connect', microwaveId)" @disconnect="$emit('disconnect', microwaveId)" />
       </div>
     </template>
 
@@ -27,13 +28,7 @@
     />
 
     <el-form label-width="88px" size="default">
-      <el-form-item label="连接">
-        <el-button v-if="!microwave.connected" type="primary" @click="$emit('connect', microwaveId)" :loading="microwave.loading">
-          {{ microwave.loading ? '连接中…' : '连接设备' }}
-        </el-button>
-        <el-button v-else type="danger" @click="$emit('disconnect', microwaveId)" :loading="microwave.loading">
-          {{ microwave.loading ? '断开中…' : '断开连接' }}
-        </el-button>
+      <el-form-item label="状态">
         <el-button
           style="margin-left: 8px"
           @click="$emit('refresh', microwaveId)"
@@ -180,6 +175,7 @@
 </template>
 
 <script setup lang="ts">
+import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import deviceArtwork from '../assets/theme/microwave.webp'
 import { computed } from 'vue'
 import { MICROWAVE_MODES, type MicrowaveMode } from '../api/devices'

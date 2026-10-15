@@ -10,13 +10,8 @@
           <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
           <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag>
-          <el-button v-if="!pump.connected" type="primary" size="small" @click="$emit('connect', pumpId)" :loading="pump.loading">
-            {{ pump.loading ? '连接中…' : '连接' }}
-          </el-button>
-          <el-button v-else type="danger" size="small" @click="$emit('disconnect', pumpId)" :loading="pump.loading">
-            {{ pump.loading ? '断开中…' : '断开' }}
-          </el-button>
         </div>
+        <DeviceConnectionControls :device-key="'pump:'+pumpId" :connected="pump.connected" :loading="pump.loading" :connect-disabled="pump.bindingResolved === false" hint="停止各通道后断开" @connect="$emit('connect', pumpId)" @disconnect="$emit('disconnect', pumpId)" />
       </div>
     </template>
 
@@ -227,6 +222,7 @@
 </template>
 
 <script setup lang="ts">
+import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import deviceArtwork from '../assets/theme/pump.webp'
 import { computed } from 'vue'
 import { PUMP_MODES, TUBE_MODELS, FLOW_UNITS, TIME_UNITS, VOLUME_UNITS, type PumpMode } from '../api/devices'

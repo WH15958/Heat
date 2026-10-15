@@ -7,6 +7,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { webcrypto } from 'node:crypto'
 import * as program from '../src/utils/microwaveProgram'
+import * as connection from '../src/composables/connectionBatch'
 
 // Execute the real page handlers with Vue reactivity and fake transport/dialogs.
 // No server, serial connection, or hardware is used.
@@ -27,7 +28,9 @@ function page() {
   const exports = {} as any
   const scope = vue.effectScope()
   const imports: Record<string, any> = {
-    vue: { ...vue, onMounted: () => {}, onUnmounted: () => {} },
+    vue: { ...vue, onMounted: () => {}, onUnmounted: () => {}, provide: () => {} },
+    '../api/syringePumps': { syringeApi: {} },
+    '../composables/connectionBatch': connection,
     '../api/devices': { devicesApi: api, FLOW_UNITS: [], PUMP_MODES: [], TUBE_MODELS: [] },
     '../utils/microwaveProgram': program,
     '../utils/pumpCalculations': {},

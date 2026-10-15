@@ -1,5 +1,15 @@
 <template>
   <div class="control-panel">
+    <section class="connection-bar" aria-label="设备连接">
+      <div class="connection-bar-heading"><div><strong>设备连接</strong><span>已连接 {{ controlDeviceEntries.filter(d => d.connected).length }} / {{ controlDeviceEntries.length }} 台</span></div>
+        <el-button type="primary" :loading="connectionBatch.running.value" :disabled="connectionBatch.pending.size > 0" @click="connectAll">一键连接全部设备</el-button>
+      </div>
+      <p v-if="connectionBatch.message.value" role="status" aria-live="polite">{{ connectionBatch.message.value }} <span v-if="connectionBatch.total.value">{{ connectionBatch.results.value.length }} / {{ connectionBatch.total.value }}</span></p>
+      <p v-if="connectionBatch.results.value.length">成功 {{ connectionBatch.results.value.filter(r => r.status === 'success').length }} · 失败 {{ connectionBatch.results.value.filter(r => r.status === 'failed').length }} · 状态未知 {{ connectionBatch.results.value.filter(r => r.status === 'unknown').length }} · 跳过 {{ connectionBatch.results.value.filter(r => r.status === 'skipped').length }}</p>
+      <ul v-if="connectionBatch.results.value.length" class="connection-results">
+        <li v-for="result in connectionBatch.results.value" :key="result.key" :class="result.status"><strong>{{ result.name }}</strong><span>{{ result.detail }}</span></li>
+      </ul>
+    </section>
     <div class="emergency-bar">
       <div class="emergency-description"><strong>全局设备控制</strong><span>停止所有已注册设备</span></div>
       <el-button type="danger" size="large" @click="emergencyStop" class="emergency-button">
@@ -62,7 +72,7 @@
           <ValveControl v-for="(valve, id) in valves" :key="id" :valve-id="id" :state="valve" @update="updateValve" />
         </section>
         <div v-show="selectedDevice === 'syringe'">
-          <SyringePumpGroup @devices="syringeDevices = $event" />
+          <SyringePumpGroup ref="syringeGroup" @devices="syringeDevices = $event" />
         </div>
         <el-empty v-if="!controlDevices.length" description="暂无可控制设备" />
       </div>
@@ -71,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, provide, reactive, ref, watch } from 'vue'
 import { devicesApi, FLOW_UNITS, PUMP_MODES, TUBE_MODELS, type MicrowaveMode, type PumpMode } from '../api/devices'
 import { hostedMicrowavePayload, microwaveProgramPayload, microwaveProgramKey, microwaveProgramConfigured, type MicrowaveProgram, type MicrowaveSegmentConfig } from '../utils/microwaveProgram'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -82,11 +92,73 @@ import HeaterControl from '../components/HeaterControl.vue'
 import PumpControl from '../components/PumpControl.vue'
 import MicrowaveControl from '../components/MicrowaveControl.vue'
 import SyringePumpGroup from '../components/SyringePumpGroup.vue'
-import type { SyringeState } from '../api/syringePumps'
+import { syringeApi, type SyringeState } from '../api/syringePumps'
+import { createConnectionBatch, connectionBatchKey, type ConnectionTarget } from '../composables/connectionBatch'
 import { normalizeTubeSegmentLengths } from '../utils/pumpCalculations'
 
 const valves = reactive<Record<string, ValveState>>({})
 function updateValve(id: string, state: ValveState) { valves[id] = state }
+const connectionBatch = createConnectionBatch()
+provide(connectionBatchKey, connectionBatch)
+const syringeGroup = ref<{ update: (state: SyringeState) => void }>()
+
+async function connectAll() {
+  await connectionBatch.run(async () => {
+    const registry = (await devicesApi.list()).data
+    applyDeviceData(registry)
+    for (const state of Object.values(registry.syringe_pumps || {})) syringeGroup.value?.update(state as SyringeState)
+    const targets: ConnectionTarget[] = []
+    const groups = [
+      { group: 'heaters', kind: 'heater', label: '加热器', connect: devicesApi.connectHeater, read: devicesApi.readHeaterData },
+      { group: 'pumps', kind: 'pump', label: '蠕动泵', connect: devicesApi.connectPump, read: devicesApi.readPumpStatus },
+      { group: 'microwaves', kind: 'microwave', label: '微波仪', connect: devicesApi.connectMicrowave, read: devicesApi.readMicrowaveData },
+      { group: 'syringe_pumps', kind: 'syringe', label: '注射泵', connect: syringeApi.connect, read: syringeApi.read },
+      { group: 'valves', kind: 'valve', label: '三通阀', connect: (id: string) => devicesApi.valveOperation(id, 'connect'), read: (id: string) => devicesApi.valveOperation(id, 'status') },
+    ]
+    for (const spec of groups) for (const id of Object.keys(registry[spec.group] || {}).sort()) {
+      const info = registry[spec.group][id]
+      const update = (state: any) => {
+        if (spec.kind === 'syringe') {
+          const next = { ...syringeDevices.value[id], ...state, device_id: id }
+          syringeDevices.value[id] = next
+          syringeGroup.value?.update(next)
+        } else if (spec.kind === 'valve') valves[id] = { ...valves[id], ...state }
+        else {
+          const device = (devices as any)[spec.group][id]
+          if (state.connected !== undefined) device.connected = state.connected
+          device.connectionError = state.read_ok === false ? '已连接，状态未知' : null
+          if (spec.kind === 'microwave') {
+            if (state.read_ok === false) microwaveSnapshots[id] = { device_id: id, error: 'read_failed' }
+            else if (state.material_temperature !== undefined) microwaveSnapshots[id] = state
+          }
+        }
+      }
+      targets.push({
+        key: `${spec.kind}:${id}`, name: `${info.name || spec.label} · ${id}`,
+        connected: () => Boolean(info.connected) || (spec.kind === 'syringe' ? Boolean(syringeDevices.value[id]?.connected) : spec.kind === 'valve' ? Boolean(valves[id]?.connected) : Boolean((devices as any)[spec.group][id]?.connected)),
+        blocked: () => info.configured === false ? '未配置，已跳过' : info.binding_resolved === false ? '串口未匹配，已跳过' : '',
+        connect: async () => {
+          const response = (await spec.connect(id)).data
+          if (response.success !== true) return false
+          update({ connected: true, read_ok: false })
+          return true
+        },
+        read: async () => {
+          try {
+            const state = (await spec.read(id)).data
+            if (state.error || state.read_ok === false || state.success === false || state.connected === false
+              || (['syringe', 'valve'].includes(spec.kind) && state.read_ok !== true)
+              || (spec.kind === 'heater' && !Number.isFinite(state.pv))
+              || (spec.kind === 'microwave' && !Number.isFinite(state.material_temperature))
+              || (spec.kind === 'pump' && [1, 2, 3, 4].some(ch => state.channels?.[ch]?.read_ok !== true))) throw new Error('设备状态读取未确认')
+            update({ ...state, read_ok: true })
+          } catch (error) { update({ read_ok: false }); throw error }
+        },
+      })
+    }
+    return targets
+  })
+}
 
 const STORAGE_KEY = 'heat_control_params'
 
@@ -530,7 +602,7 @@ onMounted(async () => {
   await refreshMicrowavePrograms()
   programTimer = setInterval(() => { void refreshMicrowavePrograms() }, 1000)
 })
-onUnmounted(() => { if (programTimer) clearInterval(programTimer) })
+onUnmounted(() => { connectionBatch.cancel(); if (programTimer) clearInterval(programTimer) })
 
 function heaterConnectionPort(id: string): string {
   return realtimeData.value?.heaters?.[id]?.connection_port ?? devices.heaters[id]?.connectionPort ?? '--'
@@ -1095,6 +1167,7 @@ async function recoverMicrowaveProgram(id: string) {
 }
 
 async function emergencyStop() {
+  connectionBatch.cancel()
   try {
     await ElMessageBox.confirm('确定要紧急停止所有设备吗？此操作不可撤销！', '紧急停止确认', {
       confirmButtonText: '确认紧急停止',
@@ -1150,6 +1223,14 @@ function calcFlowRate(ch: ChannelConfig): number {
 
 <style scoped>
 .control-panel { padding: 0; }
+.connection-bar { padding: 16px 20px; margin-bottom: 18px; border: 1px solid var(--el-border-color-light); border-radius: 8px; background: var(--el-bg-color); }
+.connection-bar-heading, .connection-bar-heading > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.connection-bar-heading span, .connection-bar p, .connection-results { font-size: 13px; }
+.connection-bar p { margin: 12px 0 0; }
+.connection-results { list-style: none; padding: 0; margin: 12px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; }
+.connection-results li { display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.connection-results .failed, .connection-results .unknown { color: var(--el-color-danger); }
+.connection-results .skipped { color: var(--el-text-color-secondary); }
 .emergency-bar { position: static; margin: 0 0 18px; border-radius: 6px; box-shadow: none; }
 .device-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
 .device-selector { position: sticky; top: 88px; padding: 0 14px 0 0; border-right: 1px solid var(--el-border-color-light); min-width: 0; }
@@ -1168,7 +1249,18 @@ function calcFlowRate(ch: ChannelConfig): number {
 .device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .device-detail :deep(.device-card), .device-detail :deep(.syringe-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
 .device-detail :deep(.el-card__header) { min-height: 88px; box-sizing: border-box; display: flex; align-items: center; }
-.device-detail :deep(.card-header) { width: 100%; }
+.device-detail :deep(.card-header) { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 20px; }
+.device-detail :deep(.device-heading) { grid-column: 1; }
+.device-detail :deep(.header-tags), .device-detail :deep(.badges) { grid-column: 1; grid-row: 2; display: flex; flex-wrap: wrap; gap: 6px; }
+.device-detail :deep(.card-header > .device-connection) { grid-column: 2; grid-row: 1 / 3; }
+.device-detail :deep(.panel-heading) { flex-wrap: nowrap; }
+.device-detail :deep(.identity) { min-width: 0; }
+@media (max-width: 700px) {
+  .connection-results { grid-template-columns: minmax(0, 1fr); }
+  .device-detail :deep(.card-header) { grid-template-columns: minmax(0, 1fr); }
+  .device-detail :deep(.card-header > .device-connection) { grid-column: 1; grid-row: 3; }
+  .device-detail :deep(.panel-heading) { flex-wrap: wrap; }
+}
 @media (max-width: 900px) {
   .device-workspace { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .device-selector { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--el-border-color-light); }
