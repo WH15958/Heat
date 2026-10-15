@@ -130,8 +130,11 @@ from unittest.mock import Mock, AsyncMock, patch
 from src.experiment import yaml_recovery as recovery
 from src.experiment.actions import ExperimentStep, ActionType
 from src.experiment.experiment_logger import ExperimentLogger
+from src.science import sample_record
 patch('serial.Serial.open', side_effect=AssertionError('No serial')).start()
 recovery.RECOVERY_DIR = Path(sys.argv[1])
+sample_record.SAMPLES_DIR = recovery.RECOVERY_DIR.parent / 'crash_samples'
+sample_record.SAMPLES_CSV = sample_record.SAMPLES_DIR / 'samples.csv'
 executor = Mock(activity_snapshot=None, last_device_result=None)
 async def action(step):
     os._exit(23)

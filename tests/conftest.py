@@ -1,8 +1,10 @@
-"""Keep mandatory YAML recovery records isolated from real runtime records."""
+"""Keep software test artifacts out of real experiment and sample history."""
 import pytest
+
+from runtime_isolation import isolated_runtime
 
 
 @pytest.fixture(autouse=True)
-def isolated_yaml_recovery(tmp_path, monkeypatch):
-    from src.experiment import yaml_recovery
-    monkeypatch.setattr(yaml_recovery, 'RECOVERY_DIR', tmp_path / 'yaml_runs')
+def isolated_test_runtime():
+    with isolated_runtime() as directory:
+        yield directory
