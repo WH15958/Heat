@@ -186,9 +186,8 @@ async def acknowledge_interrupted(batch_id: str, body: RecoveryConfirmation):
                 raise HTTPException(409, "设备停机或记录保存仍未确认，不可解除锁定")
             live.record["recovery_required"] = False
             live.save()
-            record = dict(live.record)
+            return live.snapshot()
         record["recovery_required"] = False
         record["cleanup_required"] = False
-        record["error"] = "服务中断；人工确认设备停止，未自动恢复执行"
         guided.atomic_record(record)
         return record
