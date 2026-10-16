@@ -8,6 +8,7 @@ from src.experiment.actions import (
     ActionType,
     WaitCondition,
     WaitType,
+    validate_flow_duration,
 )
 
 EXPERIMENTS_DIR = Path("experiments")
@@ -342,6 +343,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
             enabled=enabled,
             on_error=on_error,
         )
+        validate_flow_duration(step)
         steps.append(step)
 
     return {

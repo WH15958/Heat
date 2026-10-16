@@ -1,4 +1,5 @@
 from enum import Enum
+import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -93,3 +94,20 @@ class ExperimentStep:
     wait: WaitCondition = field(default_factory=WaitCondition)
     enabled: bool = True
     on_error: str = "stop"
+
+
+def validate_flow_duration(step):
+    """Optional host-owned bounded flow run; never sent as a pump register."""
+    if "flow_duration_seconds" not in step.params:
+        return None
+    seconds = step.params["flow_duration_seconds"]
+    if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds) or not 0.1 <= seconds <= 9999):
+        raise ValueError("flow_duration_seconds must be finite and in [0.1, 9999]")
+    if (step.type != ActionType.PUMP_START or step.params.get("mode") != "FLOW_MODE"
+            or step.wait.type != WaitType.NONE or not step.enabled or step.on_error != "stop"):
+        raise ValueError("Timed flow requires enabled pump.start, FLOW_MODE, no wait and on_error=stop")
+    if any(key in step.params for key in ("run_time", "time_unit", "dispense_volume", "volume_unit",
+                                         "repeat_count", "interval_time", "interval_time_unit")):
+        raise ValueError("Timed flow cannot include device time, volume or repeat parameters")
+    return seconds

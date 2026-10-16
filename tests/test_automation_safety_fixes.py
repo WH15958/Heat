@@ -19,7 +19,7 @@ from src.web.api import experiments, guided as api
 from src.web.device_manager import DeviceManager
 from src.protocols.pump_params import PumpRunStatus
 from src.protocols.microwave_params import auto_power_segment_start
-from test_guided import FakeManager, spec, until
+from test_guided import FakeManager, spec, until, fast_timed_flow
 from test_microwave_atomic_config import make_device
 
 
@@ -32,10 +32,11 @@ def test_manual_drain_times_and_fixed_cleaning_route():
         order = list(steps)
         assert not any(s['type'] == 'heater.stop' for s in data['steps'])
         product = steps['collect_product']
-        assert product['params']['run_time'] == 150
-        assert product['params']['dispense_volume'] == 5
+        assert product['params']['flow_duration_seconds'] == 150
+        assert product['params']['mode'] == 'FLOW_MODE'
+        assert 'dispense_volume' not in product['params']
         assert product['params']['flow_rate'] == 2
-        assert product['wait']['timeout'] == 210
+        assert 'wait' not in product
         assert steps['product_route']['params']['position'] == 'NO'
         row = data['metadata']['guided_parameters']
         assert data['metadata']['theoretical_product_volume_ml'] == pytest.approx(row[2]+row[3])
@@ -45,9 +46,10 @@ def test_manual_drain_times_and_fixed_cleaning_route():
             assert steps[f'clean_{cycle}_in']['params']['run_time'] == 48
             assert steps[f'clean_{cycle}_in']['params']['dispense_volume'] == .8
             drain = steps[f'clean_{cycle}_out']
-            assert drain['params']['run_time'] == 210
-            assert drain['params']['dispense_volume'] == 7
-            assert drain['wait']['timeout'] == 270
+            assert drain['params']['flow_duration_seconds'] == 210
+            assert drain['params']['mode'] == 'FLOW_MODE'
+            assert 'dispense_volume' not in drain['params']
+            assert 'wait' not in drain
     assert guided.priming_recipe(request, 'test')['metadata']['waste_port'] == 'NC'
 
 
@@ -93,7 +95,7 @@ def test_formal_drains_reach_real_executor_with_entered_times():
         assert batch.state.value == 'completed'
         # flow, direction, mode, run_time, dispense_volume, ...
         assert [(ch, args[3], args[4]) for ch, args in dm.motions] == [
-            (4, 480, 8), (4, 123, 2.05), (3, 60, 1), (4, 234, 3.9)]
+            (4, None, None), (4, None, None), (3, 60, 1), (4, None, None)]
         assert [c for c in dm.calls if c[0] in ('valve', 'pump_start')] == [
             ('valve', True), ('pump_start', 4), ('valve', False), ('pump_start', 4),
             ('valve', True), ('pump_start', 3), ('pump_start', 4)]
@@ -217,6 +219,7 @@ def test_group_cleanup_retention_is_scoped_and_failure_always_stops_heaters(keep
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    monkeypatch.setattr(execution.StepExecutor, "_run_timed_flow", fast_timed_flow)
     # Full batch regressions do not wait 30 real seconds; dedicated stability tests use virtual time.
     monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', AsyncMock(return_value=True))
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real hardware')))
@@ -614,7 +617,8 @@ def test_batch_pause_during_heating_is_pending_until_stopped_then_no_collection_
     async def scenario():
         dm = FakeManager()
         dm.read_pump_status = lambda did: {'channels': {
-            str(c): dict(read_ok=True, running=False, run_status='STOP') for c in (3, 4)}}
+            str(c): dict(read_ok=True, running=str(c) in dm.flow_channels,
+                         run_status='START' if str(c) in dm.flow_channels else 'STOP') for c in (3, 4)}}
         ready, reads = False, 0
         read = dm.read_microwave_data
         def heat_status(did):
