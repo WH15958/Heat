@@ -48,7 +48,7 @@
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
         <p v-if="batch.request?.product_port==='NC'" class="notice compact-notice">历史批次仅供查阅；新批次须按 NO 收产物、NC 排废液重新确认并预充。</p>
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label></div>
-        <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+        <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
         <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
       </section>
@@ -59,7 +59,7 @@
         </div>
         <div class="form-group"><h4>清洗排液 · 通道四</h4>
           <div class="grid compact-fields"><label v-for="item in fixed.slice(6)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label><label>排液流量<span class="readonly-value">{{ Number.isFinite(setting('drainFlow')) ? setting('drainFlow') : '待填写' }} mL/min</span><small>沿用产物收集设置</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
         </div>
         <div class="notice compact-notice">切 NC → 进液 → 停留 → 排液，按次数重复。</div>
       </section>
@@ -71,7 +71,7 @@
           <label class="preheat-field">预充前加热时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
           <p><small>从两路加热启动后计时，暂停不计时。时间到后检查目标 ±3℃、稳定30秒；未达标继续等待，最多60分钟。填0表示不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input :data-field="p.key" :aria-invalid="!!fieldErrors[p.key]" v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span><small v-if="fieldErrors[p.key]" class="field-error" role="alert">{{ fieldErrors[p.key] }}</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
         </div>
         <details class="form-group" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open">
