@@ -6,6 +6,7 @@ from src.experiment.actions import (
     ExperimentStep,
     ActionType,
     WaitType,
+    validate_flow_duration,
 )
 from src.experiment.progress import ActivityProgress
 from src.devices.microwave import MicrowaveSegment
@@ -209,6 +210,7 @@ class StepExecutor:
         )
 
         try:
+            flow_duration = validate_flow_duration(step)
             loop = asyncio.get_event_loop()
             if self._should_stop():
                 return False
@@ -418,6 +420,9 @@ class StepExecutor:
                 self._pump_start_confirmed.add(pump_key)
                 if run_time is not None and time_unit in (0, 1, 2):
                     self.activity.pump_started(run_time * (1, 60, 3600)[time_unit])
+                if flow_duration is not None:
+                    if not await self._run_timed_flow(step.params["device_id"], ch, flow_duration):
+                        return False
 
             elif step.type == ActionType.PUMP_STOP:
                 device_id = step.params["device_id"]
@@ -484,6 +489,57 @@ class StepExecutor:
             self._last_error = f"{step.type.value} failed: {e}"
             logger.error(f"Step {step.id} failed: {e}")
             return False
+
+    async def _run_timed_flow(self, device_id, channel, seconds):
+        """Finish the issued flow run even while paused; always confirm STOP before return."""
+        started = time.monotonic()
+        deadline = started + seconds
+        next_read = started
+        self.activity.pump_started(seconds)
+        self.activity.state = "waiting"
+        self.activity.wait_type = "flow_duration"
+        success = False
+        stopped = False
+        try:
+            while True:
+                if self._should_stop():
+                    self._last_error = "流量排液收到停止请求"
+                    break
+                now = time.monotonic()
+                if now >= deadline:
+                    success = True
+                    break
+                if now >= next_read:
+                    status = await asyncio.to_thread(self._dm.read_pump_status, device_id)
+                    data = status.get("channels", {}).get(str(channel), {})
+                    self.activity.device(device_id, data)
+                    self.last_device_result = data
+                    if (data.get("read_ok") is not True or data.get("running") is not True
+                            or data.get("run_status") != "START"):
+                        self._last_error = "流量排液状态读取失败或设备提前停止"
+                        break
+                    next_read = time.monotonic() + 1
+                await asyncio.sleep(max(0, min(0.05, deadline - time.monotonic())))
+        except Exception as exc:
+            self.activity.device(device_id, {"read_ok": False})
+            self._last_error = "流量排液状态读取失败：" + str(exc)
+        finally:
+            self.activity.state = "stopping"
+            try:
+                stopped = await asyncio.to_thread(self._dm.stop_pump_channel, device_id, channel)
+            except Exception as exc:
+                self._last_error = "流量排液停止异常：" + str(exc)
+            key = (device_id, channel)
+            self._pump_start_confirmed.discard(key)
+            if stopped:
+                self._active_pumps.discard(key)
+                self._pump_repeat_counts.pop(key, None)
+            else:
+                self._last_error = (self._last_error or "流量排液") + "；停止未确认"
+            self.last_device_result = dict(device_id=device_id, channel=channel,
+                read_ok=bool(stopped), running=False if stopped else None, stop_confirmed=bool(stopped))
+            self.activity.device(device_id, self.last_device_result)
+        return success and stopped and not self._should_stop()
 
     async def stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
         self._cleanup_count += 1

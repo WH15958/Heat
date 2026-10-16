@@ -848,7 +848,7 @@ interval_time: 0
 
 ### 引导式生成流程的排液与保温约定
 
-引导式固定 NO 收产物、NC 排废液，每轮清洗先切 NC 再注液。正式产物与清洗排液使用各自填写的时间生成 `pump.start`（TIME_QUANTITY，run_time 秒、time_unit=0、flow_unit=1），dispense_volume 为时间×流量÷60（volume_unit=1），等待 pump_complete 后显式 pump.stop_channel；清洗进液仍由体积/流量计算时间。metadata 中 theoretical_product_volume_ml 是 A+B 理论进样量，不能用排液名义排量代替样品体积。
+引导式固定 NO 收产物、NC 排废液，每轮清洗先切 NC 再注液。正式产物、清洗排液及预充排液使用各自填写的时间生成 `pump.start`（FLOW_MODE、flow_unit=1、flow_duration_seconds 为秒数），同一步内由软件计时并停止确认，不使用 pump_complete，也不下发 run_time 或 dispense_volume；清洗进液保留 TIME_QUANTITY，由体积/流量计算时间。metadata 中 theoretical_product_volume_ml 是 A+B 理论进样量，不能用排液名义排量代替样品体积。
 
 引导式 recipe 不在反应前停前驱体加热器；外层 GuidedBatch 在成功组间保留加热器，到整批结束/失败/停止时全停机。独立运行导出的单组 YAML 使用普通引擎，完成时仍清理全部活动设备，不能仅凭 YAML 推断有跨组保温。搭建式的阀位及 heater.stop 编排保持自由。
 
@@ -858,3 +858,24 @@ interval_time: 0
 
 
 引导式生成流程使用填写的实验名称：预充 `name` 为“名称 · 预充”，正式组为“名称 · 第 N 组”，`metadata.experiment_name` 保存整批名称。该字段属于追踪信息，不替代 `batch_id`、`sample_id` 或运行ID；普通 YAML 无需提供此字段，历史文件不迁移。
+
+
+### 流量模式的编排定时排液
+
+```yaml
+- id: collect_product
+  type: pump.start
+  params:
+    device_id: pump1
+    channel: 4
+    mode: FLOW_MODE
+    flow_rate: 15
+    flow_unit: 1
+    direction: CW
+    flow_duration_seconds: 300
+  on_error: stop
+```
+
+`flow_duration_seconds` 是可选编排参数，不发送给设备；范围 0.1–9999 秒。必须显式 FLOW_MODE、启用且 on_error=stop，无额外 wait；不能混用 run_time/time_unit、dispense_volume/volume_unit、repeat_count 或 interval_time/interval_time_unit。未填写此字段的既有 FLOW_MODE 语义不变。
+
+START 确认后按单调时钟计时；期间约每秒检查运行状态，读取失败或提前停机视为失败并停止。暂停不冻结本次泵运行计时，到时仍主动停止并确认，再等待恢复进入下一步；停止请求可提前中断。停止未确认不会记作完成。此模式依赖软件和通信，不提供进程异常退出或掉电后的设备自主停止保障，必须现场处置；旧保存计划不改写。

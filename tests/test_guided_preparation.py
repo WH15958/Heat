@@ -138,6 +138,8 @@ def test_generated_wait_and_parser_contract():
 
 @pytest.fixture
 def prepared_env(tmp_path, monkeypatch):
+    from test_guided import fast_timed_flow
+    monkeypatch.setattr(execution.StepExecutor, "_run_timed_flow", fast_timed_flow)
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('Real hardware forbidden')))
     monkeypatch.setattr('src.experiment.experiment_logger.LOGS_DIR', tmp_path/'logs')
     monkeypatch.setattr('src.experiment.experiment_logger.write_sample_record', Mock(return_value=True))

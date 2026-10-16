@@ -149,7 +149,7 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `POST /api/pump/{device_id}/start` 对通道、方向、模式、单位、有限数、协议流速范围（一般 `0.01-9999`，RPM 上限 `150`）、模式必填参数和重复间隔做请求校验；布尔值不能冒充数值，非法请求返回 `422`，不会调用设备管理器。
 - `DeviceManager` 在任何配置写入前检查通道启用状态和 `max_flow_rate`，并在 `/api/devices` 的泵通道元数据中暴露配置的 `tube_model`、`max_flow_rate` 和启用状态供前端约束输入；启动事务先确认 `n001=0`，再写入并读回方向、软管、模式和当前模式参数，最后写启动并确认 `n001=1`。默认要求读回与请求相同；经 HMI 规格确认的固件差异只能通过具体泵的 `tube_model_readback_overrides` 配置，不能硬编码为所有泵的全局协议规则。`pump1` 当前唯一覆盖为 `11 -> 13`。stop/disconnect/cleanup 会与同一泵的启动事务协调，主动断开和 cleanup 只有在 stop 确认成功后才释放串口。
 - 泵启动事务会读回使能、方向、模式、流速/单位及当前模式参数，最后读取 `n001` 确认启动；单通道停止和 `0010=0` 全停分别读取 `n001` 确认。非法枚举、超时或浮点读回异常均失败，缓存状态不能替代实读结果。
-- `TIME_SPEED=2` 在 `DeviceManager` 内使用独立配置顺序：停止并确认 → 通道/软管/方向 → 切换模式并确认 → 时间/单位、重复次数及本次指定的间隔/单位 → 流量/单位。它不借道 `FLOW_MODE`，不写分装体积，也不补写或重试配置。全部写完后、启动前重读 `n006`、`n107/n109`、`n100`、本次指定的 `n101/n103`、`n110/n112`；启动确认后只复核模式与流量/单位，不比较倒计时。复用同步驱动的有界读回（最多 3 次，间隔 0.25 秒，浮点 `rel_tol=1e-5/abs_tol=1e-4`）及现有泵锁/停止取消机制。启动后核验失败或启动确认失败会停止该通道并读回确认，保留原始原因和停止结果，不重发启动。其他模式及引导式 `TIME_QUANTITY=1` 流程不变。
+- `TIME_SPEED=2` 在 `DeviceManager` 内使用独立配置顺序：停止并确认 → 通道/软管/方向 → 切换模式并确认 → 时间/单位、重复次数及本次指定的间隔/单位 → 流量/单位。它不借道 `FLOW_MODE`，不写分装体积，也不补写或重试配置。全部写完后、启动前重读 `n006`、`n107/n109`、`n100`、本次指定的 `n101/n103`、`n110/n112`；启动确认后只复核模式与流量/单位，不比较倒计时。复用同步驱动的有界读回（最多 3 次，间隔 0.25 秒，浮点 `rel_tol=1e-5/abs_tol=1e-4`）及现有泵锁/停止取消机制。启动后核验失败或启动确认失败会停止该通道并读回确认，保留原始原因和停止结果，不重发启动。其他设备模式的配置逻辑不变；引导式通道四排液使用下述流量模式监督流程。
 - 泵启动 API 保留原有响应字段，失败时可附加 `error`，包含通道、阶段及参数期望/读回证据；控制页直接显示该详情，实时值仍来自设备读回。YAML 的 `pump_start` 通过同一管理器路径执行，失败沿用执行器错误传播及清理流程。`tests/test_pump_time_speed.py` 用有状态寄存器模拟模式/时间联动与故障，不代表已证明固件按“15÷5”计算；实际协议拒绝原因查看 Modbus 日志，实机需按用户指南水测确认。
 - 泵 stop 使用请求代次取消更早进入但尚未拿到事务锁的 start，避免 stop 已返回成功后旧 start 再启动；`TIME_QUANTITY` 同时校验声明流量与体积/时间推导流量。
 - Modbus 读写除 CRC 外还必须匹配 slave、function、长度、byte count 和写响应 echo；CRC 正确但属于其他请求或设备的帧不能算成功。
@@ -504,7 +504,7 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，正式进料不隐式回零；每批通过明确确认的预充入口依次执行已有 syringe_pump.initialize，确认完成及可信零位后才吸排预充液。
 
-微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃；温度读取失败、微波故障或仍输出不放行。收取前重复此检查，再切换产物出口及抽液。pump.start 使用已有 TIME_QUANTITY、pump_complete 和显式 stop_channel，理论流量不冒充实际排空传感器。
+微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃；温度读取失败、微波故障或仍输出不放行。收取前重复此检查，再切换产物出口及抽液。通道四排液使用 FLOW_MODE 及软件定时停泵，通道三清洗进液保留 TIME_QUANTITY、pump_complete 和显式 stop_channel；理论流量不冒充实际排空传感器。
 
 启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
 
@@ -525,7 +525,7 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 预充复用同步设备驱动、现有 StepExecutor、ExperimentEngine、资源预留和日志；不新增设备动作或 YAML 动作类型。一键启动的预充成功后自动进入 experiments，保留所有权；只有单独调用 /prime 的批次进入 paused/ready，其普通 resume 被拒绝，必须调用 start。失败会停止两台注射泵（含未启动那台）及排液通道；任何 False 或停机异常保留未确认状态，并可再次停止重试。恢复锁必须人工确认后通过现有 acknowledge-interrupted 接口解除，此接口也处理本服务中的预充失败。服务重启后 ready 不可自动复用或恢复。
 
-预充排液直接使用 prime_drain_seconds / prime_drain_flow 下发 TIME_QUANTITY，理论等效排量为 秒数×流量÷60；正式收集及清洗排液使用 drain_flow 和各自独立的 product_drain_seconds / clean_drain_seconds，名义排量同样为 秒数×流量÷60。清洗进液仍按 clean_volume / clean_flow 计算时间。每次清洗先 valve.switch NC 再进液，收产物固定 NO。单组 metadata 记录两个排液时长及 theoretical_product_volume_ml，名义排量不能冒充真实样品量；旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，产物、清洗与批次确认页面移除理论排液时间和估算按钮，清洗页同步显示共用排液流量；预充页仍保留明确点击的估算按钮；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
+预充排液使用 prime_drain_seconds / prime_drain_flow；正式收集及清洗排液使用 drain_flow 和各自独立的 product_drain_seconds / clean_drain_seconds。三处均下发 FLOW_MODE，流量单位 mL/min，时长作为编排参数 flow_duration_seconds，不向设备写时间或分装体积。清洗进液仍按 clean_volume / clean_flow 计算时间。每次清洗先 valve.switch NC 再进液，收产物固定 NO。单组 metadata 记录两个排液时长及 theoretical_product_volume_ml，名义排量不能冒充真实样品量；旧 prime_drain_factor、prime_extra_seconds 不再接受为新请求字段。前端高级容量设置默认折叠但继续必填，产物、清洗与批次确认页面移除理论排液时间和估算按钮，清洗页同步显示共用排液流量；预充页也不提供估算按钮；旧记录的旧公式转换仅用于显示，不更新持久化签名、不创建 live runner，也不允许复用旧预充资格。
 
 ### 自动化保护等待与计时
 
@@ -570,3 +570,12 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 前端保持 2 秒轮询，不自行递减动作剩余时间；独立检查距成功响应是否超过 6 秒。控制命令使用响应序号，停止可以覆盖待确认的暂停/继续；较早响应不得覆盖停止反馈。网络失败只通过读取核对，不自动重发。字段定位由本地校验及 422 loc 映射，设备/跨字段错误仍为页面提示。
 
 历史页支持 `/history?batch_id=...`。使用日志 metadata.batch_id 与批次保存的 priming.run_id、groups[].run_id 取并集，绝不通过实验名称猜测关联。批次导出逐条读取并核对全部 run_id，沿用 `{exported_at,count,runs}` JSON 格式（另带 batch_id）；缺记录或读取/持久化错误整体失败。旧记录无 activity 时沿用步骤名称，不制造读数。
+
+
+### 引导式流量排液的定时停止
+
+`pump.start` 可选编排参数 `flow_duration_seconds`（0.1–9999 秒），仅允许显式 FLOW_MODE、启用、on_error=stop、无额外 wait，并禁止设备时间/体积/重复参数；解析及执行前均校验。REST StartPumpRequest 不新增字段，DeviceManager 和同步驱动接口不变。三处排液在同一步内完成启动→计时→停止确认，不依赖后续步骤发停泵。
+
+`StepExecutor._run_timed_flow` 从 START 确认后按单调时钟计时，在 Web/编排层约每秒复用 read_pump_status 监督当前通道；读取失败或提前停止立即失败并清理。每次短睡眠最多 50ms，停止请求可中断；已发出的流量动作在暂停中仍计时、监督和到时停泵，步骤边界由引擎等待继续。所有退出路径尝试停止，停止未确认保留活动设备供原清理/恢复机制处理；不自动重启泵。串口调用耗时可能推迟停泵确认，不保证硬实时精度。进度 wait_type=flow_duration 是只读动作标记，不是新增 YAML wait 类型。
+
+预充签名协议升级为 heated_precursors_flow_drain_v3，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。

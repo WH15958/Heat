@@ -121,6 +121,9 @@ def guided_activity(step, observation):
         activity["parameters"]["position"] = "NC"
     elif sid.startswith("collect_"):
         activity["parameters"]["position"] = "NO"
+    if params.get("flow_duration_seconds") is not None:
+        activity["parameters"]["mode"] = "FLOW_MODE"
+        activity["description"] = "通道四按设定流量排液；软件到时主动停泵并确认。暂停不延长本次排液，后续步骤等待继续。"
     if step.wait.target_temperature is not None:
         activity["parameters"]["target_temperature"] = step.wait.target_temperature
     if step.wait.targets:

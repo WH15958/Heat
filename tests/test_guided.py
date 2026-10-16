@@ -69,6 +69,7 @@ class FakeManager:
         self.valve_owner = None
         self.heating = {}
         self.pump_reads = {}
+        self.flow_channels = set()
         self.microwave_on = False
         self.temperature = 30
         self.fail_feed = False
@@ -161,17 +162,22 @@ class FakeManager:
     def start_pump_channel(self, did, channel, *args):
         self.calls.append(("pump_start", channel))
         self.pump_reads[str(channel)] = 0
+        if args[2].name == "FLOW_MODE":
+            self.flow_channels.add(str(channel))
+        else:
+            self.flow_channels.discard(str(channel))
         return True
 
     def stop_pump_channel(self, did, channel):
         self.calls.append(("pump_stop", channel))
         self.pump_reads.pop(str(channel), None)
+        self.flow_channels.discard(str(channel))
         return True
 
     def read_pump_status(self, did):
         channels = {}
         for channel in ("3", "4"):
-            running = channel in self.pump_reads and self.pump_reads[channel] == 0
+            running = channel in self.pump_reads and (channel in self.flow_channels or self.pump_reads[channel] == 0)
             if channel in self.pump_reads:
                 self.pump_reads[channel] += 1
             channels[channel] = {"read_ok": True, "running": running, "run_status": "START" if running else "STOP"}
@@ -186,11 +192,20 @@ async def until(predicate):
     raise AssertionError("condition not reached")
 
 
+_real_timed_flow = guided.StepExecutor._run_timed_flow
+
+
+async def fast_timed_flow(self, device_id, channel, seconds):
+    # Integration tests retain the real supervised path; virtual-clock tests cover timing.
+    return await _real_timed_flow(self, device_id, channel, .01)
+
+
 class GuidedTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.directory = Path(self.tmp.name)
-        self.patches = [patch("serial.Serial.open", side_effect=AssertionError("real serial forbidden")),
+        self.patches = [patch("src.experiment.executor.StepExecutor._run_timed_flow", new=fast_timed_flow),
+            patch("serial.Serial.open", side_effect=AssertionError("real serial forbidden")),
             patch("src.experiment.experiment_logger.LOGS_DIR", self.directory / "logs"),
             patch("src.experiment.experiment_logger.write_sample_record", return_value=True),
             # Timing and stability are tested separately with a simulated monotonic clock.
@@ -237,10 +252,11 @@ class GuidedTests(unittest.TestCase):
                          ["syringe_pump1"]*6+["syringe_pump2"]*6)
         self.assertEqual([s["type"].split(".")[1] for s in motions], ["aspirate", "dispense"]*6)
         drain = next(s for s in data["steps"] if s["id"] == "prime_drain")
-        self.assertEqual(drain["params"]["run_time"], 123)
+        self.assertEqual(drain["params"]["flow_duration_seconds"], 123)
         self.assertEqual(drain["params"]["flow_rate"], 2)
-        self.assertEqual(drain["params"]["dispense_volume"], 4.1)
-        self.assertEqual(drain["wait"]["timeout"], 183)
+        self.assertEqual(drain["params"]["mode"], "FLOW_MODE")
+        self.assertNotIn("dispense_volume", drain["params"])
+        self.assertNotIn("wait", drain)
         product = next(s for s in guided.recipe(request.rows()[0], request, "test", 0)["steps"]
                        if s["id"] == "collect_product")
         self.assertEqual(product["params"]["flow_rate"], 3)
@@ -266,7 +282,9 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
             current = guided.priming_signature(request)
         fields = json.loads(digest.call_args.args[0])
-        self.assertEqual(fields.pop("priming_protocol"), "heated_precursors_v2")
+        self.assertEqual(fields.pop("priming_protocol"), "heated_precursors_flow_drain_v3")
+        previous_fields = dict(fields, priming_protocol="heated_precursors_v2")
+        self.assertNotEqual(current, hashlib.sha256(json.dumps(previous_fields, sort_keys=True, allow_nan=False).encode()).hexdigest())
         self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
         fields["devices"] = [d for d in fields["devices"] if d["device_id"] not in ("heater1", "heater2")]
         legacy = hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()

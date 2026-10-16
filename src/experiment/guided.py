@@ -145,7 +145,7 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "heated_precursors_v2"
+    fields["priming_protocol"] = "heated_precursors_flow_drain_v3"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters) for device in group
         if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2")]
@@ -186,12 +186,9 @@ def priming_recipe(spec, batch_id):
     add("prime_recheck_temperature", "wait", wait=dict(type="microwave_temperature_below",
         device_id="microwave1", target_temperature=45, timeout=spec.cooling_timeout))
     seconds = spec.prime_drain_seconds
-    add("prime_drain", "pump.start", dict(device_id="pump1", channel=4, mode="TIME_QUANTITY",
-        flow_rate=spec.prime_drain_flow, flow_unit=1, run_time=seconds, time_unit=0,
-        dispense_volume=seconds*spec.prime_drain_flow/60, volume_unit=1,
-        direction=spec.drain_direction, repeat_count=1),
-        dict(type="pump_complete", device_id="pump1", channel=4, timeout=seconds+60))
-    add("prime_drain_stop", "pump.stop_channel", dict(device_id="pump1", channel=4))
+    add("prime_drain", "pump.start", dict(device_id="pump1", channel=4, mode="FLOW_MODE",
+        flow_rate=spec.prime_drain_flow, flow_unit=1, flow_duration_seconds=seconds,
+        direction=spec.drain_direction))
     return dict(name=f"{spec.experiment_name} · 预充", steps=steps,
                 metadata=dict(batch_id=batch_id, experiment_name=spec.experiment_name, run_kind="priming", condition_id="PRIMING",
                               notes="前驱体预充维护记录，非正式样品，不用于表征或 planner 反馈",
@@ -211,9 +208,10 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         if seconds is None:
             seconds = drain_seconds(volume, flow)
         else:
-            # TIME_QUANTITY uses consistent nominal volume/time/flow, as in priming.
-            # This nominal displacement includes emptying time; it is not sample volume.
-            volume = seconds * flow / 60
+            add(step_id, "pump.start", dict(device_id="pump1", channel=channel,
+                mode="FLOW_MODE", flow_rate=flow, flow_unit=1,
+                flow_duration_seconds=seconds, direction=direction))
+            return
         add(step_id, "pump.start", dict(device_id="pump1", channel=channel,
             mode="TIME_QUANTITY", flow_rate=flow, flow_unit=1, run_time=seconds,
             time_unit=0, dispense_volume=volume, volume_unit=1,
