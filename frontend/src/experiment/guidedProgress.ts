@@ -49,3 +49,7 @@ export async function batchExport(batch:any,get:(url:string)=>Promise<{data:any}
  }))
  return {exported_at:new Date().toISOString(),batch_id:batch.batch_id,count:details.length,runs:details}
 }
+
+export function formatTemperature(value:unknown):string {
+ return typeof value==='number'&&Number.isFinite(value)?`${value.toFixed(1)} ℃`:'温度未知'
+}

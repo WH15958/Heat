@@ -48,7 +48,9 @@ class ActivityProgress:
             sampled_at=time.time()) for target in targets]
 
     def device(self, device_id, data):
-        self.devices[device_id] = {key: data.get(key) for key in ("read_ok", "busy", "running", "fault_code", "control_active", "relay_energized")}
+        self.devices[device_id] = {key: data.get(key) for key in ("read_ok", "busy", "running", "fault_code", "control_active", "relay_energized", "status_confirmed", "control_word", "current_segment", "runtime_seconds")}
+        if "read_ok" not in data and "status_confirmed" in data:
+            self.devices[device_id]["read_ok"] = data["status_confirmed"] is True
         self.devices[device_id]["result"] = (data.get("action") or {}).get("result")
 
     def snapshot(self):
@@ -80,11 +82,11 @@ def guided_activity(step, observation):
         if sid.startswith("prime_initialize_"):
             activity.update(title="初始化注射泵 " + ("A" if sid.endswith("1") else "B"), description="正在移动活塞并切换泵阀，等待初始化完成。")
         elif sid == "prime_heat_duration":
-            activity.update(title="前驱体加热脱气", description="保持第一组目标温度；设定加热时间结束后检查双路稳定到温。")
+            activity.update(title="前驱体加热脱气", description="两路已稳定到温，继续保温脱气；设定等待结束后开始预充。")
         elif sid == "prime_heat_both_stable":
-            activity.update(title="等待前驱体稳定到温", description="加热时间已到；两路同时在目标 ±3℃ 内连续 30 秒后开始预充。")
+            activity.update(title="等待前驱体稳定到温", description="两路同时在目标 ±3℃ 内连续 30 秒后，开始计算脱气等待时间。")
         elif sid.startswith("prime_heat_"):
-            activity.update(title="启动前驱体加热" if sid.endswith("start") else "设置前驱体目标温度", description="按第一组条件准备两路加热，随后计时脱气。")
+            activity.update(title="启动前驱体加热" if sid.endswith("start") else "设置前驱体目标温度", description="按第一组条件准备两路加热，稳定到温后计时脱气。")
         elif sid in ("prime_temperature", "prime_recheck_temperature"):
             activity.update(title="检查反应液温度", description="等待反应液降至 45℃及以下，满足后继续本批准备。")
         elif sid == "prime_waste_route":

@@ -367,7 +367,7 @@ test('precharge heating time is required, signed, reset on edits and restored wi
  const p=page(),s=p.state
  try {
   s.primeHeatMinutes.value=null
-  assert.match(s.stepError(5),/预充前加热时间/)
+  assert.match(s.stepError(5),/到温后等待时间/)
   s.primeHeatMinutes.value=0
   assert.equal(s.stepError(5),'')
   s.primeHeatMinutes.value=0.001

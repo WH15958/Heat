@@ -130,3 +130,34 @@ def test_pump_reference_starts_after_ack_and_zero_does_not_complete(monkeypatch)
     assert seen[1]['remaining_seconds'] == 0 and seen[1]['state'] == 'waiting'
     assert dm.start_pump_channel.call_count == 1 and dm.read_pump_status.call_count == 3
     assert executor.activity_snapshot['state'] == 'completed'
+
+
+def test_microwave_confirmed_status_is_not_unknown():
+    activity = progress.ActivityProgress(lambda: 0)
+    activity.device('microwave1', dict(status_confirmed=True, running=False,
+        control_word=16384, current_segment=4, runtime_seconds=0))
+    device = activity.snapshot()['devices']['microwave1']
+    assert device['read_ok'] is True and device['running'] is False
+    assert device['control_word'] == 16384
+    activity.device('microwave1', dict(status_confirmed=True, read_ok=False))
+    assert activity.snapshot()['devices']['microwave1']['read_ok'] is False
+    activity.device('microwave1', dict(status_confirmed=False))
+    assert activity.snapshot()['devices']['microwave1']['read_ok'] is False
+
+
+def test_water_test_early_exit_retains_failure_and_diagnostics(monkeypatch):
+    clock = fake_clock(monkeypatch)
+    def read(_):
+        active = clock.now < 180
+        return dict(status_confirmed=True, fault_code=0, material_temperature=61.171875,
+            control_active=active, running=active, control_word=22528 if active else 16384,
+            current_segment=1 if active else 4, runtime_seconds=119 if active else 0)
+    executor = execution.StepExecutor(Mock(read_microwave_data=read))
+    step = ExperimentStep('hold', ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.MICROWAVE_MONITORED_HOLD, seconds=600, device_id='microwave1'))
+    assert not asyncio.run(executor.execute(step))
+    assert 180 <= clock.now < 181
+    assert '剩余 420.0 秒' in executor._last_error
+    assert '控制字=16384' in executor._last_error
+    assert executor.activity_snapshot['devices']['microwave1']['read_ok'] is True
+    assert executor.activity_snapshot['state'] == 'failed'

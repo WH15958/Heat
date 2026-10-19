@@ -145,7 +145,7 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "heated_precursors_flow_drain_v3"
+    fields["priming_protocol"] = "stable_then_dwell_flow_drain_v4"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters) for device in group
         if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2")]
@@ -169,11 +169,11 @@ def priming_recipe(spec, batch_id):
         add(f"prime_heat_{n}_set", "heater.set_temperature",
             dict(device_id=f"heater{n+1}", temperature=spec.axes[n][0]))
         add(f"prime_heat_{n}_start", "heater.start", dict(device_id=f"heater{n+1}"))
-    add("prime_heat_duration", "wait", wait=dict(type="duration",
-        seconds=hold_seconds(spec.prime_heat_minutes)))
     add("prime_heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
         targets=[dict(device_id=f"heater{n+1}", target_temperature=spec.axes[n][0]) for n in (0, 1)],
         tolerance=3, seconds=30, timeout=spec.precursor_timeout))
+    add("prime_heat_duration", "wait", wait=dict(type="duration",
+        seconds=hold_seconds(spec.prime_heat_minutes)))
     for n, (volume, speed) in enumerate(((spec.prime_volume_a, spec.speed_a),
                                        (spec.prime_volume_b, spec.speed_b)), 1):
         for cycle in range(1, spec.prime_cycles+1):
@@ -412,8 +412,8 @@ class GuidedBatch:
                 parts = p.step_id.split("_")
                 prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤45℃",
                     "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
-                    "prime_heat_duration": f"预充前加热脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
-                    "prime_heat_both_stable": "加热时间已到，等待两路目标 ±3℃ 并稳定 30 秒",
+                    "prime_heat_duration": f"到温后脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
+                    "prime_heat_both_stable": "等待两路目标 ±3℃ 并稳定 30 秒，随后计时脱气",
                     **{f"prime_heat_{n}_{action}": f"预充前{verb}前驱体 {name}"
                        for n, name in enumerate(("A", "B"))
                        for action, verb in (("set", "设置温度："), ("start", "开始加热："))},

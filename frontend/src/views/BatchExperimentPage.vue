@@ -23,7 +23,7 @@
         <div class="activity-heading"><div><small>{{ terminalRun ? '最后动作快照' : '当前动作' }}</small><h3>{{ operationTitle }}</h3><p>{{ operationDescription }}</p></div><span class="activity-status">{{ stale?'状态过期':batch.cleanup_in_progress?'正在清理':batch.stop_requested&&!terminalRun?'正在停止':stateLabel }}</span></div>
         <p v-if="controlFeedback" class="control-feedback" role="status">{{ controlFeedback }} <el-button v-if="controlUncertain" size="small" @click="refreshBatch(true)">核对最新状态</el-button></p>
         <div class="activity-readings">
-          <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? reading.value+' ℃' : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ !reading.read_ok?'读取未确认':reading.target==null?'最新读数':(reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target)?'已达标':'等待达标' }}</b></div>
+          <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? formatTemperature(reading.value) : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ !reading.read_ok?'读取未确认':reading.target==null?'最新读数':(reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target)?'已达标':'等待达标' }}</b></div>
           <div v-if="activity?.stable_required_seconds!=null" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
           <div v-if="activity?.duration_seconds!=null" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
           <div v-for="(device,id) in activity?.devices||{}" :key="id" class="reading"><small>{{ deviceLabel(String(id)) }}</small><strong>{{ device.read_ok!==true?'状态未知':device.relay_energized!=null?'已确认 '+(device.relay_energized?'NC':'NO'):device.busy===true||device.running===true||device.control_active===true?'设备运行中':device.result==='completed'?'动作已完成':device.running===false?'设备已停止':'等待设备确认' }}</strong><span v-for="feed in (activity?.feeds||[]).filter((f:any)=>f.device_id===id)" :key="feed.device_id">设定进样量 {{ feed.volume }} {{ feed.unit }}</span><span v-if="device.fault_code">故障码 {{ device.fault_code }}</span></div>
@@ -68,8 +68,8 @@
         <p>先初始化 A/B，再按第一组目标加热脱气；设定时间结束且双路稳定到温后才预充。前驱体持续保温；预充液 ≤45℃ 后排废，每批一次。</p>
         <div class="form-group initialization-group"><h4>泵初始化</h4><div class="grid"><div v-for="(item,i) in initialization" :key="i" class="pump-initialization"><strong>泵 {{ i===0?'A':'B' }}</strong><label>方向<select v-model="item.direction"><option value="Z">Z：左吸右排</option><option value="Y">Y：右吸左排</option></select></label><label>代码<select v-model.number="item.initialization_code"><option v-for="code in initializationCodes" :key="code" :value="code">{{ code }}</option></select></label></div></div></div>
         <div class="form-group"><h4>预充与排气</h4>
-          <label class="preheat-field">预充前加热时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
-          <p><small>从两路加热启动后计时，暂停不计时。时间到后检查目标 ±3℃、稳定30秒；未达标继续等待，最多60分钟。填0表示不额外等待。</small></p>
+          <label class="preheat-field">到温后等待时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
+          <p><small>两路先达到目标 ±3℃并稳定30秒，再计时脱气，暂停不计时；到温等待最多60分钟。填0表示到温后不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input :data-field="p.key" :aria-invalid="!!fieldErrors[p.key]" v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span><small v-if="fieldErrors[p.key]" class="field-error" role="alert">{{ fieldErrors[p.key] }}</small></label></div>
           <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
@@ -121,7 +121,7 @@ import axios from 'axios'
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
-import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport} from '../experiment/guidedProgress'
+import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature} from '../experiment/guidedProgress'
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
@@ -169,7 +169,7 @@ function fieldIssues(through:number):FieldIssue[]{
   else if(['productTime','cleanTime'].includes(f.key)&&(value<0.1||value>9999))add(f.key,page,'排液时间须为 0.1–9999 秒')
  }
  if(through>=5){
-  try{microwaveHoldSeconds(numeric(primeHeatMinutes.value))}catch{add('primeHeatMinutes',5,'预充前加热时间：请填写 0–1440 分钟，可换算为整秒')}
+  try{microwaveHoldSeconds(numeric(primeHeatMinutes.value))}catch{add('primeHeatMinutes',5,'到温后等待时间：请填写 0–1440 分钟，可换算为整秒')}
   for(const f of priming.value.slice(0,through===6?undefined:5)){
    const value=numeric(f.value)
    if(!Number.isFinite(value)||value<=0)add(f.key,5,'请填写有效的'+f.label)
@@ -210,8 +210,8 @@ function stepError(step:number):string {
   if(step>=4){try{const seconds=estimateDrainSeconds(setting('volume'),setting('flow'));if(seconds<0.1||seconds>9999)throw new Error()}catch{return '清洗进液时间超出有效范围，请检查体积和流量'}}
  }
  if(step>=5){
-  if(!Number.isFinite(primeHeatMinutes.value))return '请填写预充前加热时间'
-  try{microwaveHoldSeconds(numeric(primeHeatMinutes.value))}catch{return '预充前加热时间须为 0–1440 分钟，且能换算为整秒'}
+  if(!Number.isFinite(primeHeatMinutes.value))return '请填写到温后等待时间'
+  try{microwaveHoldSeconds(numeric(primeHeatMinutes.value))}catch{return '到温后等待时间须为 0–1440 分钟，且能换算为整秒'}
   for(const p of priming.value.slice(0,5))if(!Number.isFinite(p.value)||numeric(p.value)<=0)return `请填写有效的${p.label}`
   if(!Number.isInteger(primeValue('prime_cycles'))||primeValue('prime_cycles')>10)return '预充循环次数须为 1–10 的整数'
   if(primeValue('prime_drain_seconds')<0.1||primeValue('prime_drain_seconds')>9999)return '预充排液时间须为 0.1–9999 秒'
