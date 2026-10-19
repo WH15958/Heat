@@ -393,7 +393,7 @@ def test_precharge_time_required_and_changes_signature():
     assert guided.priming_signature(spec(prime_heat_minutes=30)) != guided.priming_signature(spec(prime_heat_minutes=45))
 
 
-def test_precharge_heating_delay_precedes_stability_with_independent_timeout(prepared_env, monkeypatch):
+def test_precharge_heating_delay_starts_after_stability_with_independent_timeout(prepared_env, monkeypatch):
     clock=fake_clock(monkeypatch)
     monkeypatch.setattr(execution.asyncio, 'get_running_loop', asyncio.get_running_loop, raising=False)
     monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
@@ -401,17 +401,18 @@ def test_precharge_heating_delay_precedes_stability_with_independent_timeout(pre
         request=spec(prime_heat_minutes=30, precursor_timeout=60)
         steps=guided.priming_recipe(request,'timing')['steps']
         ids=[s['id'] for s in steps]
-        assert ids.index('prime_heat_1_start') < ids.index('prime_heat_duration') < ids.index('prime_heat_both_stable') < ids.index('prime_1_1_aspirate')
+        assert ids.index('prime_heat_1_start') < ids.index('prime_heat_both_stable') < ids.index('prime_heat_duration') < ids.index('prime_1_1_aspirate')
         delay=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_duration')]]))['steps'][0]
         stable=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_both_stable')]]))['steps'][0]
         dm=Mock(read_heater_data=Mock(return_value=dict(pv=30)))
         executor=execution.StepExecutor(dm)
-        assert await executor._wait_condition(delay.wait)
-        assert clock.now >= 1800
-        dm.read_heater_data.assert_not_called()
-        start=clock.now
         assert await executor._wait_condition(stable.wait)
-        assert 30 <= clock.now-start < 32
+        assert 30 <= clock.now < 32
+        reads=dm.read_heater_data.call_count
+        start=clock.now
+        assert await executor._wait_condition(delay.wait)
+        assert 1800 <= clock.now-start < 1801
+        assert dm.read_heater_data.call_count == reads
         assert stable.wait.timeout == 60
         formal=guided.recipe(request.rows()[0],request,'timing',0)['steps']
         assert not any(s['id']=='prime_heat_duration' for s in formal)

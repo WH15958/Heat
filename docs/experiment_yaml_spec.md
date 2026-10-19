@@ -854,7 +854,7 @@ interval_time: 0
 
 引导式批次的预充 YAML 在两泵初始化后，使用现有 `heater.set_temperature`、`heater.start`、`heater_pair_stable` 按第一组目标加热（容差3℃、连续30秒），通过后才预充吸排。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
 
-引导式预充在两路 heater.start 后生成 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，结束后才执行双路稳定到温等待（默认超时3600秒）；普通 YAML 等待类型和默认值保持原语义。
+引导式预充在两路 heater.start 和双路稳定到温等待通过后执行 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，结束后执行预充吸排；前置双路稳定到温等待默认超时3600秒；普通 YAML 等待类型和默认值保持原语义。
 
 
 引导式生成流程使用填写的实验名称：预充 `name` 为“名称 · 预充”，正式组为“名称 · 第 N 组”，`metadata.experiment_name` 保存整批名称。该字段属于追踪信息，不替代 `batch_id`、`sample_id` 或运行ID；普通 YAML 无需提供此字段，历史文件不迁移。

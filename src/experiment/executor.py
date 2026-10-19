@@ -817,7 +817,10 @@ class StepExecutor:
                     return False
                 remaining = condition.seconds - (self._wait_clock() - started)
                 if data.get("control_active") is False and remaining > 1.0:
-                    self._last_error = "微波仪提前超过一个轮询周期退出控制，保温失败"
+                    self._last_error = (f"微波仪提前退出控制，保温失败：已保温 {condition.seconds - remaining:.1f} 秒，"
+                                        f"剩余 {remaining:.1f} 秒；控制字={data.get('control_word')}，"
+                                        f"当前段={data.get('current_segment')}，设备运行秒数={data.get('runtime_seconds')}，"
+                                        f"故障码={data.get('fault_code')}")
                     return False
                 if self._should_stop():
                     return False

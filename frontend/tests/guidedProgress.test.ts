@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {activeStage,stageState,staleStatus,batchRunIds,batchExport} from '../src/experiment/guidedProgress'
+import {activeStage,stageState,staleStatus,batchRunIds,batchExport,formatTemperature} from '../src/experiment/guidedProgress'
 
 test('stages reset per group while preparation remains completed; terminal is never running',()=>{
  const batch:any={state:'running',phase:'experiments',priming:{status:'completed'},current_group:2,progress:{step_id:'heat_both_stable'}}
@@ -32,4 +32,11 @@ test('batch history joins exact run IDs and metadata, never names; export is all
  await assert.rejects(batchExport(batch,async url=>{if(url.endsWith('/group'))throw new Error('missing');return get(url)}),/missing/)
  await assert.rejects(batchExport({...batch,persistence_status:'error'},get),/保存失败/)
  await assert.rejects(batchExport({batch_id:'missing'},async()=>({data:[]})),/缺失/)
+})
+
+test('temperature display rounds without changing measurements',()=>{
+ assert.equal(formatTemperature(61.171875),'61.2 ℃')
+ assert.equal(formatTemperature(44.42578125),'44.4 ℃')
+ for(const value of [null,undefined,NaN,Infinity,'50'])assert.equal(formatTemperature(value),'温度未知')
+ assert.equal(formatTemperature(0),'0.0 ℃')
 })
