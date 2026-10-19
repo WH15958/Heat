@@ -47,7 +47,9 @@ export async function batchExport(batch:any,get:(url:string)=>Promise<{data:any}
   if(data.run_id!==id||data.persistence_status==='error'||data.log_saved===false)throw new Error(`记录 ${id} 缺失或保存失败，未导出`)
   return data
  }))
- return {exported_at:new Date().toISOString(),batch_id:batch.batch_id,count:details.length,runs:details}
+ const {data:plan}=await get(`/api/guided/${encodeURIComponent(batch.batch_id)}/plan`)
+ if(!plan||plan.batch_id!==batch.batch_id||!plan.request||!plan.priming||!Array.isArray(plan.recipes))throw new Error('批次流程快照缺失或不匹配，未导出')
+ return {exported_at:new Date().toISOString(),batch_id:batch.batch_id,batch,plan,count:details.length,runs:details}
 }
 
 export function formatTemperature(value:unknown):string {

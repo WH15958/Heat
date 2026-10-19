@@ -20,7 +20,7 @@ const navigation = [
   { path: '/campaigns', label: '智能实验', icon: 'campaign', caption: '探索与记录' },
   { path: '/history', label: '实验历史', icon: 'history', caption: '实验档案' },
 ]
-const currentPage = computed(() => route.path === '/experiment/batch' ? { label: '引导式实验', caption: '实验条件与固定流程' } : route.path === '/experiment/editor' ? { label: '实验编排', caption: '实验编排' } : navigation.find(item => item.path === route.path) || navigation[0]!)
+const currentPage = computed(() => route.path.startsWith('/experiment/batch') ? { label: '引导式实验', caption: '实验条件与固定流程' } : route.path === '/experiment/editor' ? { label: '实验编排', caption: '实验编排' } : navigation.find(item => item.path === route.path) || navigation[0]!)
 watch(() => route.path, () => { menuOpen.value = false; if (route.path.startsWith('/experiment')) experimentOpen.value = true })
 </script>
 

@@ -15,7 +15,7 @@ const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', impo
 const script = compileScript(parse(source).descriptor, { id: 'guided-start-test' }).content
 const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
-function page(fill = true, fresh = false) {
+function page(fill = true, fresh = false, storage = new Map<string,string>()) {
   const route = { query: fresh ? {new: '1'} : {} as any }
   let getOverride: (() => Promise<any>) | undefined
   const calls: any[][] = [], dialogs: string[] = []
@@ -37,7 +37,7 @@ function page(fill = true, fresh = false) {
     '../experiment/guidedProgress': progress,
   }
   const exports = {} as any
-  runInNewContext(compiled, { exports, document:{querySelector:()=>null}, require: (name: string) => {
+  runInNewContext(compiled, { exports, window:{localStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value),removeItem:(key:string)=>storage.delete(key)}}, document:{querySelector:()=>null}, require: (name: string) => {
     assert.ok(name in imports, name)
     return imports[name]
   } })
@@ -554,4 +554,29 @@ test('explicit device failure and request rejection are distinguished from uncer
   assert.equal(p.state.pendingControl.value,'')
   assert.match(p.state.controlFeedback.value,/请求未接受.*不可暂停/)
  }finally{p.dispose()}
+})
+
+
+test('draft survives navigation/remount without restoring execution confirmations',async()=>{
+ const storage=new Map<string,string>(),p=page(false,true,storage)
+ p.state.experimentName.value='未完成新批次';p.state.axes.value[0].start=65;p.state.stage.value=2
+ await vue.nextTick();p.state.saveDraft();p.dispose()
+ const q=page(false,true,storage)
+ q.state.restoreDraft();await vue.nextTick()
+ assert.equal(q.state.experimentName.value,'未完成新批次');assert.equal(q.state.axes.value[0].start,65);assert.equal(q.state.stage.value,2)
+ assert.equal(q.state.validatedKey.value,'');assert.equal(q.state.plumbingConfirmed.value,false);assert.equal(q.state.primingConfirmed.value,false);assert.equal(q.state.initializationConfirmed.value,false)
+ q.snapshot({batch_id:'old',state:'failed',request:{experiment_name:'旧实验'}})
+ await q.state.refreshBatch()
+ assert.equal(q.state.experimentName.value,'未完成新批次');assert.equal(q.state.showProgress.value,false)
+ q.dispose()
+})
+test('corrupt draft is reported and retained, never treated as execution evidence',()=>{
+ const storage=new Map([['heat.guided-draft.v1','{broken']]),p=page(false,true,storage)
+ p.state.restoreDraft();assert.match(p.state.draftNotice.value,/无法恢复/);assert.equal(storage.get('heat.guided-draft.v1'),'{broken');assert.equal(p.state.validatedKey.value,'');p.dispose()
+})
+test('successful explicit start clears draft and keeps progress route selected',async()=>{
+ const storage=new Map<string,string>(),p=page(true,true,storage)
+ await vue.nextTick();p.state.saveDraft();assert.ok(storage.has('heat.guided-draft.v1'))
+ p.ready();await p.state.startBatch();await vue.nextTick()
+ assert.equal(storage.has('heat.guided-draft.v1'),false);assert.equal(p.route.query.resume,'1');assert.equal(p.state.showProgress.value,true);p.dispose()
 })

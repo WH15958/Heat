@@ -581,3 +581,9 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 预充签名协议升级为 stable_then_dwell_flow_drain_v4，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
+
+### 引导式批次入口与本机草稿
+
+`GuidedEntryPage.vue` 承接 `/experiment/batch`，默认入口、`?view=history` 批次历史、`?view=history&batch_id=...` 详情；`?new=1` 挂载新建表单，`?resume=1` 挂载当前批次进度与恢复入口。复用只读 `/api/guided/current`、`/batches`、`/{id}`、`/{id}/plan` 与现有日志接口，没有新增设备操作路径。开始成功后转 `resume=1` 保持进度页。
+
+表单以 `heat.guided-draft.v1` 在 localStorage 保存一份版本化草稿，仅包含输入和步骤，不含校验证据、人工确认、运行状态、batch_id 或预充资格。恢复按字段检查，旧终态记录不回填覆盖新草稿，活动/恢复/清理/保存错误优先处理且保留草稿。启动成功清除草稿；新建空白前确认替换。`batchExport` 复用精确 run_id/metadata 关联，在完整日志之外附带批次检查点与原始流程快照，快照不存在或批次身份不一致时拒绝完整导出。物理存储仍使用现有批次、plans 与运行日志目录，不复制或改写历史记录。

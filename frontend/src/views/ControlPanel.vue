@@ -32,6 +32,7 @@
             :key="'h-' + id"
             :heater-id="id"
             :heater="heater"
+            :realtime="wsConnected ? realtimeData?.heaters[id] : null"
             @connect="connectHeater"
             @disconnect="disconnectHeater"
             @set-temp="setTemp"
@@ -1253,6 +1254,11 @@ function calcFlowRate(ch: ChannelConfig): number {
 </script>
 
 <style scoped>
+.control-panel { container-type: inline-size; }
+.device-detail :deep(.el-input__inner) { font-variant-numeric: tabular-nums; color: #294763; }
+.device-detail :deep(.unit-label),.device-detail :deep(.metric-label) { color: #526b83; }
+@container (min-width: 1250px) { .device-detail > section[aria-label="加热器设备"], .device-detail :deep(section[aria-label="注射泵设备"]) { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+
 .control-panel { padding: 0; }
 .connection-bar { padding: 16px 20px; margin-bottom: 18px; border: 1px solid var(--el-border-color-light); border-radius: 8px; background: var(--el-bg-color); }
 .connection-bar-heading, .connection-bar-heading > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -1262,9 +1268,9 @@ function calcFlowRate(ch: ChannelConfig): number {
 .connection-results li { display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
 .connection-results .failed, .connection-results .unknown { color: var(--el-color-danger); }
 .connection-results .skipped { color: var(--el-text-color-secondary); }
-.emergency-bar { position: static; margin: 0 0 18px; border-radius: 6px; box-shadow: none; }
-.device-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
-.device-selector { position: sticky; top: 88px; padding: 0 14px 0 0; border-right: 1px solid var(--el-border-color-light); min-width: 0; }
+.emergency-bar { position: sticky; top: 82px; z-index: 5; margin: 0 0 18px; border-radius: 6px; box-shadow: none; }
+.device-workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
+.device-selector { position: sticky; top: 174px; padding: 0 14px 0 0; border-right: 1px solid var(--el-border-color-light); min-width: 0; }
 .selector-heading { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px 14px; font-size: 14px; font-weight: 600; }
 .selector-heading span { color: var(--el-text-color-secondary); font-size: 12px; }
 .device-choice { display: block; width: 100%; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--el-text-color-regular); text-align: left; cursor: pointer; font: inherit; }

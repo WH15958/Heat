@@ -7,9 +7,7 @@
           <el-tag :type="pump.connectionError ? 'danger' : pump.connected ? 'success' : 'info'" size="small" style="margin-right: 8px">
             {{ pump.connectionError ? '连接异常' : pump.connected ? '已连接' : '未连接' }}
           </el-tag>
-          <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
-          <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
-          <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag>
+
         </div>
         <DeviceConnectionControls :device-key="'pump:'+pumpId" :connected="pump.connected" :loading="pump.loading" :connect-disabled="pump.bindingResolved === false" hint="停止各通道后断开" @connect="$emit('connect', pumpId)" @disconnect="$emit('disconnect', pumpId)" />
       </div>
@@ -25,6 +23,11 @@
       style="margin-bottom: 12px"
     />
 
+    <details class="device-details"><summary>设备详情与通信配置</summary><div class="detail-tags">          <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
+          <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
+          <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag></div></details>
+    <p class="setting-caption">以下为待下发设置，点击启动后执行；通道标题显示设备当前读回状态。</p>
+    <div class="channels-grid">
     <div v-for="ch in [1, 2, 3, 4]" :key="ch" class="channel-control">
       <div class="channel-header">
         <span class="channel-name">通道 {{ ch }}</span>
@@ -39,110 +42,22 @@
         <el-tag v-else-if="pump.connected" type="warning" size="small">状态未知</el-tag>
         <el-tag v-else type="info" size="small">未连接</el-tag>
       </div>
-      <div class="channel-row">
-        <el-select v-model="pump.channels[ch].mode" size="small" style="width: 120px">
-          <el-option v-for="m in PUMP_MODES" :key="m.value" :label="m.label" :value="m.value" />
-        </el-select>
-        <el-select v-model="pump.channels[ch].tubeModel" size="small" style="width: 130px" @change="onTubeModelChange(pump.channels[ch])">
-          <el-option v-for="t in TUBE_MODELS" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" />
-        </el-select>
-        <template v-if="pump.channels[ch].mode === 'TIME_QUANTITY'">
-          <el-input-number
-            :model-value="calcFlowRate(pump.channels[ch])"
-            size="small"
-            style="width: 100px"
-            disabled
-            :precision="2"
-          />
-          <span class="unit-label">mL/min</span>
-          <span class="unit-label" style="color: #909399; font-size: 11px">(自动)</span>
-        </template>
-        <template v-else>
-          <el-input-number
-            v-model="pump.channels[ch].flowRate"
-            :min="0.01" :max="flowRateMax(pump.channels[ch])" :step="0.01" :precision="3"
-            size="small"
-            style="width: 100px"
-          />
-          <el-select v-model="pump.channels[ch].flowUnit" size="small" style="width: 95px" @change="clampFlowRate(pump.channels[ch])">
-            <el-option
-              v-for="u in FLOW_UNITS"
-              :key="u.value"
-              :label="u.label"
-              :value="u.value"
-              :disabled="!isFlowUnitAvailable(pump.channels[ch], u.value)"
-            />
-          </el-select>
+      <div class="channel-fields">
+        <label class="control-field"><span>运行模式</span><el-select v-model="pump.channels[ch].mode"><el-option v-for="m in PUMP_MODES" :key="m.value" :label="m.label" :value="m.value" /></el-select></label>
+        <label class="control-field"><span>软管型号</span><el-select v-model="pump.channels[ch].tubeModel" @change="onTubeModelChange(pump.channels[ch])"><el-option v-for="t in TUBE_MODELS" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" /></el-select></label>
+        <div class="control-field full-field"><label :for="`${pumpId}-${ch}-flow`">{{ pump.channels[ch].mode === 'TIME_QUANTITY' ? '计算流量（由体积与时间换算）' : '设定流量' }}</label><div class="field-value">
+          <template v-if="pump.channels[ch].mode === 'TIME_QUANTITY'"><el-input-number :id="`${pumpId}-${ch}-flow`" :model-value="calcFlowRate(pump.channels[ch])" disabled :precision="2" /><span>mL/min</span></template>
+          <template v-else><el-input-number :id="`${pumpId}-${ch}-flow`" v-model="pump.channels[ch].flowRate" :min="0.01" :max="flowRateMax(pump.channels[ch])" :step="0.01" :precision="3" /><el-select v-model="pump.channels[ch].flowUnit" aria-label="流量单位" @change="clampFlowRate(pump.channels[ch])"><el-option v-for="u in FLOW_UNITS" :key="u.value" :label="u.label" :value="u.value" :disabled="!isFlowUnitAvailable(pump.channels[ch], u.value)" /></el-select></template>
+        </div></div>
+        <div class="control-field full-field"><span>旋转方向</span><el-radio-group v-model="pump.channels[ch].direction"><el-radio-button value="CW">顺时针</el-radio-button><el-radio-button value="CCW">逆时针</el-radio-button></el-radio-group></div>
+        <div v-if="needsRunTime(pump.channels[ch].mode)" class="control-field full-field"><label :for="`${pumpId}-${ch}-time`">运行时间</label><div class="field-value"><el-input-number :id="`${pumpId}-${ch}-time`" v-model="pump.channels[ch].runTime" :min="0.1" :max="9999" :step="1" :precision="1" /><el-select v-model="pump.channels[ch].timeUnit" aria-label="运行时间单位"><el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" /></el-select></div></div>
+        <div v-if="needsDispenseVolume(pump.channels[ch].mode)" class="control-field full-field"><label :for="`${pumpId}-${ch}-volume`">目标体积</label><div class="field-value"><el-input-number :id="`${pumpId}-${ch}-volume`" v-model="pump.channels[ch].dispenseVolume" :min="0.01" :max="9999" :step="1" :precision="2" /><el-select v-model="pump.channels[ch].volumeUnit" aria-label="体积单位"><el-option v-for="u in VOLUME_UNITS" :key="u.value" :label="u.label" :value="u.value" /></el-select></div></div>
+        <template v-if="pump.channels[ch].mode !== 'FLOW_MODE'">
+          <label class="control-field"><span>重复次数（0 为无限）</span><el-input-number v-model="pump.channels[ch].repeatCount" :min="0" :max="9999" :step="1" /></label>
+          <div class="control-field full-field"><label :for="`${pumpId}-${ch}-interval`">循环间隔</label><div class="field-value"><el-input-number :id="`${pumpId}-${ch}-interval`" v-model="pump.channels[ch].intervalTime" :min="0" :max="9999" :step="0.1" :precision="1" /><el-select v-model="pump.channels[ch].intervalTimeUnit" aria-label="间隔时间单位"><el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" /></el-select></div></div>
         </template>
       </div>
-      <div class="channel-row" style="margin-top: 6px">
-        <el-radio-group v-model="pump.channels[ch].direction" size="small">
-          <el-radio-button value="CW">顺时针</el-radio-button>
-          <el-radio-button value="CCW">逆时针</el-radio-button>
-        </el-radio-group>
-        <el-input-number
-          v-if="needsRunTime(pump.channels[ch].mode)"
-          v-model="pump.channels[ch].runTime"
-          :min="0.1" :max="9999" :step="1" :precision="1"
-          size="small"
-          style="width: 110px"
-        />
-        <el-select
-          v-if="needsRunTime(pump.channels[ch].mode)"
-          v-model="pump.channels[ch].timeUnit"
-          size="small"
-          style="width: 95px"
-        >
-          <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
-        </el-select>
-        <el-input-number
-          v-if="needsDispenseVolume(pump.channels[ch].mode)"
-          v-model="pump.channels[ch].dispenseVolume"
-          :min="0.01" :max="9999" :step="1" :precision="2"
-          size="small"
-          style="width: 110px"
-        />
-        <el-select
-          v-if="needsDispenseVolume(pump.channels[ch].mode)"
-          v-model="pump.channels[ch].volumeUnit"
-          size="small"
-          style="width: 80px"
-        >
-          <el-option v-for="u in VOLUME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
-        </el-select>
-      </div>
-      <div class="channel-row" style="margin-top: 6px" v-if="pump.channels[ch].mode !== 'FLOW_MODE'">
-        <span class="param-label">重复</span>
-        <el-input-number
-          v-model="pump.channels[ch].repeatCount"
-          :min="0" :max="9999" :step="1"
-          size="small"
-          style="width: 95px"
-        />
-        <span class="unit-label" style="font-size: 11px">0=无限</span>
-        <span class="param-label">间隔</span>
-        <el-input-number
-          v-model="pump.channels[ch].intervalTime"
-          :min="0" :max="9999" :step="0.1" :precision="1"
-          size="small"
-          style="width: 95px"
-        />
-        <el-select
-          v-model="pump.channels[ch].intervalTimeUnit"
-          size="small"
-          style="width: 95px"
-        >
-          <el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" />
-        </el-select>
-      </div>
-      <div class="channel-row" style="margin-top: 6px">
-        <el-button type="success" size="small" @click="$emit('startChannel', pumpId, ch)" :loading="pump.channels[ch].starting">
-          启动
-        </el-button>
-        <el-button type="warning" size="small" @click="$emit('stopChannel', pumpId, ch)" :loading="pump.channels[ch].stopping">
-          停止
-        </el-button>
-      </div>
+      <div class="channel-actions"><el-button type="success" @click="$emit('startChannel', pumpId, ch)" :loading="pump.channels[ch].starting">启动通道 {{ ch }}</el-button><el-button type="danger" plain @click="$emit('stopChannel', pumpId, ch)" :loading="pump.channels[ch].stopping">停止</el-button></div>
       <el-collapse class="priming-collapse">
         <el-collapse-item name="priming">
           <template #title>
@@ -214,7 +129,8 @@
       </el-collapse>
     </div>
 
-    <div style="margin-top: 12px; text-align: center">
+    </div>
+    <div class="pump-stop-all">
       <el-button type="danger" size="small" @click="$emit('stopAll', pumpId)" :loading="pump.stoppingAll">
         停止所有通道
       </el-button>
@@ -401,15 +317,30 @@ function onTubeModelChange(ch: ChannelConfig) {
 </script>
 
 <style scoped>
+.channels-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,330px),1fr)); gap: 16px; align-items: start; }
+.channel-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 12px; }
+.control-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 13px; color: #425b73; }
+.control-field :deep(.el-select), .control-field :deep(.el-input-number) { width: 100%; }
+.full-field { grid-column: 1 / -1; }
+.field-value { display: flex; align-items: center; gap: 8px; }
+.field-value :deep(.el-input-number) { flex: 1; min-width: 0; }
+.field-value :deep(.el-select) { width: 100px; flex: 0 0 100px; }
+.channel-actions { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid #e3ebf3; padding-top: 14px; }
+.device-details { margin: 12px 0; padding: 12px; background: #f3f7fb; border-radius: 8px; font-size: 13px; }
+.device-details summary { cursor: pointer; color: #425b73; }
+.detail-tags { display:flex; gap: 8px; flex-wrap:wrap; margin-top:12px; }
+.setting-caption { color: #526b83; font-size:13px; line-height:1.7; }
+.pump-stop-all { position: sticky; bottom: 12px; margin-top: 16px; padding: 12px; border: 1px solid #f3d2d2; border-radius: 10px; background: #fffafa; text-align:right; z-index: 2; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .connection-feedback { margin-bottom: 12px; }
 .channel-control {
-  padding: 10px 0;
-  border-bottom: 1px solid #f0f0f0;
+  padding: 16px;
+  border: 1px solid #dce7f1;
+  border-radius: 12px;
+  background: #fbfdff;
+  min-width: 0;
 }
-.channel-control:last-of-type {
-  border-bottom: none;
-}
+
 .channel-header {
   display: flex;
   align-items: center;

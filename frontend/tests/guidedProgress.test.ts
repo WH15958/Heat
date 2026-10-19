@@ -26,9 +26,14 @@ test('batch history joins exact run IDs and metadata, never names; export is all
  const batch={batch_id:'B',priming:{status:'completed',run_id:'prime'},groups:[{state:'completed',run_id:'group'}]}
  const runs=[{run_id:'prime'}, {run_id:'group',metadata:{batch_id:'B'}},{run_id:'extra',metadata:{batch_id:'B'}},{run_id:'other',experiment_name:'same name'}]
  assert.deepEqual(batchRunIds(batch,runs),['prime','group','extra'])
- const get=async(url:string)=>({data:url.endsWith('/runs')?runs:runs.find(r=>url.endsWith('/'+r.run_id))})
+ const plan={batch_id:'B',request:{experiment_name:'test'},priming:{steps:[]},recipes:[]}
+ const get=async(url:string)=>({data:url.endsWith('/plan')?plan:url.endsWith('/runs')?runs:runs.find(r=>url.endsWith('/'+r.run_id))})
  const result=await batchExport(batch,get)
  assert.equal(result.count,3)
+ assert.equal(result.batch,batch)
+ assert.equal(result.plan,plan)
+ await assert.rejects(batchExport(batch,async url=>url.endsWith('/plan')?{data:{...plan,batch_id:'other'}}:get(url)),/快照/)
+ await assert.rejects(batchExport(batch,async url=>{if(url.endsWith('/plan'))throw new Error('snapshot missing');return get(url)}),/snapshot missing/)
  await assert.rejects(batchExport(batch,async url=>{if(url.endsWith('/group'))throw new Error('missing');return get(url)}),/missing/)
  await assert.rejects(batchExport({...batch,persistence_status:'error'},get),/保存失败/)
  await assert.rejects(batchExport({batch_id:'missing'},async()=>({data:[]})),/缺失/)
