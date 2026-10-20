@@ -30,7 +30,7 @@ def test_emergency_dispatches_before_manual_lock_and_cancels_queued_start(monkey
         loop = asyncio.get_running_loop()
         dispatched = asyncio.Event()
         dm = SimpleNamespace(emergency_stop_all=lambda: loop.call_soon_threadsafe(dispatched.set) or True)
-        request = SimpleNamespace(method='POST', url=SimpleNamespace(path='/api/heater/h/start'),
+        request = SimpleNamespace(method='POST', scope={}, url=SimpleNamespace(path='/api/heater/h/start'),
                                   app=SimpleNamespace(state=SimpleNamespace(device_manager=dm)))
         dependency = devices.protect_guided_devices(request)
         await anext(dependency)

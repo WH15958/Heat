@@ -136,10 +136,12 @@ def test_start_and_stop_control_words():
     ]
     for mode, expected in cases:
         assert device.start(mode) is True
-        assert protocol.single_writes[-1] == (1, CONTROL_WORD, expected)
-
-    assert device.stop() is True
-    assert protocol.single_writes[-1] == (1, CONTROL_WORD, CONTROL_STOP)
+        assert protocol.single_writes[-2:] == [
+            (1, CONTROL_WORD, expected & ~CONTROL_MICROWAVE_START),
+            (1, CONTROL_WORD, expected),
+        ]
+        assert device.stop() is True
+        assert protocol.single_writes[-1] == (1, CONTROL_WORD, CONTROL_STOP)
 
 
 def test_legacy_write_flags_do_not_block_manual_control():
@@ -232,12 +234,13 @@ def test_read_data_uses_float_temperature_and_runtime_seconds():
     assert data.data["stop_confirmed"] is False
 
 
-def test_start_rejects_fault_status_after_control_write():
+def test_start_rejects_fault_status_before_control_write():
     device, protocol = make_device()
     protocol.registers[STATUS_FAULT_CODE] = 7
     device.READBACK_ATTEMPTS = 1
 
     assert device.start(MicrowaveMode.AUTO_POWER) is False
+    assert protocol.single_writes == []
 
 
 def test_stop_requires_control_clear_and_zero_output():

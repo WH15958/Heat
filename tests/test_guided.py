@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.experiment import guided
+from src.experiment.actions import WaitType
 from src.experiment.parser import parse_experiment_data
 from src.web.api import experiments, guided as api
 from src.web.api import devices, valves, syringe_pumps
@@ -149,6 +151,9 @@ class FakeManager:
         self.calls.append(("microwave_start", did))
         return True
 
+    def request_microwave_stop(self, did):
+        self.microwave_stop_requests = getattr(self, 'microwave_stop_requests', 0) + 1
+
     def stop_microwave(self, did, **kwargs):
         self.microwave_on = False
         self.calls.append(("microwave_stop", did))
@@ -193,6 +198,7 @@ async def until(predicate):
 
 
 _real_timed_flow = guided.StepExecutor._run_timed_flow
+_real_wait_condition = guided.StepExecutor._wait_condition
 
 
 async def fast_timed_flow(self, device_id, channel, seconds):
@@ -200,11 +206,19 @@ async def fast_timed_flow(self, device_id, channel, seconds):
     return await _real_timed_flow(self, device_id, channel, .01)
 
 
+async def fast_microwave_stability(self, condition):
+    # Shorten only integration setup; retain real reads, timing and safety checks.
+    if condition.type == WaitType.MICROWAVE_TEMPERATURE_REACHED and condition.seconds > 0:
+        condition = replace(condition, seconds=.01)
+    return await _real_wait_condition(self, condition)
+
+
 class GuidedTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.directory = Path(self.tmp.name)
         self.patches = [patch("src.experiment.executor.StepExecutor._run_timed_flow", new=fast_timed_flow),
+            patch("src.experiment.executor.StepExecutor._wait_condition", new=fast_microwave_stability),
             patch("serial.Serial.open", side_effect=AssertionError("real serial forbidden")),
             patch("src.experiment.experiment_logger.LOGS_DIR", self.directory / "logs"),
             patch("src.experiment.experiment_logger.write_sample_record", return_value=True),

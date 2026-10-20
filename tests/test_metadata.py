@@ -1255,6 +1255,9 @@ def test_websocket_disconnect_does_not_stop_pumps():
         async def accept(self):
             return None
 
+        async def send_json(self, data):
+            return None
+
         async def receive_text(self):
             raise WebSocketDisconnect()
 

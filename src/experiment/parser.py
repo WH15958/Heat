@@ -173,6 +173,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
             channel=wait_data.get("channel", 0),
             target_temperature=target_temperature,
             targets=wait_data.get("targets", []),
+            hold_mode=wait_data.get("hold_mode", "qualified"),
         )
         action_type = ACTION_MAP.get(s.get("type", ""))
         if action_type is None:
@@ -212,7 +213,12 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         step_ids.add(step_id)
 
         on_error = s.get("on_error", "stop")
+        if wait_type_name == "microwave_temperature_reached" and seconds > 0:
+            if not enabled or on_error != "stop":
+                raise ValueError("微波稳定到温等待必须启用且失败停止（on_error=stop）")
         if wait_type_name == "microwave_monitored_hold":
+            if wait.hold_mode not in ("qualified", "timed"):
+                raise ValueError("微波保温 hold_mode 必须为 qualified 或 timed")
             if on_error != "stop" or enabled is not True:
                 raise ValueError("微波保护保温必须启用且失败停止（on_error=stop）")
             if not isinstance(wait.device_id, str) or not wait.device_id.strip():

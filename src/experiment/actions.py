@@ -58,13 +58,14 @@ class WaitCondition:
 
     Attributes:
         type: 等待类型
-        seconds: 等待秒数（DURATION类型使用）
+        seconds: 等待秒数，微波到温等待时表示连续稳定时长（默认0）
         device_id: 设备ID（TEMPERATURE_REACHED/PUMP_COMPLETE使用）
         tolerance: 温度容差（TEMPERATURE_REACHED使用）
         timeout: 超时秒数
         channel: 泵通道号（PUMP_COMPLETE使用）
         target_temperature: 目标温度（MICROWAVE_TEMPERATURE_REACHED使用）
         targets: 两路设备及目标温度（HEATER_PAIR_STABLE使用）
+        hold_mode: 微波保温计时方式，qualified兼容旧YAML，timed为固定计时
     """
     type: WaitType = WaitType.NONE
     seconds: float = 0
@@ -74,6 +75,7 @@ class WaitCondition:
     channel: int = 0
     target_temperature: Optional[float] = None
     targets: list[dict] = field(default_factory=list)
+    hold_mode: str = "qualified"
 
 
 @dataclass

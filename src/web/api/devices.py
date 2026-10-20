@@ -1,4 +1,5 @@
 import asyncio
+from functools import partial
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import List
@@ -19,6 +20,12 @@ async def protect_guided_devices(request: Request):
         return
     from src.web.api.experiments import _engines, _source_lock, control_generation, check_control_generation
     generation = control_generation()
+    if request.scope.get("endpoint") is stop_microwave:
+        # Cancel an in-flight start before waiting for its source lock; no I/O here.
+        try:
+            get_dm(request).request_microwave_stop(request.path_params["device_id"])
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
     async with _source_lock:
         check_control_generation(generation)
         is_stop = request.url.path.endswith("/stop")
@@ -386,7 +393,8 @@ async def start_microwave(
         raise HTTPException(status_code=400, detail=f"Unsupported microwave mode: {body.mode}")
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.start_microwave, device_id, mode)
+        result = await loop.run_in_executor(None, partial(
+            dm.start_microwave, device_id, mode, cleanup_on_failure=True))
         _raise_if_false(result, "start", dm, device_id)
         return {"success": True, "device_id": device_id, "mode": mode.value}
     except ValueError as e:
@@ -394,7 +402,8 @@ async def start_microwave(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        detail = dm.get_last_command_error(device_id)
+        raise HTTPException(status_code=500, detail=detail or str(e))
 
 
 @router.post("/microwave/{device_id}/stop")

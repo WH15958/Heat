@@ -20,25 +20,27 @@
       <el-alert v-if="batch.persistence_status==='error'" title="记录保存失败，禁止继续运行" type="error" :closable="false" />
       <el-alert v-if="batch.state==='completed'&&batch.cleanup_pending" title="实验流程已结束，设备清理仍待确认。" type="warning" :closable="false" />
       <div v-if="batch.recovery_required" class="notice"><p>需要现场检查设备停止、残留和液路，解除恢复锁定后才能开始新批次。解除锁定后可新建实验，原记录保留。</p><el-button type="warning" :disabled="controlling" @click="acknowledgeInterrupted">现场已检查，解除锁定</el-button></div>
-      <div class="current-operation" :class="{stale}" aria-label="当前动作">
+      <BatchCompletionPanel v-if="batchCompleted" :experiment-name="batch.experiment_name || batch.request?.experiment_name || batch.name || '未命名实验'" :completed-count="completedGroups" :total-count="batch.total_groups || 0" :persistence-status="batch.persistence_status" :exporting="exportingBatch" @history="openBatchHistory" @export="exportBatch" />
+      <component :is="batchCompleted?'details':'div'" class="current-operation" :class="{stale,'completed-snapshot':batchCompleted}" :aria-label="batchCompleted?'最后动作记录':'当前动作'">
+        <summary v-if="batchCompleted">查看最后动作与读数</summary>
         <div class="activity-heading"><div><small>{{ terminalRun ? '最后动作快照' : '当前动作' }}</small><h3>{{ operationTitle }}</h3><p>{{ operationDescription }}</p></div><span class="activity-status">{{ stale?'状态过期':batch.cleanup_in_progress?'正在清理':batch.stop_requested&&!terminalRun?'正在停止':stateLabel }}</span></div>
         <p v-if="controlFeedback" class="control-feedback" role="status">{{ controlFeedback }} <el-button v-if="controlUncertain" size="small" @click="refreshBatch(true)">核对最新状态</el-button></p>
         <div class="activity-readings">
           <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? formatTemperature(reading.value) : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ !reading.read_ok?'读取未确认':reading.target==null?'最新读数':(reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target)?'已达标':'等待达标' }}</b></div>
-          <div v-if="activity?.stable_required_seconds!=null" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
+          <div v-if="activity?.stable_required_seconds!=null && activity.wait_type!=='microwave_temperature_reached'" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
           <MicrowaveHoldProgress :activity="activity" />
-          <div v-if="activity?.duration_seconds!=null && activity.qualified_seconds==null" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
+          <div v-if="activity?.duration_seconds!=null && activity.qualified_seconds==null && activity.hold_mode!=='timed'" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
           <div v-for="(device,id) in activity?.devices||{}" :key="id" class="reading"><small>{{ deviceLabel(String(id)) }}</small><strong>{{ device.read_ok!==true?'状态未知':device.relay_energized!=null?'已确认 '+(device.relay_energized?'NC':'NO'):device.busy===true||device.running===true||device.control_active===true?'设备运行中':device.result==='completed'?'动作已完成':device.running===false?'设备已停止':'等待设备确认' }}</strong><span v-for="feed in (activity?.feeds||[]).filter((f:any)=>f.device_id===id)" :key="feed.device_id">设定进样量 {{ feed.volume }} {{ feed.unit }}</span><span v-if="device.fault_code">故障码 {{ device.fault_code }}</span></div>
           <div v-if="Object.keys(activity?.parameters||{}).length||(!(activity?.readings?.length)&&!Object.keys(activity?.devices||{}).length)" class="reading"><small>相关设备 / 参数</small><strong>{{ activity?.device_ids?.map(deviceLabel).join(' / ')||currentDevice }}</strong><span v-if="activity?.parameters?.target_temperature!=null">目标 {{ activity.parameters.target_temperature }} ℃</span><span v-if="activity?.parameters?.temperature!=null">目标 {{ activity.parameters.temperature }} ℃</span><span v-if="activity?.parameters?.channel">通道 {{ activity.parameters.channel }}</span><span v-if="activity?.parameters?.flow_rate!=null">{{ activity.parameters.flow_rate }} mL/min</span><span v-if="activity?.parameters?.volume!=null">{{ activity.parameters.volume }} {{ activity.parameters.unit||'mL' }}</span><span v-if="activity?.parameters?.position">出口 {{ activity.parameters.position }}</span></div>
         </div>
-      </div>
+      </component>
       <ol class="run-stages" aria-label="本组阶段" :data-active-stage="executionStage"><li v-for="(name,i) in executionStages" :key="name" :class="stageState(stageBatch,i)" :aria-current="stageState(stageBatch,i)==='running'?'step':undefined"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="stageState(stageBatch,i)==='completed'?'M5 12l4 4L19 6':stageState(stageBatch,i)==='paused'?'M8 5v14M16 5v14':stageState(stageBatch,i)==='failed'?'M12 4v10M12 18v2':stagePaths[i]" /></svg><strong>{{ name }}</strong><small>{{ stageLabels[stageState(stageBatch,i)] }}</small></li></ol>
       <div class="run-summary">
         <div><small>整批完成组数</small><strong>{{ completedGroups }} / {{ batch.total_groups || 0 }}</strong><progress :value="completedGroups" :max="batch.total_groups||1" aria-label="已完成实验组数"></progress></div>
         <div><small>当前实验组</small><strong>{{ batch.phase==='priming'||batch.phase==='ready' ? '批次准备' : `第 ${batch.current_group || 0} 组` }}</strong><span>{{ phaseLabel }}</span></div>
         <div><small>预充 / 当前组累计用时</small><strong>{{ elapsedLabel }}</strong><span>{{ terminalRun ? '已结束 · 用时已固定' : '含暂停时间' }} · 状态每 2 秒更新 · {{ lastRefresh ? new Date(lastRefresh).toLocaleTimeString() : '等待状态' }}</span></div>
       </div>
-      <div v-if="terminalRun" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="router.push({path:'/experiment/batch',query:{view:'history',batch_id:batch.batch_id}})">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
+      <div v-if="terminalRun&&!batchCompleted" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="openBatchHistory">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
       <div v-if="batch.phase==='priming'||batch.phase==='ready'" class="notice">已完成预充循环：A {{ batch.priming?.completed_cycles?.[0] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次，B {{ batch.priming?.completed_cycles?.[1] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次。初始化与预充每批只执行一次。</div>
       <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td></tr></tbody></table></div>
       <p><small>整批进度按完成组数统计。升温和降温耗时取决于实测温度；不估算剩余完成时间。产物瓶仍由现场逐组更换。</small></p>
@@ -117,6 +119,7 @@
 </template>
 <script setup lang="ts">
 import MicrowaveHoldProgress from '../components/MicrowaveHoldProgress.vue'
+import BatchCompletionPanel from '../components/BatchCompletionPanel.vue'
 import {computed,nextTick,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
@@ -124,11 +127,11 @@ import axios from 'axios'
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
-import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature} from '../experiment/guidedProgress'
+import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,batchCompletionConfirmed} from '../experiment/guidedProgress'
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
-const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；物料到温后开始保温计时，每秒检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
+const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；反应液在目标 ±3℃ 内连续稳定 30 秒后开始定时保温，之后温度偏离不暂停计时，仍持续检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
 const stageAxes=computed(()=>axes.value.slice(stage.value*2,stage.value*2+2))
 const deviceSummary=computed(()=>stage.value===0?'加热器一：前驱体 A　｜　加热器二：前驱体 B':stage.value===1?'注射泵一：前驱体 A　｜　注射泵二：前驱体 B':'微波仪一：反应温区')
 const roles=[{key:'heaterA',label:'前驱体 A 加热器',group:'heaters',description:'前驱体储液加热'},{key:'heaterB',label:'前驱体 B 加热器',group:'heaters',description:'独立温区'},{key:'pumpA',label:'前驱体 A 注射泵',group:'syringe_pumps',description:'进样量与速度独立设置'},{key:'pumpB',label:'前驱体 B 注射泵',group:'syringe_pumps',description:'同时进料、各自完成'},{key:'reaction',label:'微波反应装置',group:'microwaves',description:'测得物料到温后计时'},{key:'liquid',label:'清洗与排液蠕动泵',group:'pumps',description:'不同通道负责进液和排液'}]
@@ -228,6 +231,7 @@ const plumbingConfirmed=ref(false),drainDirection=ref('CW'),cleanDirection=ref('
 const previewPrime=ref(''),previewYaml=ref<string[]>([]),validatedKey=ref(''),controlling=ref(false),batch=ref<any>({state:'idle'})
 const activeRun=computed(()=>['running','paused'].includes(batch.value.state)&&batch.value.phase!=='ready')
 const terminalRun=computed(()=>['completed','failed','stopped','interrupted'].includes(batch.value.state))
+const batchCompleted=computed(()=>batchCompletionConfirmed(batch.value))
 const showProgress=ref(false),lastRefresh=ref(0),refreshError=ref('')
 const executionStages=stageNames
 const executionStage=computed(()=>activeStage(batch.value))
@@ -256,6 +260,7 @@ const visibleGroups=computed(()=>progressGroups.value.filter(g=>showCompleted.va
 async function locateCurrent(){await nextTick();document.querySelector('.run-table tr.selected')?.scrollIntoView({block:'nearest'})}
 const resultCounts=computed(()=>({completed:completedGroups.value,failed:(batch.value.groups||[]).filter((g:any)=>g.state==='failed').length,unexecuted:Math.max(0,(batch.value.total_groups||0)-(batch.value.groups||[]).filter((g:any)=>g.state!=='pending').length)}))
 const exportingBatch=ref(false)
+function openBatchHistory(){router.push({path:'/experiment/batch',query:{view:'history',batch_id:batch.value.batch_id}})}
 async function exportBatch(){
  if(exportingBatch.value)return
  exportingBatch.value=true
@@ -500,5 +505,6 @@ onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if
 @media(max-width:600px){.guided{padding-bottom:148px}.axis-controls{grid-template-columns:1fr}.compact-fields{grid-template-columns:1fr}footer .el-button:last-child{flex-basis:100%}.form-group{padding:14px}.number-unit input{max-width:100%}}
 
 .activity-heading{display:flex;justify-content:space-between;align-items:start;gap:18px}.current-operation h3{font-size:25px;line-height:1.45}.activity-status{padding:7px 12px;border-radius:20px;background:#fff;white-space:nowrap;font-size:13px}.activity-readings{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:20px}.reading{background:#fff;padding:16px;border-radius:10px;display:flex;flex-direction:column;gap:8px;min-width:0}.reading strong{font-size:19px;overflow-wrap:anywhere}.reading span,.reading b{font-size:12px}.reading b{color:#346b69}.current-operation.stale{border-color:#a87925;background:#fff7e8}.control-feedback{padding:12px!important;margin-top:14px!important;background:#fff;border-radius:8px}.run-stages svg{width:28px;height:28px}.run-stages .running{background:#176fbb;border-color:#105692;color:#fff}.run-stages .running small{color:#e5f3ff}.run-stages .completed{background:#eff7f3;border-color:#aacdbb;color:#347455}.run-stages .paused,.run-stages .stopping,.run-stages .cleanup{background:#fff4dd;border-color:#c99b46;color:#80551d}.run-stages .failed{background:#fdf0ed;border-color:#d58a7d;color:#ae4535}.group-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.result-summary{padding:18px;border:1px solid #cbdde9;border-radius:12px;margin:20px 0}.field-error{color:#b83e2e;line-height:1.5}.guided [aria-invalid=true]{border-color:#c54e3f;outline-color:#c54e3f}button:focus-visible{outline:2px solid #176fbb;outline-offset:3px}
+.completed-snapshot{padding:16px 20px;background:#f7fafd;border:1px solid #dce7f1;margin-top:14px}.completed-snapshot summary{cursor:pointer;color:#55758f;font-size:13px}.completed-snapshot[open] summary{margin-bottom:20px}
 @media(max-width:600px){.activity-heading{flex-direction:column}.activity-readings{grid-template-columns:1fr}.current-operation{padding:18px}.current-operation h3{font-size:22px}.run-stages{grid-template-columns:1fr}.run-stages li{display:grid;grid-template-columns:30px 1fr;align-items:center}.run-stages li small{grid-column:2}}
 </style>

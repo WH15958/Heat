@@ -32,6 +32,9 @@ export function stageState(batch:any,index:number):string {
  return batch.state==='running'?'running':'pending'
 }
 export function staleStatus(last:number,now:number,error:string){return !!error||!last||now-last>6000}
+export function batchCompletionConfirmed(batch:any):boolean {
+ return batch.state==='completed'&&!batch.cleanup_in_progress&&!batch.cleanup_pending&&!batch.cleanup_required&&!batch.recovery_required
+}
 export function batchRunIds(batch:any,runs:any[]):string[]{
  return [...new Set<string>([batch.priming?.run_id,...(batch.groups||[]).map((g:any)=>g.run_id),
   ...runs.filter(r=>r.metadata?.batch_id===batch.batch_id).map(r=>r.run_id)].filter(Boolean))]

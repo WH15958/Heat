@@ -26,7 +26,7 @@
     <details class="device-details"><summary>设备详情与通信配置</summary><div class="detail-tags">          <el-tag type="info" size="small" style="margin-right: 8px">串口 {{ pump.connectionPort || '--' }}</el-tag>
           <el-tag v-if="showBindingLabel" type="info" size="small" style="margin-right: 8px">{{ pump.bindingLabel }}</el-tag>
           <el-tag :type="bindingTagType" size="small" style="margin-right: 8px">{{ bindingTagText }}</el-tag></div></details>
-    <p class="setting-caption">以下为待下发设置，点击启动后执行；通道标题显示设备当前读回状态。</p>
+    <p class="setting-caption">以下为待下发设置，点击启动后执行；通道标题显示设备当前读回状态。各通道参数可独立滚动查看。</p>
     <div class="channels-grid">
     <div v-for="ch in [1, 2, 3, 4]" :key="ch" class="channel-control">
       <div class="channel-header">
@@ -42,6 +42,7 @@
         <el-tag v-else-if="pump.connected" type="warning" size="small">状态未知</el-tag>
         <el-tag v-else type="info" size="small">未连接</el-tag>
       </div>
+      <div class="channel-content" role="region" :aria-label="`通道 ${ch} 参数与预灌估算`" tabindex="0">
       <div class="channel-fields">
         <label class="control-field"><span>运行模式</span><el-select v-model="pump.channels[ch].mode"><el-option v-for="m in PUMP_MODES" :key="m.value" :label="m.label" :value="m.value" /></el-select></label>
         <label class="control-field"><span>软管型号</span><el-select v-model="pump.channels[ch].tubeModel" @change="onTubeModelChange(pump.channels[ch])"><el-option v-for="t in TUBE_MODELS" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" /></el-select></label>
@@ -57,7 +58,6 @@
           <div class="control-field full-field"><label :for="`${pumpId}-${ch}-interval`">循环间隔</label><div class="field-value"><el-input-number :id="`${pumpId}-${ch}-interval`" v-model="pump.channels[ch].intervalTime" :min="0" :max="9999" :step="0.1" :precision="1" /><el-select v-model="pump.channels[ch].intervalTimeUnit" aria-label="间隔时间单位"><el-option v-for="u in TIME_UNITS" :key="u.value" :label="u.label" :value="u.value" /></el-select></div></div>
         </template>
       </div>
-      <div class="channel-actions"><el-button type="success" @click="$emit('startChannel', pumpId, ch)" :loading="pump.channels[ch].starting">启动通道 {{ ch }}</el-button><el-button type="danger" plain @click="$emit('stopChannel', pumpId, ch)" :loading="pump.channels[ch].stopping">停止</el-button></div>
       <el-collapse class="priming-collapse">
         <el-collapse-item name="priming">
           <template #title>
@@ -127,6 +127,8 @@
           />
         </el-collapse-item>
       </el-collapse>
+      </div>
+      <div class="channel-actions"><el-button type="success" @click="$emit('startChannel', pumpId, ch)" :loading="pump.channels[ch].starting">启动通道 {{ ch }}</el-button><el-button type="danger" plain @click="$emit('stopChannel', pumpId, ch)" :loading="pump.channels[ch].stopping">停止</el-button></div>
     </div>
 
     </div>
@@ -317,7 +319,11 @@ function onTubeModelChange(ch: ChannelConfig) {
 </script>
 
 <style scoped>
-.channels-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,330px),1fr)); gap: 16px; align-items: start; }
+.pump-card { container: pump-controls / inline-size; }
+.channels-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.channel-content { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 3px; }
+.channel-content:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; }
+@container pump-controls (max-width: 720px) { .channels-grid { grid-template-columns: minmax(0,1fr); } }
 .channel-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 12px; }
 .control-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 13px; color: #425b73; }
 .control-field :deep(.el-select), .control-field :deep(.el-input-number) { width: 100%; }
@@ -325,7 +331,7 @@ function onTubeModelChange(ch: ChannelConfig) {
 .field-value { display: flex; align-items: center; gap: 8px; }
 .field-value :deep(.el-input-number) { flex: 1; min-width: 0; }
 .field-value :deep(.el-select) { width: 100px; flex: 0 0 100px; }
-.channel-actions { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid #e3ebf3; padding-top: 14px; }
+.channel-actions { display: flex; flex-shrink: 0; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid #e3ebf3; padding-top: 14px; }
 .device-details { margin: 12px 0; padding: 12px; background: #f3f7fb; border-radius: 8px; font-size: 13px; }
 .device-details summary { cursor: pointer; color: #425b73; }
 .detail-tags { display:flex; gap: 8px; flex-wrap:wrap; margin-top:12px; }
@@ -334,6 +340,10 @@ function onTubeModelChange(ch: ChannelConfig) {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .connection-feedback { margin-bottom: 12px; }
 .channel-control {
+  display: flex;
+  flex-direction: column;
+  height: 520px;
+  box-sizing: border-box;
   padding: 16px;
   border: 1px solid #dce7f1;
   border-radius: 12px;
@@ -343,6 +353,7 @@ function onTubeModelChange(ch: ChannelConfig) {
 
 .channel-header {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;

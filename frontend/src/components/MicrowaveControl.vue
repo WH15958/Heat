@@ -88,7 +88,7 @@
         <el-button :disabled="settingsDisabled || microwave.usedSegments >= 5" @click="addSegment">添加一段</el-button>
         <span class="unit-label">最多 5 段</span>
       </el-form-item>
-      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：到温后计时保温，段间确认停机。运行期间请保持服务运行并现场看护。" />
+      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：目标 ±3℃ 内连续稳定 30 秒后定时保温，之后温度偏离不暂停计时，段间确认停机。运行期间请保持服务运行并现场看护。" />
       <div class="segments-table" :class="{ 'multiple-segments': microwave.usedSegments > 1 }">
       <section v-for="segment in activeSegments" :key="segment.segment" class="program-segment">
         <div class="segment-heading">
@@ -226,7 +226,7 @@ const settingsDisabled = computed(() => props.microwave.configuring || props.mic
   || props.hostProgram?.state === 'running' || props.hostProgram?.state === 'paused')
 const hostStateLabel = computed(() => ({ running: '运行中', completed: '完成', failed: '失败',
   stopped: '已停止', interrupted: '服务中断，需恢复确认' }[props.hostProgram?.state || ''] || props.hostProgram?.state))
-const phaseLabel = computed(() => ({ configure: '配置当前逻辑段', heat: '等待到温', hold: '计时保温', stop: '确认停止',
+const phaseLabel = computed(() => ({ configure: '配置当前逻辑段', heat: '等待稳定到温', hold: '定时保温', stop: '确认停止',
   completed: '全部段完成', failed: '失败', stopped: '已停止', acknowledged: '已人工解除锁定' }[props.hostProgram?.phase || ''] || '等待确认'))
 function addSegment() {
   if (!settingsDisabled.value && props.microwave.usedSegments < 5) props.microwave.usedSegments++

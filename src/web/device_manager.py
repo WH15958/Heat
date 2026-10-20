@@ -792,7 +792,7 @@ class DeviceManager:
             finally:
                 self._microwave_command_event(device_id, "configure_constant_rate", "configuration", success)
 
-    def start_microwave(self, device_id: str, mode, *, should_stop=None) -> bool:
+    def start_microwave(self, device_id: str, mode, *, should_stop=None, cleanup_on_failure=False) -> bool:
         """启动微波仪输出"""
         microwave = self._microwaves.get(device_id)
         if microwave is None:
@@ -817,8 +817,36 @@ class DeviceManager:
                     self._microwave_generation(device_id) != start_generation
                     or bool(should_stop and should_stop())))
                 return success
+            except Exception as exc:
+                microwave.last_command_error = getattr(microwave, "last_command_error", None) or str(exc)
+                raise
             finally:
                 self._microwave_command_event(device_id, "start", "start_request", success)
+                result = getattr(microwave, "last_command_result", None)
+                if (cleanup_on_failure and success is not True and isinstance(result, dict)
+                        and (result.get("mode_selection_write_attempted") or result.get("start_write_attempted"))):
+                    # Keep cleanup inside the same control lock; a later start must not be stopped here.
+                    original_error = microwave.last_command_error
+                    original_result = copy.deepcopy(result)
+                    self._request_microwave_stop(device_id)
+                    cleanup = dict(success=False)
+                    try:
+                        cleanup["success"] = self._stop_microwave_command(device_id, "failure_cleanup") is True
+                        cleanup["error"] = microwave.last_command_error
+                    except Exception as exc:
+                        cleanup["error"] = str(exc)
+                    cleanup["result"] = copy.deepcopy(microwave.last_command_result)
+                    microwave.last_command_result = original_result
+                    original_result["failure_cleanup"] = cleanup
+                    microwave.last_command_error = original_error or "microwave start failed"
+                    if not cleanup["success"]:
+                        microwave.last_command_error += f"; failure cleanup unconfirmed: {cleanup.get('error')}"
+
+    def request_microwave_stop(self, device_id: str) -> None:
+        """Publish stop intent without waiting for a command lock or doing I/O."""
+        if device_id not in self._microwaves:
+            raise ValueError(f"Microwave not found: {device_id}")
+        self._request_microwave_stop(device_id)
 
     def stop_microwave(self, device_id: str, *, source="manual_stop") -> bool:
         """停止微波仪输出"""

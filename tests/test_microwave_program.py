@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from src.experiment import microwave_program as program
 from src.science import sample_record
 from src.web.api import microwave_program as api, experiments, guided, devices
-from test_guided import FakeManager, until
+from test_guided import FakeManager, until, fast_microwave_stability
 from test_microwave_atomic_config import make_device
 from src.protocols.microwave_params import auto_power_segment_start, manual_segment_start, manual_hold_time_start
 
@@ -56,6 +56,7 @@ def spec(**kwargs):
 
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
+    monkeypatch.setattr(program.StepExecutor, '_wait_condition', fast_microwave_stability)
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real serial access')))
     monkeypatch.setattr(program, 'PROGRAM_DIR', tmp_path / 'programs')
     monkeypatch.setattr('src.experiment.experiment_logger.LOGS_DIR', tmp_path / 'logs')
@@ -97,7 +98,7 @@ def test_host_stages_stop_between_targets_and_replace_all_five_slots(mode):
         assert [c[0] for c in dm.calls] == ['microwave_config', 'microwave_start', 'microwave_stop'] * 2
         assert [[s.segment for s in config] for config in dm.configurations] == [list(range(1, 6))] * 2
         assert [{s.heating_temperature for s in config} for config in dm.configurations] == [{30}, {40}]
-        assert all(s.hours == 0 and s.minutes == 21 and s.seconds == 0 for config in dm.configurations for s in config)
+        assert all(s.hours == 0 and s.minutes == 11 and s.seconds == 0 for config in dm.configurations for s in config)
         record = program.stored_records({run.record['program_id']: run})[0]
         assert record['current_stage'] == 2
         assert record['state'] == 'completed'
@@ -222,10 +223,13 @@ def test_supported_stage_counts_and_custom_guard(count):
                 heating_timeout=37)
     steps = program.compile_steps('microwave1', program.ProgramRequest(**body))
     assert len(steps) == count * 4
-    assert steps[0].params['segments'][0]['minutes'] == 13
+    assert steps[0].params['segments'][0]['minutes'] == 3
     assert steps[0].params['segments'][0]['seconds'] == 40
     assert steps[1].wait.timeout == 37
+    assert (steps[1].wait.tolerance, steps[1].wait.seconds) == (3, 30)
     assert steps[2].wait.seconds == 123
+    assert steps[2].wait.hold_mode == 'timed'
+    assert steps[2].wait.timeout == 123
 
 
 @pytest.mark.parametrize('mutation', [dict(status_confirmed=False), dict(stop_confirmed=False),
@@ -405,7 +409,7 @@ def test_host_parameters_reach_known_registers_with_readback(mode):
     assert method(step.params['segments'])
     if mode == 'auto_power':
         assert [addr for _, addr, _ in protocol.multi_writes] == [auto_power_segment_start(n) for n in range(1, 6)]
-        assert all(values == [30, 30, 0, 21, 0] for _, _, values in protocol.multi_writes)
+        assert all(values == [30, 30, 0, 11, 0] for _, _, values in protocol.multi_writes)
     else:
         assert [addr for _, addr, _ in protocol.multi_writes] == [
             addr for n in range(1, 6) for addr in (manual_segment_start(n), manual_hold_time_start(n))]

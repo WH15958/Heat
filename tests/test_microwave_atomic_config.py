@@ -184,7 +184,7 @@ def test_start_cannot_interleave_with_configuration_writes(method_name, segments
     assert first_write_completed is True
     assert probe_during_configuration is False
     assert lock_probe_complete.is_set()
-    assert lock_available_to_start == [True]
+    assert lock_available_to_start == [True, True]
     assert config_thread.is_alive() is False
     assert start_thread.is_alive() is False
     assert errors == []
@@ -192,5 +192,6 @@ def test_start_cannot_interleave_with_configuration_writes(method_name, segments
     assert [call_type for call_type, _ in protocol.calls] == [
         "config",
         "config",
+        "start",
         "start",
     ]

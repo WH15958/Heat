@@ -9,7 +9,7 @@ import pytest
 from src.experiment.actions import ActionType, ExperimentStep
 from src.experiment.engine import ExperimentEngine
 from src.experiment.executor import StepExecutor
-from src.protocols.microwave_params import CONTROL_WORD, auto_power_segment_start
+from src.protocols.microwave_params import CONTROL_MICROWAVE_START, CONTROL_WORD, auto_power_segment_start
 from src.web.device_manager import DeviceManager
 from test_microwave_atomic_config import make_device
 
@@ -21,13 +21,17 @@ def configured():
     return device, protocol
 
 
+def start_was_sent(protocol):
+    return any(value & CONTROL_MICROWAVE_START for _, _, value in protocol.single_writes)
+
+
 @pytest.mark.parametrize('failure', ['reload', 'read_failure'])
 def test_post_start_change_or_unreadable_parameters_rejects_start(failure):
     device, protocol = configured()
     original_read = protocol.read_holding_registers
     reads = []
     def read(slave, address, count):
-        if protocol.single_writes and address == auto_power_segment_start(1):
+        if start_was_sent(protocol) and address == auto_power_segment_start(1):
             reads.append(address)
             if failure == 'read_failure':
                 return None
@@ -38,10 +42,10 @@ def test_post_start_change_or_unreadable_parameters_rejects_start(failure):
     assert 'post-start configuration mismatch' in device.last_command_error
     assert reads == [auto_power_segment_start(1)]
     assert device.last_command_result['configuration_verified'] is False
-    assert len(protocol.single_writes) == 1
+    assert len(protocol.single_writes) == 2
 
 
-def test_success_reads_each_written_block_once_and_preserves_expected_actual():
+def test_success_reads_each_written_block_before_and_after_start():
     device, protocol = configured()
     read = protocol.read_holding_registers
     addresses = []
@@ -51,21 +55,24 @@ def test_success_reads_each_written_block_once_and_preserves_expected_actual():
         return read(slave, address, count)
     protocol.read_holding_registers = observe
     assert device.start('auto_power')
-    assert addresses == [auto_power_segment_start(n) for n in range(1, 6)]
+    assert addresses == [auto_power_segment_start(n) for n in range(1, 6)] * 2
     result = device.last_command_result
     assert result['configuration_verified'] and result['success']
+    assert result['pre_start_configuration_verified']
+    assert all(block['expected'] == block['actual'] for block in result['pre_start_blocks'])
     assert all(block['expected'] == block['actual'] for block in result['blocks'])
     assert result['after_verification']['control_active'] is True
 
 
-def test_stop_intent_cancels_remaining_configuration_reads():
+@pytest.mark.parametrize('phase', ['pre-start', 'post-start'])
+def test_stop_intent_cancels_remaining_configuration_reads(phase):
     device, protocol = configured()
     read = protocol.read_holding_registers
     checks = []
     cancelled = False
     def observe(slave, address, count):
         nonlocal cancelled
-        if address == auto_power_segment_start(1):
+        if address == auto_power_segment_start(1) and (phase == 'pre-start' or start_was_sent(protocol)):
             checks.append(address)
             cancelled = True
         return read(slave, address, count)
@@ -73,7 +80,9 @@ def test_stop_intent_cancels_remaining_configuration_reads():
     assert not device.start('auto_power', should_stop=lambda: cancelled)
     assert checks == [auto_power_segment_start(1)]
     assert 'stop request' in device.last_command_error
-    assert len(device.last_command_result['blocks']) == 1
+    blocks = 'pre_start_blocks' if phase == 'pre-start' else 'blocks'
+    assert len(device.last_command_result[blocks]) == 1
+    assert start_was_sent(protocol) is (phase == 'post-start')
 
 
 def test_manager_stop_generation_is_checked_between_verification_reads():
@@ -87,7 +96,8 @@ def test_manager_stop_generation_is_checked_between_verification_reads():
         return read(slave, address, count)
     protocol.read_holding_registers = observe
     assert not dm.start_microwave('mw1', 'auto_power')
-    assert len(device.last_command_result['blocks']) == 1
+    assert len(device.last_command_result['pre_start_blocks']) == 1
+    assert not start_was_sent(protocol)
     assert dm.stop_microwave('mw1', source='user_stop')
     assert dm.get_microwave_events('mw1', 0)[1][-1]['source'] == 'user_stop'
 
@@ -129,7 +139,7 @@ def test_post_start_verification_exceptions_return_failure_with_evidence(failure
     device, protocol = configured()
     read = protocol.read_holding_registers
     def observe(slave, address, count):
-        if protocol.single_writes:
+        if start_was_sent(protocol):
             if failure == 'block_exception' and address == auto_power_segment_start(1):
                 raise IOError('verification connection lost')
             if failure == 'final_status' and len(device.last_command_result['blocks']) == 5:
@@ -198,7 +208,7 @@ def test_failed_start_saves_diagnostics_and_keeps_original_error(cleanup_ok):
     write = protocol.write_single_register
     def reload(slave, address, value):
         result = write(slave, address, value)
-        if address == CONTROL_WORD and value:
+        if address == CONTROL_WORD and value & CONTROL_MICROWAVE_START:
             protocol.registers[auto_power_segment_start(1)+3] = 5
         return result if value or cleanup_ok else False
     protocol.write_single_register = reload
