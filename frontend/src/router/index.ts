@@ -4,7 +4,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/experiment/batch/template', name: 'template-batch', component: () => import('../views/TemplateBatchPage.vue') },
-    { path: '/experiment/batch', name: 'batch-experiment', component: () => import('../views/BatchExperimentPage.vue') },
+    { path: '/experiment/batch', name: 'batch-experiment', component: () => import('../views/GuidedEntryPage.vue') },
     { path: '/', name: 'dashboard', component: () => import('../views/Dashboard.vue') },
     { path: '/control', name: 'control', component: () => import('../views/ControlPanel.vue') },
     { path: '/experiment', name: 'experiment', component: () => import('../views/ExperimentPage.vue') },

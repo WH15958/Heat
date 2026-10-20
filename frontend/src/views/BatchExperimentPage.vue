@@ -1,6 +1,7 @@
 <template>
   <div class="guided">
-    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化 → 稳定到温与预充 → 到温复查与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ newDraft ? (showProgress ? '返回新实验设置' : '查看上次实验') : (showProgress ? '查看参数' : '查看实验进度') }}</el-button><el-button @click="router.push('/experiment/editor')">自由编排</el-button></div></header>
+    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化 → 稳定到温与预充 → 到温复查与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button @click="router.push('/experiment/batch')">返回实验入口</el-button><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ newDraft ? (showProgress ? '返回新实验设置' : '查看上次实验') : (showProgress ? '查看参数' : '查看实验进度') }}</el-button></div></header>
+    <p v-if="draftNotice" role="status">{{ draftNotice }}</p>
     <nav v-if="!showProgress"><button v-for="(name,i) in stages" :key="name" :class="{active:stage===i}"  :disabled="i>stage" @click="goBack(i)"><b>{{ i+1 }}</b>{{ name }}</button></nav>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <section v-if="showProgress" class="run-panel" aria-label="实验进度">
@@ -37,7 +38,7 @@
         <div><small>当前实验组</small><strong>{{ batch.phase==='priming'||batch.phase==='ready' ? '批次准备' : `第 ${batch.current_group || 0} 组` }}</strong><span>{{ phaseLabel }}</span></div>
         <div><small>预充 / 当前组累计用时</small><strong>{{ elapsedLabel }}</strong><span>{{ terminalRun ? '已结束 · 用时已固定' : '含暂停时间' }} · 状态每 2 秒更新 · {{ lastRefresh ? new Date(lastRefresh).toLocaleTimeString() : '等待状态' }}</span></div>
       </div>
-      <div v-if="terminalRun" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="router.push({path:'/history',query:{batch_id:batch.batch_id}})">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
+      <div v-if="terminalRun" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="router.push({path:'/experiment/batch',query:{view:'history',batch_id:batch.batch_id}})">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
       <div v-if="batch.phase==='priming'||batch.phase==='ready'" class="notice">已完成预充循环：A {{ batch.priming?.completed_cycles?.[0] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次，B {{ batch.priming?.completed_cycles?.[1] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次。初始化与预充每批只执行一次。</div>
       <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td></tr></tbody></table></div>
       <p><small>整批进度按完成组数统计。升温和降温耗时取决于实测温度；不估算剩余完成时间。产物瓶仍由现场逐组更换。</small></p>
@@ -49,7 +50,7 @@
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
         <p v-if="batch.request?.product_port==='NC'" class="notice compact-notice">历史批次仅供查阅；新批次须按 NO 收产物、NC 排废液重新确认并预充。</p>
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label></div>
-        <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
+        <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
         <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
       </section>
@@ -60,7 +61,7 @@
         </div>
         <div class="form-group"><h4>清洗排液 · 通道四</h4>
           <div class="grid compact-fields"><label v-for="item in fixed.slice(6)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label><label>排液流量<span class="readonly-value">{{ Number.isFinite(setting('drainFlow')) ? setting('drainFlow') : '待填写' }} mL/min</span><small>沿用产物收集设置</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
         </div>
         <div class="notice compact-notice">切 NC → 进液 → 停留 → 排液，按次数重复。</div>
       </section>
@@ -72,7 +73,7 @@
           <label class="preheat-field">到温后等待时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
           <p><small>两路先达到目标 ±3℃并稳定30秒，再计时脱气，暂停不计时；到温等待最多60分钟。填0表示到温后不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input :data-field="p.key" :aria-invalid="!!fieldErrors[p.key]" v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span><small v-if="fieldErrors[p.key]" class="field-error" role="alert">{{ fieldErrors[p.key] }}</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 2 分钟（120 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
         </div>
         <details class="form-group" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open">
@@ -111,7 +112,7 @@
       </template>
       <p v-else class="start-caption">完成参数设置后，在“批次确认”页统一确认并启动。</p>
     </aside></div>
-    <footer v-if="!showProgress"><el-button :disabled="stage===0" @click="goBack(stage-1)">上一步</el-button><el-button v-if="stage<6" type="primary" @click="nextStage">{{ stage===5?'批次确认':'下一步' }}</el-button><el-button @click="router.push('/experiment/batch/template')">高级：已有模板参数设计</el-button></footer>
+    <footer v-if="!showProgress"><el-button :disabled="stage===0" @click="goBack(stage-1)">上一步</el-button><el-button v-if="stage<6" type="primary" @click="nextStage">{{ stage===5?'批次确认':'下一步' }}</el-button></footer>
   </div>
 </template>
 <script setup lang="ts">
@@ -371,7 +372,8 @@ async function refreshBatch(force=false){
   batch.value=data;lastRefresh.value=Date.now();statusNow.value=Date.now();refreshError.value='';reconcileControl(data)
   if(newDraft.value&&!requiresAttention(data))return
   const interruptedDraft=newDraft.value
-  if(interruptedDraft){newDraft.value=false;void router.replace({query:{...route.query,new:undefined}})}
+  if(requiresAttention(data)){saveDraft();draftEnabled=false}
+  if(interruptedDraft){newDraft.value=false;void router.replace({query:{...route.query,new:undefined,resume:'1'}})}
   if(data.request&&(interruptedDraft||restoredBatchId!==data.batch_id)){
    restoreParameters(data.request)
    stage.value=data.phase==='ready'?6:5;showProgress.value=true;restoredBatchId=data.batch_id
@@ -388,8 +390,9 @@ async function startBatch(){
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
+  removeDraft();draftEnabled=false
   newDraft.value=false;restoredBatchId=batch.value.batch_id
-  void router.replace({query:{...route.query,new:undefined}})
+  void router.replace({query:{...route.query,new:undefined,resume:'1'}})
   showProgress.value=true
   lastRefresh.value=Date.now()
   refreshError.value=''
@@ -432,15 +435,55 @@ function returnToSetup(reuse=false){
  plumbingConfirmed.value=primingConfirmed.value=initializationConfirmed.value=false
  validatedKey.value='';report.value='';previewYaml.value=[];previewPrime.value='';selected.value=0
  fieldErrors.value={};controlFeedback.value='';showCompleted.value=false
- error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true
+ error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true;draftEnabled=true
  void router.replace({query:{...route.query,new:'1'}})
 }
 async function acknowledgeInterrupted(){controlling.value=true;try{await ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'});++refreshSequence;batch.value=(await axios.post(`/api/guided/${batch.value.batch_id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
 
+const draftKey='heat.guided-draft.v1'
+const draftNotice=ref('')
+let draftEnabled=newDraft.value, draftRestored=false
+function removeDraft(){try{if(typeof window!=='undefined')window.localStorage.removeItem(draftKey)}catch{draftNotice.value='无法清除本机草稿，请检查浏览器存储。'}}
+function saveDraft(){
+ if(!draftEnabled||showProgress.value)return
+ try{if(typeof window!=='undefined')window.localStorage.setItem(draftKey,JSON.stringify({version:1,experimentName:experimentName.value,stage:stage.value,axes:axes.value,fixed:fixed.value,priming:priming.value,repeats:repeats.value,speedA:speedA.value,speedB:speedB.value,primeHeatMinutes:primeHeatMinutes.value,initialization:initialization.value,drainDirection:drainDirection.value,cleanDirection:cleanDirection.value,cleanChannel:cleanChannel.value,drainChannel:drainChannel.value,chosen:{...chosen},advancedOpen:advancedOpen.value}))}
+ catch{draftNotice.value='草稿保存失败，离开页面前请保留已填参数。'}
+}
+function restoreDraft(){
+ if(!newDraft.value)return
+ try{
+  const raw=typeof window!=='undefined'?window.localStorage.getItem(draftKey):null
+  if(!raw)return
+  const d=JSON.parse(raw)
+  const number=(v:unknown)=>v===null||v===''||(typeof v==='number'&&Number.isFinite(v))
+  if(d.version!==1||typeof d.experimentName!=='string'||!Number.isInteger(d.stage)||d.stage<0||d.stage>6||!Array.isArray(d.axes)||d.axes.length!==6)throw new Error('invalid')
+  for(const [key,fields] of [['axes',axes.value],['fixed',fixed.value],['priming',priming.value]] as const){
+   if(!Array.isArray(d[key])||d[key].length!==fields.length)throw new Error('invalid')
+   fields.forEach((f,i)=>{const item=d[key][i];if(!item||item.key!==f.key)throw new Error('invalid')})
+  }
+  if(![d.repeats,d.speedA,d.speedB,d.primeHeatMinutes].every(number)||!Array.isArray(d.initialization)||d.initialization.length!==2||d.initialization.some((x:any)=>!['Z','Y'].includes(x.direction)||![0,1,2].includes(x.initialization_code)))throw new Error('invalid')
+  if(d.axes.some((a:any)=>!['fixed','range','list'].includes(a.mode)||![a.start,a.end,a.interval].every(number)||typeof a.list!=='string')||[...d.fixed,...d.priming].some((f:any)=>!number(f.value)))throw new Error('invalid')
+  experimentName.value=d.experimentName;stage.value=d.stage
+  axes.value.forEach((a,i)=>{const v=d.axes[i];Object.assign(a,{mode:v.mode,start:v.start,end:v.end,interval:v.interval,list:v.list})})
+  fixed.value.forEach((f,i)=>f.value=d.fixed[i].value);priming.value.forEach((f,i)=>f.value=d.priming[i].value)
+  repeats.value=d.repeats;speedA.value=d.speedA;speedB.value=d.speedB;primeHeatMinutes.value=d.primeHeatMinutes
+  initialization.value=d.initialization.map((v:any)=>({direction:v.direction,initialization_code:v.initialization_code}))
+  if(['CW','CCW'].includes(d.drainDirection))drainDirection.value=d.drainDirection
+  if(['CW','CCW'].includes(d.cleanDirection))cleanDirection.value=d.cleanDirection
+  if(Number.isInteger(d.cleanChannel))cleanChannel.value=d.cleanChannel
+  if(Number.isInteger(d.drainChannel))drainChannel.value=d.drainChannel
+  for(const key of Object.keys(chosen))if(typeof d.chosen?.[key]==='string')chosen[key]=d.chosen[key]
+  advancedOpen.value=d.advancedOpen===true;draftRestored=true
+  draftNotice.value='已恢复本机草稿；参数须重新校验，现场确认与预充资格不随草稿恢复。'
+ }catch{draftNotice.value='本机草稿无法恢复，请重新填写；原草稿未删除。'}
+}
+watch([experimentName,stage,axes,fixed,priming,repeats,speedA,speedB,primeHeatMinutes,initialization,drainDirection,cleanDirection,cleanChannel,drainChannel,chosen,advancedOpen],saveDraft,{deep:true})
+onUnmounted(saveDraft)
+
 let statusTimer:ReturnType<typeof setInterval>|undefined
-onMounted(()=>{void refreshBatch();statusTimer=setInterval(()=>{statusNow.value=Date.now();void refreshBatch()},2000)})
+onMounted(()=>{restoreDraft();void refreshBatch();statusTimer=setInterval(()=>{statusNow.value=Date.now();void refreshBatch()},2000)})
 onUnmounted(()=>{++refreshSequence;++controlSequence;if(statusTimer)clearInterval(statusTimer)})
-onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if(newDraft.value||!batch.value.request){initialization.value.forEach((item,i)=>{item.initialization_code=defaultInitializationCode(i)})}const missing=roles.filter(r=>!registry.value[r.group]?.[chosen[r.key]!]);if(missing.length)error.value='配置缺少固定装置：'+missing.map(r=>r.label).join('、')}catch{error.value='读取装置失败，请检查后端服务。'}})
+onMounted(async()=>{try{registry.value=(await axios.get('/api/devices')).data;if(!draftRestored&&(newDraft.value||!batch.value.request)){initialization.value.forEach((item,i)=>{item.initialization_code=defaultInitializationCode(i)})}const missing=roles.filter(r=>!registry.value[r.group]?.[chosen[r.key]!]);if(missing.length)error.value='配置缺少固定装置：'+missing.map(r=>r.label).join('、')}catch{error.value='读取装置失败，请检查后端服务。'}})
 </script>
 <style scoped>
 .experiment-name{display:flex;flex-direction:column;gap:8px;max-width:420px;margin-bottom:24px}

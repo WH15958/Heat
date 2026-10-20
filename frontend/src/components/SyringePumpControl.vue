@@ -4,11 +4,12 @@
       <div class="identity">
         <img :src="deviceArtwork" alt="" />
         <strong>{{ state.name }}</strong>
-        <span>MSP1-CX · {{ state.capacity_ml }} mL · {{ state.connection_port || '串口待配置' }}</span>
+        <span>MSP1-CX · {{ state.capacity_ml }} mL</span>
         <el-tag size="small" :type="state.connected ? 'success' : 'info'">{{ state.connected ? '已连接' : state.configured ? '未连接' : '待配置' }}</el-tag>
       </div>
       <DeviceConnectionControls :device-key="'syringe:'+state.device_id" :connected="state.connected" :loading="pending" :connect-disabled="!state.configured || state.binding_resolved === false" :disconnect-disabled="!!state.owner" @connect="connect" @disconnect="disconnect" />
     </div>
+    <details class="device-details"><summary>设备详情与通信状态</summary><p>串口 {{ state.connection_port || '待配置' }} · 设备 {{ state.device_id }}</p><p>零位与位置：{{ state.read_ok && state.position_trusted ? '可信' : '未确认' }}；体积为理论值。</p></details>
     <div class="toolbar operation-toolbar">
       <el-button :disabled="!state.connected || pending" @click="refresh">刷新</el-button>
       <el-button type="danger" :disabled="!state.connected" @click="send({ action: 'stop' }, true)">停止</el-button>
@@ -143,7 +144,7 @@ const pending = ref(false)
 const activeTab = ref('operate')
 const basicSections = ref<string[]>([]), advancedSections = ref<string[]>([])
 const defaultInitCode = props.state.capacity_ml >= 2.5 ? 0 : props.state.capacity_ml >= 0.5 ? 1 : 2
-const direction = ref('Z'), initCode = ref(defaultInitCode), speed = ref(100), volume = ref(100), unit = ref('uL')
+const direction = ref('Z'), initCode = ref(defaultInitCode), speed = ref(100), volume = ref(2.5), unit = ref('mL')
 const position = ref(0), timeout = ref(120), program = ref(''), programName = ref(''), slot = ref(0), output = ref(0)
 const details = ref(''), setting = ref('speed'), settingValue = ref(100)
 const fullSteps = computed(() => ({ 0: 3000, 1: 48000, 2: 24000 }[props.state.microstep ?? 0] ?? 3000))
@@ -194,6 +195,9 @@ async function loadPrograms() { try { details.value = JSON.stringify((await syri
 </script>
 
 <style scoped>
+.device-details { margin:12px 0; background:#f5f8fc; padding:12px; border-radius:8px; font-size:13px; }
+.device-details summary { cursor:pointer; color:#425b73; }
+
 .syringe-panel { margin-bottom: 16px; padding: 16px 18px; border: 1px solid var(--el-border-color-light); border-radius: 6px; background: var(--el-bg-color); }
 .panel-heading, .identity, .toolbar, .routine-controls, .field-value, .primary-actions, .setup-controls, .advanced-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .panel-heading { justify-content: space-between; margin-bottom: 12px; }
@@ -203,11 +207,11 @@ async function loadPrograms() { try { details.value = JSON.stringify((await syri
 .toolbar { gap: 6px; }
 .operation-toolbar { margin: 0 0 12px; }
 .toolbar :deep(.el-button + .el-button), .advanced-row :deep(.el-button + .el-button) { margin-left: 0; }
-.status-line { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 11px 0; border-block: 1px solid var(--el-border-color-lighter); }
+.status-line { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px; background: #f0f6fd; border-radius: 10px; }
 .status-line > div { min-width: 0; }
 .status-line span, .status-line strong { display: block; overflow-wrap: anywhere; }
 .status-line span { color: var(--el-text-color-secondary); font-size: 12px; }
-.status-line strong { margin-top: 3px; font-size: 14px; font-weight: 600; }
+.status-line strong { margin-top: 3px; font-size: 16px; font-weight: 600; color: #245483; }
 .status-line small { font-weight: normal; }
 .action-detail, .estimate-line { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--el-text-color-secondary); font-size: 12px; }
 .action-detail { margin-top: 8px; }

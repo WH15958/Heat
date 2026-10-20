@@ -96,7 +96,10 @@ async function renderPump(status: any) {
     app.component(name, { setup: (_, { slots }) => () => h('div', {}, [slots.header?.(), slots.default?.()]) })
   }
   const html = await renderToString(app)
-  return html.slice(html.indexOf('class="channel-header"'), html.indexOf('class="channel-row"')).replace(/<[^>]+>/g, '')
+  const headerStart = html.indexOf('class="channel-header"')
+  const fieldsStart = html.indexOf('class="channel-fields"', headerStart)
+  assert.ok(headerStart >= 0 && fieldsStart > headerStart, 'pump channel header and fields must render')
+  return html.slice(headerStart, fieldsStart).replace(/<[^>]+>/g, '')
 }
 
 test('actual pump card renders PAUSE as paused, not stopped', async () => {
