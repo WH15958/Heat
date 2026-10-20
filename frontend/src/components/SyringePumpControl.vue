@@ -12,7 +12,7 @@
     <details class="device-details"><summary>设备详情与通信状态</summary><p>串口 {{ state.connection_port || '待配置' }} · 设备 {{ state.device_id }}</p><p>零位与位置：{{ state.read_ok && state.position_trusted ? '可信' : '未确认' }}；体积为理论值。</p></details>
     <div class="toolbar operation-toolbar">
       <el-button :disabled="!state.connected || pending" @click="refresh">刷新</el-button>
-      <el-button type="danger" :disabled="!state.connected" @click="send({ action: 'stop' }, true)">停止</el-button>
+      <el-button type="danger" plain :disabled="!state.connected" @click="send({ action: 'stop' }, true)">停止</el-button>
     </div>
 
     <el-alert v-if="state.connected && !state.read_ok" :title="state.read_error || '状态未知，控制已禁用'" type="warning" :closable="false" />

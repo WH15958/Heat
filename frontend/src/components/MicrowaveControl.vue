@@ -154,6 +154,7 @@
         </el-button>
         <el-button
           type="danger"
+          plain
           class="stop-button"
           @click="$emit('stop', microwaveId)"
           :loading="microwave.stopping"

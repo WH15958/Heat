@@ -131,7 +131,7 @@
 
     </div>
     <div class="pump-stop-all">
-      <el-button type="danger" size="small" @click="$emit('stopAll', pumpId)" :loading="pump.stoppingAll">
+      <el-button type="danger" plain size="small" @click="$emit('stopAll', pumpId)" :loading="pump.stoppingAll">
         停止所有通道
       </el-button>
     </div>
