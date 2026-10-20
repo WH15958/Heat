@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    BatchCompletionPanel: typeof import('./src/components/BatchCompletionPanel.vue')['default']
     DeviceConnectionControls: typeof import('./src/components/DeviceConnectionControls.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']

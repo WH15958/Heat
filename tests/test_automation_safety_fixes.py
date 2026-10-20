@@ -19,7 +19,7 @@ from src.web.api import experiments, guided as api
 from src.web.device_manager import DeviceManager
 from src.protocols.pump_params import PumpRunStatus
 from src.protocols.microwave_params import auto_power_segment_start
-from test_guided import FakeManager, spec, until, fast_timed_flow
+from test_guided import FakeManager, spec, until, fast_timed_flow, fast_microwave_stability
 from test_microwave_atomic_config import make_device
 
 
@@ -220,6 +220,7 @@ def test_group_cleanup_retention_is_scoped_and_failure_always_stops_heaters(keep
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(execution.StepExecutor, "_run_timed_flow", fast_timed_flow)
+    monkeypatch.setattr(execution.StepExecutor, '_wait_condition', fast_microwave_stability)
     # Full batch regressions do not wait 30 real seconds; dedicated stability tests use virtual time.
     monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', AsyncMock(return_value=True))
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real hardware')))
@@ -336,9 +337,9 @@ def test_hold_zero_output_is_not_fault(monkeypatch):
     assert dm.read_microwave_data.call_count == 4
 
 
-@pytest.mark.parametrize('minutes,timeout,parts', [(10, 600, (0, 31, 0)),
-    (60.5, 600, (1, 21, 30)), (1/60, 600, (0, 21, 1)),
-    (1440, 7200, (26, 11, 0)), (0, 0.1, (0, 11, 1))])
+@pytest.mark.parametrize('minutes,timeout,parts', [(10, 600, (0, 21, 0)),
+    (60.5, 600, (1, 11, 30)), (1/60, 600, (0, 11, 1)),
+    (1440, 7200, (26, 1, 0)), (0, 0.1, (0, 1, 1))])
 def test_guided_covers_all_hardware_slots_with_guard_time(minutes, timeout, parts):
     request = spec(axes=[[30], [30], [.1], [.2], [30, 80], [minutes]], heating_timeout=timeout)
     dm = DeviceManager()
@@ -361,7 +362,11 @@ def test_guided_covers_all_hardware_slots_with_guard_time(minutes, timeout, part
         hold = next(s for s in steps if s.id == 'hold')
         assert hold.wait.type == WaitType.MICROWAVE_MONITORED_HOLD
         assert hold.wait.seconds == round(minutes * 60)
-        assert next(s for s in steps if s.id == 'microwave_start').wait.timeout == timeout
+        assert hold.wait.hold_mode == 'timed'
+        assert hold.wait.timeout == max(1, round(minutes * 60))
+        heating = next(s for s in steps if s.id == 'microwave_start').wait
+        assert heating.timeout == timeout
+        assert (heating.tolerance, heating.seconds) == (3, 30)
 
 
 def test_guided_failed_fourth_slot_configuration_prevents_start(monkeypatch):

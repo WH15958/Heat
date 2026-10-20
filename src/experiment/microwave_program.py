@@ -46,7 +46,7 @@ def compile_steps(device_id, spec):
     for index, stage in enumerate(spec.stages, 1):
         # All five firmware slots share one logical target, regardless of HMI range.
         # Device hold exceeds the entire host stage; zero-time skipping is not used.
-        guard = spec.heating_timeout + stage.hold_seconds + 600 + 60
+        guard = spec.heating_timeout + stage.hold_seconds + 60
         if guard > 99 * 3600 + 59 * 60 + 59:
             raise ValueError("阶段时间加设备保护计时超出99小时59分59秒")
         params = dict(heating_temperature=stage.temperature, target_temperature=stage.temperature,
@@ -63,10 +63,10 @@ def compile_steps(device_id, spec):
             ExperimentStep(f"stage_{index}_heat", ActionType.MICROWAVE_START,
                 dict(device_id=device_id, mode=spec.mode), WaitCondition(
                     type=WaitType.MICROWAVE_TEMPERATURE_REACHED, device_id=device_id,
-                    target_temperature=stage.temperature, tolerance=1, timeout=spec.heating_timeout)),
+                    target_temperature=stage.temperature, tolerance=3, seconds=30, timeout=spec.heating_timeout)),
             ExperimentStep(f"stage_{index}_hold", ActionType.WAIT, wait=WaitCondition(
                 type=WaitType.MICROWAVE_MONITORED_HOLD, device_id=device_id, seconds=stage.hold_seconds,
-                target_temperature=stage.temperature, tolerance=3, timeout=stage.hold_seconds+600)),
+                target_temperature=stage.temperature, tolerance=3, hold_mode="timed", timeout=max(1, stage.hold_seconds))),
             ExperimentStep(f"stage_{index}_stop", ActionType.MICROWAVE_STOP, dict(device_id=device_id)),
         ])
     return steps
@@ -115,7 +115,7 @@ class MicrowaveProgramRun:
             metadata=dict(run_kind="microwave_program", program_id="mwprogram_" + spec.request_id,
                 device_id=device_id, mode=spec.mode, heating_timeout=spec.heating_timeout,
                 logical_stages=[s.model_dump() for s in spec.stages],
-                microwave_hold_policy=dict(tolerance=3, extra_wait_seconds=600, excursion="pause_accumulation")))
+                microwave_hold_policy=dict(hold_mode="timed", tolerance=3, stable_seconds=30, excursion="continue_timing")))
         self.engine.on_progress(self.checkpoint)
         self.task = None
         self.record = dict(program_id="mwprogram_" + spec.request_id, device_id=device_id,

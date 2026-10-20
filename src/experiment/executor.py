@@ -234,7 +234,7 @@ class StepExecutor:
                 snapshot = self.activity.snapshot()
                 self.last_device_result = dict(self.last_device_result or {}, hold_summary=dict(
                     target_temperature=step.wait.target_temperature, tolerance=step.wait.tolerance,
-                    seconds=step.wait.seconds, timeout=step.wait.timeout,
+                    seconds=step.wait.seconds, timeout=step.wait.timeout, hold_mode=snapshot["hold_mode"],
                     **{key: snapshot[key] for key in (
                         "elapsed_seconds", "qualified_seconds", "hold_in_band", "state")}))
 
@@ -854,7 +854,11 @@ class StepExecutor:
                 or condition.seconds != round(condition.seconds)):
             self._last_error = "微波保护保温必须指定设备并使用非负整秒"
             return False
+        if condition.hold_mode not in ("qualified", "timed"):
+            self._last_error = "微波保温计时方式无效"
+            return False
         supervised = condition.target_temperature is not None
+        qualified = supervised and condition.hold_mode == "qualified"
         if supervised and (not _is_nonnegative_finite_number(condition.target_temperature)
                 or not _is_nonnegative_finite_number(condition.tolerance)
                 or not _is_nonnegative_finite_number(condition.timeout)
@@ -867,7 +871,8 @@ class StepExecutor:
             budget = 7.0
         started = self._wait_clock()
         self.activity.started = started
-        self.activity.qualified_seconds = 0.0 if supervised else None
+        self.activity.hold_mode = "qualified" if qualified else "timed"
+        self.activity.qualified_seconds = 0.0 if qualified else None
         self.activity.hold_timeout_seconds = condition.timeout if supervised else None
         previous_sample = None
         previous_in_band = False
@@ -896,7 +901,7 @@ class StepExecutor:
                     return False
                 elapsed = sampled - started
                 if data.get("control_active") is not True:
-                    credited = self.activity.qualified_seconds if supervised else elapsed
+                    credited = self.activity.qualified_seconds if qualified else elapsed
                     stop_event = next((event for event in reversed(self._step_microwave_events)
                                        if event.get("action") == "stop"), None)
                     source = (f"本系统最近STOP请求来源={stop_event['source']}" if stop_event else
@@ -912,7 +917,7 @@ class StepExecutor:
                     previous_sample = None
                     pause_generation = self._pause_generation
                 if read_duration > budget or (previous_sample is not None and sampled-previous_sample > budget):
-                    self._last_error = f"微波保温状态超过通讯预算 {budget:g} 秒，不能确认有效保温"
+                    self._last_error = f"微波保温状态超过通讯预算 {budget:g} 秒，不能确认保温状态"
                     return False
                 if self._is_paused():
                     previous_sample = None
@@ -920,6 +925,7 @@ class StepExecutor:
                 if supervised:
                     in_band = abs(data['material_temperature']-condition.target_temperature) <= condition.tolerance
                     self.activity.hold_in_band = in_band
+                if qualified:
                     if elapsed > condition.timeout:
                         self._last_error = f"微波保温超时：已等待 {elapsed:.1f} 秒，上限 {condition.timeout:g} 秒"
                         return False
@@ -937,7 +943,7 @@ class StepExecutor:
                     previous_in_band = in_band
                 else:
                     remaining = condition.seconds - elapsed
-                if not supervised and remaining <= 0:
+                if not qualified and remaining <= 0:
                     return True
                 previous_sample = sampled
             except Exception as exc:
@@ -946,7 +952,7 @@ class StepExecutor:
                 self._last_error = "微波保温状态读取失败：" + str(exc)
                 return False
             sleep_seconds = min(max(0, next_poll - self._wait_clock()), remaining if remaining > 0 else 1)
-            if supervised:
+            if qualified:
                 sleep_seconds = min(sleep_seconds, max(0, condition.timeout-(self._wait_clock()-started)))
             paused = await self._pause_aware_sleep(sleep_seconds)
             if paused is None:
@@ -1098,6 +1104,17 @@ class StepExecutor:
             cooling = condition.type == WaitType.MICROWAVE_TEMPERATURE_BELOW
             target_temperature = condition.target_temperature
             last_data = {}
+            stable_since = None
+            previous_sample = None
+            pause_generation = self._pause_generation
+            stable_required = condition.seconds if not cooling else 0
+            if not _is_nonnegative_finite_number(stable_required):
+                self._last_error = "微波连续稳定时间必须为非负数"
+                return False
+            budget_getter = getattr(self._dm, "microwave_read_budget", None)
+            budget = budget_getter(condition.device_id) if callable(budget_getter) else 7.0
+            if not _is_nonnegative_finite_number(budget) or budget <= 0:
+                budget = 7.0
 
             def timed_out():
                 elapsed = self._wait_clock() - start_time
@@ -1127,10 +1144,17 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
+                if pause_generation != self._pause_generation:
+                    stable_since = previous_sample = None
+                    self.activity.stable_seconds = 0.0
+                    pause_generation = self._pause_generation
                 if timed_out():
                     return False
                 try:
+                    read_started = time.monotonic()
                     data = await self._read_microwave_data(condition.device_id)
+                    read_duration = time.monotonic() - read_started
+                    sampled = self._wait_clock()
                     last_data = data
                     self.activity.device(condition.device_id, data)
                     material_temperature = data.get("material_temperature")
@@ -1141,7 +1165,17 @@ class StepExecutor:
                         return False
                     if self._should_stop():
                         return False
+                    if stable_required and (read_duration > budget or
+                            (previous_sample is not None and sampled - previous_sample > budget)):
+                        self._last_error = f"微波稳定到温状态超过通讯预算 {budget:g} 秒"
+                        return False
+                    if pause_generation != self._pause_generation:
+                        stable_since = previous_sample = None
+                        self.activity.stable_seconds = 0.0
+                        pause_generation = self._pause_generation
                     if self._is_paused():
+                        stable_since = previous_sample = None
+                        self.activity.stable_seconds = 0.0
                         continue
                     if timed_out():
                         return False
@@ -1169,12 +1203,20 @@ class StepExecutor:
                     if not cooling and material_temperature is not None and abs(
                         float(material_temperature) - float(target_temperature)
                     ) <= condition.tolerance:
-                        logger.info(
-                            f"Microwave temperature reached: "
-                            f"{float(material_temperature):.1f}C ~ "
-                            f"{float(target_temperature):.1f}C"
-                        )
-                        return True
+                        if stable_since is None:
+                            stable_since = sampled
+                        self.activity.stable_seconds = min(stable_required, max(0, sampled - stable_since))
+                        if self.activity.stable_seconds >= stable_required:
+                            logger.info(
+                                f"Microwave temperature reached: "
+                                f"{float(material_temperature):.1f}C ~ "
+                                f"{float(target_temperature):.1f}C, stable {stable_required:g}s"
+                            )
+                            return True
+                    elif not cooling:
+                        stable_since = None
+                        self.activity.stable_seconds = 0.0
+                    previous_sample = sampled
                 except Exception as e:
                     self.activity.device(condition.device_id, {"read_ok": False})
                     self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": target_temperature}], {})

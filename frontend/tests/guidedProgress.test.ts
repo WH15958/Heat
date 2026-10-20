@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {activeStage,stageState,staleStatus,batchRunIds,batchExport,formatTemperature} from '../src/experiment/guidedProgress'
+import {activeStage,stageState,staleStatus,batchRunIds,batchExport,formatTemperature,batchCompletionConfirmed} from '../src/experiment/guidedProgress'
 
 test('stages reset per group while preparation remains completed; terminal is never running',()=>{
  const batch:any={state:'running',phase:'experiments',priming:{status:'completed'},current_group:2,progress:{step_id:'heat_both_stable'}}
@@ -20,6 +20,14 @@ test('refresh errors and six-second freshness do not invent countdowns',()=>{
  assert.equal(staleStatus(1000,7001,''),true)
  assert.equal(staleStatus(1000,1001,'offline'),true)
  assert.equal(staleStatus(0,1000,''),true)
+})
+
+test('completion presentation waits for successful batch and confirmed cleanup',()=>{
+ assert.equal(batchCompletionConfirmed({state:'completed'}),true)
+ for(const state of ['running','paused','failed','stopped','interrupted'])assert.equal(batchCompletionConfirmed({state}),false)
+ for(const flag of ['cleanup_in_progress','cleanup_pending','cleanup_required','recovery_required'])assert.equal(batchCompletionConfirmed({state:'completed',[flag]:true}),false)
+ // Saving a record is separate from experiment success; show its explicit warning in the completed panel.
+ assert.equal(batchCompletionConfirmed({state:'completed',persistence_status:'error'}),true)
 })
 
 test('batch history joins exact run IDs and metadata, never names; export is all or nothing',async()=>{

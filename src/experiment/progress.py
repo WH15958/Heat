@@ -23,6 +23,7 @@ class ActivityProgress:
         self.stable_seconds = 0.0
         self.stable_required = None
         self.qualified_seconds = None
+        self.hold_mode = None
         self.hold_in_band = None
         self.hold_timeout_seconds = None
         self.readings = []
@@ -36,6 +37,8 @@ class ActivityProgress:
             self.started = self.clock()
             self.duration = condition.seconds if self.wait_type in ("duration", "microwave_monitored_hold") else None
         if self.wait_type == "heater_pair_stable":
+            self.stable_required = condition.seconds
+        elif self.wait_type == "microwave_temperature_reached" and condition.seconds > 0:
             self.stable_required = condition.seconds
 
     def pump_started(self, seconds):
@@ -65,7 +68,7 @@ class ActivityProgress:
         return dict(step_id=self.step_id, state=self.state, wait_type=self.wait_type,
             elapsed_seconds=elapsed, duration_seconds=self.duration,
             remaining_seconds=max(0, self.duration - credited) if self.duration is not None and credited is not None else None,
-            qualified_seconds=self.qualified_seconds, hold_in_band=self.hold_in_band,
+            qualified_seconds=self.qualified_seconds, hold_mode=self.hold_mode, hold_in_band=self.hold_in_band,
             hold_timeout_seconds=self.hold_timeout_seconds,
             reference=self.reference, stable_seconds=self.stable_seconds,
             stable_required_seconds=self.stable_required, readings=copy.deepcopy(self.readings),
@@ -114,6 +117,10 @@ def guided_activity(step, observation):
         activity.update(stage="reaction", title={"hold": "微波反应保温", "microwave_start": "等待微波反应液升温", "microwave_stop": "正在停止微波", "microwave_config": "设置微波反应条件"}.get(sid, "微波反应"), description="物料到温后计时保温，结束后确认停止微波。前驱体加热器持续保温。")
         if sid == "hold" and observation.get("qualified_seconds") is not None:
             activity["description"] = "目标 ±3℃ 内累计有效保温，越界暂停累计、回温后继续；最多额外等待10分钟。前驱体持续保温。"
+        elif sid == "hold" and observation.get("hold_mode") == "timed":
+            activity.update(title="微波反应定时保温", description="反应液已在目标 ±3℃ 内连续稳定30秒，按设定时长保温；温度偏离仅提示，计时继续。前驱体持续保温。")
+        elif sid == "microwave_start" and step.wait.seconds > 0:
+            activity.update(title="等待微波反应液稳定到温", description="目标 ±3℃ 内连续稳定30秒后开始保温计时；越界或实际暂停后重新累计稳定时间。")
     elif sid.startswith("clean_"):
         parts = sid.split("_")
         cycle = int(parts[1]) + 1

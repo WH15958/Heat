@@ -371,7 +371,7 @@
         target_temperature: 40
         holding_temperature: 40
         hours: 0
-        minutes: 5
+        minutes: 11
         seconds: 0
 
 - id: mw_start_auto_power_structure_only
@@ -387,7 +387,8 @@
     type: microwave_temperature_reached
     device_id: microwave1
     target_temperature: 40
-    tolerance: 2
+    tolerance: 3
+    seconds: 30
     timeout: 300
 
 - id: mw_hold_by_heat_timer_structure_only
@@ -399,6 +400,10 @@
     type: microwave_monitored_hold
     device_id: microwave1
     seconds: 300
+    target_temperature: 40
+    tolerance: 3
+    hold_mode: timed
+    timeout: 300
 
 - id: mw_stop
   type: microwave.stop
@@ -523,7 +528,7 @@
 
 ### 5.5 `microwave_temperature_reached`
 
-等待微波仪物料温度达到目标温度。
+等待微波仪物料温度达到目标温度；可指定连续稳定时间。
 
 字段：
 
@@ -532,11 +537,13 @@
 | `device_id` | 是 | 微波仪 ID |
 | `target_temperature` | 是 | 目标温度 |
 | `tolerance` | 否 | 容差，默认 `1.0` |
+| `seconds` | 否 | 目标容差内连续稳定秒数，默认 `0`，兼容旧YAML的首次到温即通过 |
 | `timeout` | 否 | 超时秒数，默认 `3600` |
 
 说明：
 
 - 判断逻辑基于 `DeviceManager.read_microwave_data()` 返回的 `material_temperature`
+- `seconds > 0` 时，越界或实际暂停后重新累计连续稳定时间；总到温超时包含稳定时间。新引导式及托管流程使用目标±3℃、连续30秒。
 - 超时会导致步骤失败
 - stop 会中断该等待
 
@@ -845,7 +852,9 @@ interval_time: 0
 
 到温等待 `microwave_temperature_reached` 同样检查有效温度、零故障码及有效且处于运行的控制状态。保护保温不依赖未验收的完成信号；每次先验证状态，再判定完成，控制位清零一律失败，包括截止附近及延迟返回的读数，不再保留1秒宽限。功率暂时为零不代表退出控制。单次读取或相邻采样超过“1秒＋3倍设备配置通讯超时”（默认7秒）同样失败，不用迟到读数补算完成。
 
-新生成的引导式和托管流程在目标±1℃到温后，按目标±3℃累计有效保温，越界暂停累计、回温后继续；相邻两次有效采样均达标才累计区间，暂停后不跨暂停连接采样。总有效等待上限为保温秒数＋600秒。使用已有字段指定：
+`hold_mode` 可填 `qualified`（默认）或 `timed`。`qualified` 保留旧目标YAML的有效保温：相邻两次有效采样均在目标容差内才累计区间，越界暂停累计、回温后继续，暂停后不跨暂停连接采样。`timed` 按设定时长普通计时，温度偏离仍提示和记录，不冻结、不清零计时；它不改变仪器温控，也不取消故障与控制状态监督。无目标旧YAML继续纯计时监督。
+
+新生成的引导式和托管流程先用 `microwave_temperature_reached` 在目标±3℃连续稳定30秒（seconds=30）；越界或实际暂停后重置稳定窗口，连续稳定包含在原到温超时内。通过后采用 `hold_mode: timed`，不再增加600秒回温等待。例如：
 
 ```yaml
 - id: hold
@@ -857,12 +866,13 @@ interval_time: 0
     seconds: 600
     target_temperature: 60
     tolerance: 3
-    timeout: 1200
+    hold_mode: timed
+    timeout: 600
 ```
 
-填写目标时必须明确填写 `tolerance` 和 `timeout`，数值须有效非负，超时须为正且不小于 `seconds`；无目标的旧YAML保留纯计时监督语义，但同样严格检查退出与读取状态。实际暂停不计入保温及超时。`metadata.microwave_hold_policy` 记录生成流程的容差、额外等待及越界规则；旧历史不改写。
+填写目标时必须明确填写 `tolerance` 和 `timeout`，数值须有效非负，超时须为正且不小于 `seconds`；timed 示例将 timeout 设为 seconds，零秒保温使用正数timeout（新流程取1秒），仍先核验有效状态。默认qualified不会自动套用新稳定等待或改成普通计时；旧YAML须显式改写才能切换策略。实际暂停不计入两种保温计时及超时。`metadata.microwave_hold_policy` 记录新流程的稳定容差、30秒稳定要求、定时方式及计时后温漂继续规则；旧历史不改写。
 
-设备计时须覆盖升温、合格保温和回温等待。引导式五个自动功率段使用同一目标及 `ceil(heating_timeout) + 保温秒数 + 600 + 60` 秒保护时长；托管模式采用同一规则，超出99小时59分59秒在写入前拒绝。搭建式不自动扩展硬件段，由编排者配置。启动确认后还会有限读回本次配置的参数块；不一致或读回失败不能开始保温，且不自动重新写入或重启。读回一致仅证明已知参数区一致，不能证明未公开的本机运行方案。
+新流程设备计时须覆盖升温和连续稳定等待、普通保温及保护余量。引导式五个自动功率段使用同一目标及 `ceil(heating_timeout) + 保温秒数 + 60` 秒保护时长；托管模式采用同一规则，超出99小时59分59秒在写入前拒绝。搭建式不自动扩展硬件段，由编排者配置。`microwave.start` 先读取并确认空闲、无输出、无故障，单独选择模式后复查空闲及本次参数块，再复查空闲并发送START；启动确认后还会有限读回同一参数块和运行状态。不一致或读回失败不能开始保温，且不自动重新写入或重启。读取及写入边界检查停止请求，失败进入引擎清理；新增等待字段可选，旧YAML默认语义保留。读回一致仅证明已知参数区一致，不能证明未公开的本机运行方案；只写模式位和未知模式原码不能用于确认实际执行模式。
 
 普通 `duration` 保持普通等待语义，不提供微波故障监督。所有固定等待及通用等待超时采用单调时钟，按实际经过时间计算，调度延迟不补时，实际暂停不计时。引导式微波启动后，暂停请求只设置 `pause_pending=true`，升温和保护保温继续计时及监督；显式停止微波后才真正暂停。停止请求始终可中断。搭建式保持原暂停语义，不自动采用整段反应延后暂停策略。
 

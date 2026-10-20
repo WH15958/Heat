@@ -1,4 +1,6 @@
 import asyncio
+import time
+from collections import deque
 from typing import Any, Callable, Hashable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
@@ -11,11 +13,45 @@ router = APIRouter()
 DEVICE_READ_TIMEOUT = 5.0
 PUMP_READ_TIMEOUT = 10.0
 MICROWAVE_READ_TIMEOUT = 5.0
+MONITOR_HISTORY_LIMIT = 1800
 
 
 def _with_binding(payload: dict, binding_status: dict) -> dict:
     payload.update(binding_status)
     return payload
+
+
+def _monitor_frame(payload: dict) -> dict:
+    """Copy only the readings required to replay monitor charts."""
+    frame = {
+        "type": "realtime",
+        "sampled_at_ms": payload["sampled_at_ms"],
+        "heaters": {},
+        "pumps": {},
+        "microwaves": {},
+    }
+    for did, reading in payload.get("heaters", {}).items():
+        frame["heaters"][did] = {
+            key: reading[key] for key in ("pv", "sv", "error") if key in reading
+        }
+    for did, reading in payload.get("microwaves", {}).items():
+        frame["microwaves"][did] = {
+            key: reading[key]
+            for key in ("material_temperature", "error") if key in reading
+        }
+    for did, reading in payload.get("pumps", {}).items():
+        frame["pumps"][did] = {
+            key: reading[key] for key in ("error",) if key in reading
+        }
+        frame["pumps"][did]["channels"] = {
+            channel: {
+                key: value[key]
+                for key in ("flow_rate", "flow_unit", "running", "read_ok", "error")
+                if key in value
+            }
+            for channel, value in reading.get("channels", {}).items()
+        }
+    return frame
 
 
 class DeviceReadCoordinator:
@@ -64,7 +100,9 @@ class ConnectionManager:
 
     def __init__(self):
         self.active: list[WebSocket] = []
+        self._send_locks: dict[WebSocket, asyncio.Lock] = {}
         self.last_payload: dict = {}
+        self.monitor_history: deque[dict] = deque(maxlen=MONITOR_HISTORY_LIMIT)
 
     async def connect(self, ws: WebSocket):
         """接受WebSocket连接
@@ -73,8 +111,26 @@ class ConnectionManager:
             ws: WebSocket连接
         """
         await ws.accept()
-        self.active.append(ws)
+        send_lock = asyncio.Lock()
+        self._send_locks[ws] = send_lock
+        try:
+            async with send_lock:
+                # Register before yielding so broadcasts wait behind this replay.
+                self.active.append(ws)
+                history = list(self.monitor_history)
+                snapshot = self.last_payload
+                await ws.send_json({"type": "monitor_history", "frames": history})
+                if snapshot:
+                    await ws.send_json({**snapshot, "snapshot": True})
+        except asyncio.CancelledError:
+            self.disconnect(ws)
+            raise
+        except Exception:
+            logger.warning("WebSocket initial monitor replay failed")
+            self.disconnect(ws)
+            return False
         logger.info(f"WebSocket client connected, total: {len(self.active)}")
+        return True
 
     def disconnect(self, ws: WebSocket):
         """移除WebSocket连接
@@ -84,6 +140,7 @@ class ConnectionManager:
         """
         if ws in self.active:
             self.active.remove(ws)
+        self._send_locks.pop(ws, None)
         logger.info(f"WebSocket client disconnected, total: {len(self.active)}")
 
     async def broadcast(self, data: dict):
@@ -92,11 +149,18 @@ class ConnectionManager:
         Args:
             data: 要广播的数据
         """
-        self.last_payload = data
+        if data.get("type") == "realtime":
+            self.last_payload = data
+            self.monitor_history.append(_monitor_frame(data))
         disconnected = []
-        for ws in self.active:
+        for ws in list(self.active):
+            if ws not in self.active:
+                continue
+            send_lock = self._send_locks.setdefault(ws, asyncio.Lock())
             try:
-                await ws.send_json(data)
+                async with send_lock:
+                    if ws in self.active:
+                        await ws.send_json(data)
             except Exception:
                 disconnected.append(ws)
         for ws in disconnected:
@@ -142,11 +206,14 @@ async def websocket_endpoint(ws: WebSocket):
     Args:
         ws: WebSocket连接
     """
-    await manager.connect(ws)
+    if not await manager.connect(ws):
+        return
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(ws)
 
 
@@ -271,6 +338,7 @@ async def build_realtime_payload(
                 "capacity_ml": controller.config.capacity_ml,
                 **controller.device.unknown(str(exc)),
             }
+    payload["sampled_at_ms"] = int(time.time() * 1000)
     return payload
 
 
@@ -294,8 +362,7 @@ async def data_push_loop(app):
             serial_mgr.feed_watchdog()
             payload = await build_realtime_payload(dm, read_coordinator)
 
-            if manager.active:
-                await manager.broadcast(payload)
+            await manager.broadcast(payload)
 
             try:
                 from src.web.api.experiments import _engines

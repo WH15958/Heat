@@ -7,7 +7,7 @@
       <button type="button" @click="following = !following">{{ following ? '暂停跟随，查看历史' : '回到实时' }}</button>
       <template v-if="demo"><button type="button" @click="demoPaused = !demoPaused">{{ demoPaused ? '恢复模拟数据' : '模拟数据中断' }}</button></template>
     </div>
-    <p v-if="!wsConnected" class="stale-note">当前状态未知；灰色温度为上次有效读数，不能用于判断当前设备状态。</p>
+    <p v-if="!wsConnected && lastReceived" class="stale-note">当前状态未知；灰色温度为上次有效读数，不能用于判断当前设备状态。曲线仅保留已收到的历史采样。</p>
     <div class="device-workspace">
       <nav class="device-selector" aria-label="选择监测设备">
         <div class="selector-heading">设备列表 <span>{{ dashboardDevices.length }} 台</span></div>
@@ -178,12 +178,16 @@
           <template #header>
             <div class="card-header">
               <span>加热器实时温度曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '服务器通信正常' : '数据已过期 / 通信中断' }}
+              <div class="stream-status">
+              <el-tag :type="communicationTagType" size="small">
+                {{ communicationLabel }}
               </el-tag>
+              <el-tag v-if="monitorState !== 'live'" :type="waitingForData ? 'info' : 'warning'" size="small">{{ dataStatusLabel }}</el-tag>
+              </div>
             </div>
           </template>
-          <p v-if="!Object.keys(heaterDataMap).length" class="trend-empty">设备未连接或暂无有效温度数据</p>
+          <p class="trend-note">{{ heaterCurveNote }}</p>
+          <p v-if="!Object.keys(heaterDataMap).length" class="trend-empty">{{ waitingForData ? '等待首包有效温度数据' : '设备未连接或暂无有效温度数据' }}</p>
           <div ref="heaterTempChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
       </div>
@@ -192,12 +196,15 @@
           <template #header>
             <div class="card-header">
               <span>微波合成仪物料温度曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '服务器通信正常' : '数据已过期 / 通信中断' }}
+              <div class="stream-status">
+              <el-tag :type="communicationTagType" size="small">
+                {{ communicationLabel }}
               </el-tag>
+              <el-tag v-if="monitorState !== 'live'" :type="waitingForData ? 'info' : 'warning'" size="small">{{ dataStatusLabel }}</el-tag>
+              </div>
             </div>
           </template>
-          <p v-if="!Object.keys(microwaveDataMap).length" class="trend-empty">设备未连接或暂无有效温度数据</p>
+          <p v-if="!Object.keys(microwaveDataMap).length" class="trend-empty">{{ waitingForData ? '等待首包有效温度数据' : '设备未连接或暂无有效温度数据' }}</p>
           <div ref="microwaveTempChartRef" style="width: 100%; height: 350px"></div>
         </el-card>
       </div>
@@ -206,9 +213,12 @@
           <template #header>
             <div class="card-header">
               <span>实时流量曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '服务器通信正常' : '数据已过期 / 通信中断' }}
+              <div class="stream-status">
+              <el-tag :type="communicationTagType" size="small">
+                {{ communicationLabel }}
               </el-tag>
+              <el-tag v-if="monitorState !== 'live'" :type="waitingForData ? 'info' : 'warning'" size="small">{{ dataStatusLabel }}</el-tag>
+              </div>
             </div>
           </template>
           <div ref="flowChartRef" style="width: 100%; height: 350px"></div>
@@ -221,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import { useDashboardDemo } from '../composables/useDashboardDemo'
 import { devicesApi } from '../api/devices'
@@ -240,16 +250,21 @@ const demoSource = demo ? useDashboardDemo() : null
 const dataSource = demoSource || useWebSocket()
 const realtimeData = 'monitorData' in dataSource ? dataSource.monitorData : dataSource.data
 const wsConnected = 'monitorFresh' in dataSource ? dataSource.monitorFresh : dataSource.fresh
+const { monitorHistory, monitorState } = dataSource
 const demoPaused = demoSource?.paused || ref(false)
 const clock = ref(Date.now())
-const lastReceived = ref(0)
+const lastReceived = computed(() => monitorHistory.lastReceivedAt)
 const windowSeconds = ref(120)
 const following = ref(true)
 const windowEnd = ref(Date.now())
 let clockTimer: ReturnType<typeof setInterval> | undefined
-const freshnessLabel = computed(() => !lastReceived.value ? '等待服务器数据' : `${wsConnected.value ? '服务器通信正常' : '数据已过期 / 通信中断'} · 最后更新 ${Math.max(0, Math.floor((clock.value - lastReceived.value) / 1000))} 秒前`)
-const lastHeaters: Record<string, Partial<HeaterRealtimeData>> = {}
-const lastMicrowaves: Record<string, MicrowaveRealtimeData> = {}
+const communicationLabel = computed(() => monitorState.value === 'connecting' ? '正在连接服务器'
+  : monitorState.value === 'disconnected' ? '服务器通信中断' : '服务器通信正常')
+const dataStatusLabel = computed(() => ({ connecting: '等待连接', waiting: '等待设备采样', live: '实时数据已更新', stale: '设备数据已过期', disconnected: '设备状态未知' })[monitorState.value])
+const waitingForData = computed(() => ['connecting', 'waiting'].includes(monitorState.value))
+const communicationTagType = computed<TagType>(() => monitorState.value === 'connecting' ? 'info' : monitorState.value === 'disconnected' ? 'danger' : 'success')
+const freshnessLabel = computed(() => `${communicationLabel.value} · ${dataStatusLabel.value}${lastReceived.value ? ` · 最后采样 ${Math.max(0, Math.floor((clock.value - lastReceived.value) / 1000))} 秒前` : ''}`)
+const { lastHeaters, lastMicrowaves } = monitorHistory
 
 function heaterStatusLabel(status?: string): string {
   return ({ RUN: '运行', STOP: '停止', HOLD: '保持' } as Record<string, string>)[status || ''] || '状态未知'
@@ -260,23 +275,7 @@ const flowChartRef = ref<HTMLElement>()
 let heaterTempChart: ECharts | null = null
 let microwaveTempChart: ECharts | null = null
 let flowChart: ECharts | null = null
-const maxPoints = 1800
-
-interface HeaterSeriesData {
-  pv: [number, number][]
-  sv: [number, number][]
-}
-const heaterDataMap = reactive<Record<string, HeaterSeriesData>>({})
-
-interface MicrowaveSeriesData {
-  temperature: [number, number][]
-}
-const microwaveDataMap = reactive<Record<string, MicrowaveSeriesData>>({})
-
-interface PumpSeriesData {
-  channels: Record<string, [number, number][]>
-}
-const pumpDataMap: Record<string, PumpSeriesData> = {}
+const { heaters: heaterDataMap, microwaves: microwaveDataMap, pumps: pumpDataMap } = monitorHistory
 
 const channelColors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 
@@ -346,6 +345,13 @@ const dashboardHeaters = computed<Record<string, Partial<HeaterRealtimeData>>>((
     return [id, { ...(lastHeaters[id] ? { pv: lastHeaters[id].pv, sv: lastHeaters[id].sv } : {}), connection_port: item.port, ...(item.hasData ? realtimeData.value?.heaters[id] : {}), run_status: item.hasData ? realtimeData.value?.heaters[id]?.run_status : undefined }]
   })
 ))
+const heaterCurveNote = computed(() => {
+  const targets = wsConnected.value ? Object.values(realtimeData.value?.heaters || {})
+    .filter(heater => !heater.error && Number.isFinite(heater.sv)).map(heater => heater.sv) : []
+  const equalTargets = targets.length > 1 && targets.every(target => target === targets[0])
+  return equalTargets ? `当前 ${targets.length} 台加热器均设为 ${targets[0]!.toFixed(1)}℃，设定曲线重合。实线为实测、虚线为设定；悬停可分别查看，点击图例可单独显示。`
+    : '每台加热器各有实测、设定两条曲线；数值相同时曲线会重合。实线为实测、虚线为设定；悬停可分别查看。'
+})
 const dashboardPumps = computed<Record<string, Partial<PumpRealtimeData>>>(() => Object.fromEntries(
   dashboardDevices.value.filter(item => item.key.startsWith('pumps:')).map(item => {
     const id = item.key.slice(6)
@@ -415,13 +421,6 @@ const FLOW_UNIT_LABELS: Record<string, string> = {
 
 function flowUnitLabel(unit: string | null | undefined): string {
   return FLOW_UNIT_LABELS[unit || 'ML_MIN'] || 'mL/min'
-}
-
-function flowRateToMlMin(flowRate: number, unit: string | null | undefined): number | null {
-  if (unit === 'UL_MIN') return flowRate / 1000
-  if (unit === 'ML_MIN') return flowRate
-  if (unit === 'L_MIN') return flowRate * 1000
-  return null
 }
 
 function microwaveModeLabel(mode: string | undefined, currentModeCode?: number): string {
@@ -510,9 +509,9 @@ function initCharts() {
       heaterTempChart.setOption({
         animation: false,
         tooltip: { trigger: 'axis' },
-        legend: { data: [], top: 0, type: 'scroll', textStyle: { color: '#34465b', fontSize: 13 } },
+        legend: { data: [], top: 0, left: 10, right: 10, type: 'plain', textStyle: { color: '#34465b', fontSize: 12 } },
         dataZoom: [{ type: 'inside', filterMode: 'none' }],
-        grid: { left: 60, right: 20, top: 60, bottom: 55 },
+        grid: { left: 60, right: 20, top: 80, bottom: 55 },
         xAxis: { type: 'time', name: '时间', nameLocation: 'middle', nameGap: 30, axisLabel: { color: '#34465b', fontSize: 13, hideOverlap: true, formatter: '{HH}:{mm}:{ss}' } },
         yAxis: temperatureAxis(),
         series: [],
@@ -553,9 +552,10 @@ function initCharts() {
 
 onMounted(async () => {
   clockTimer = setInterval(() => { clock.value = Date.now(); if (following.value) windowEnd.value = clock.value; updateWindows() }, 1000)
-  await refreshRegisteredDevices()
   await nextTick()
   initCharts()
+  renderCharts()
+  void refreshRegisteredDevices().then(renderCharts)
 
   resizeObserver = new ResizeObserver(handleResize)
   if (heaterTempChartRef.value) resizeObserver.observe(heaterTempChartRef.value)
@@ -588,30 +588,8 @@ watch(selectedDevice, async () => {
   handleResize()
 })
 
-watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
-  if (!newData) return
-  const now = Date.now()
-  if (newData !== oldData) {
-    lastReceived.value = now
-    for (const [id, value] of Object.entries(newData.heaters)) if (!value.error && Number.isFinite(value.pv)) lastHeaters[id] = value
-    for (const [id, value] of Object.entries(newData.microwaves)) if (!value.error && Number.isFinite(value.material_temperature)) lastMicrowaves[id] = value
-  }
-
+function renderCharts() {
   if (heaterTempChart) {
-    // Switching devices redraws retained samples without adding another reading.
-    for (const [id, heater] of Object.entries(newData === oldData ? {} : newData.heaters || {})) {
-      if (heater.error) continue
-      if (!Number.isFinite(heater.pv) || !Number.isFinite(heater.sv)) continue
-      if (!heaterDataMap[id]) heaterDataMap[id] = { pv: [], sv: [] }
-      if (heaterDataMap[id].pv.length && now - heaterDataMap[id].pv.at(-1)![0] > 6000) {
-        heaterDataMap[id].pv.push([now - 1, NaN]); heaterDataMap[id].sv.push([now - 1, NaN])
-      }
-      heaterDataMap[id].pv.push([now, heater.pv])
-      heaterDataMap[id].sv.push([now, heater.sv])
-      heaterDataMap[id].pv = heaterDataMap[id].pv.slice(-maxPoints)
-      heaterDataMap[id].sv = heaterDataMap[id].sv.slice(-maxPoints)
-    }
-
     const heaterSeries: LineSeriesOption[] = []
     const heaterLegend: string[] = []
     for (const [id, s] of Object.entries(heaterDataMap)) {
@@ -619,8 +597,8 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
       if (s.pv.length === 0) continue
       heaterLegend.push(`${deviceInfo('heaters', id)?.name || id} · 实测温度`, `${deviceInfo('heaters', id)?.name || id} · 设定温度`)
       heaterSeries.push(
-        { name: `${deviceInfo('heaters', id)?.name || id} · 实测温度`, type: 'line', data: s.pv, smooth: false, showSymbol: false },
-        { name: `${deviceInfo('heaters', id)?.name || id} · 设定温度`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: false },
+        { name: `${deviceInfo('heaters', id)?.name || id} · 实测温度`, type: 'line', data: s.pv, smooth: false, showSymbol: true, symbol: 'circle', symbolSize: 4 },
+        { name: `${deviceInfo('heaters', id)?.name || id} · 设定温度`, type: 'line', data: s.sv, lineStyle: { type: 'dashed' }, showSymbol: true, symbol: heaterSeries.length === 0 ? 'diamond' : 'rect', symbolSize: heaterSeries.length === 0 ? 8 : 4 },
       )
     }
     heaterTempChart.setOption(
@@ -630,15 +608,6 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
   }
 
   if (microwaveTempChart) {
-    for (const [id, microwave] of Object.entries(newData === oldData ? {} : newData.microwaves || {})) {
-      if (microwave.error) continue
-      if (typeof microwave.material_temperature !== 'number' || !Number.isFinite(microwave.material_temperature)) continue
-      if (!microwaveDataMap[id]) microwaveDataMap[id] = { temperature: [] }
-      if (microwaveDataMap[id].temperature.length && now - microwaveDataMap[id].temperature.at(-1)![0] > 6000) microwaveDataMap[id].temperature.push([now - 1, NaN])
-      microwaveDataMap[id].temperature.push([now, microwave.material_temperature])
-      microwaveDataMap[id].temperature = microwaveDataMap[id].temperature.slice(-maxPoints)
-    }
-
     const microwaveSeries: LineSeriesOption[] = []
     const microwaveLegend: string[] = []
     for (const [id, s] of Object.entries(microwaveDataMap)) {
@@ -646,7 +615,7 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
       if (s.temperature.length === 0) continue
       const name = `${deviceInfo('microwaves', id)?.name || id} · 物料温度`
       microwaveLegend.push(name)
-      microwaveSeries.push({ name, type: 'line', data: s.temperature, smooth: false, showSymbol: false })
+      microwaveSeries.push({ name, type: 'line', data: s.temperature, smooth: false, showSymbol: true, symbolSize: 4 })
     }
     microwaveTempChart.setOption(
         { legend: { data: microwaveLegend }, series: microwaveSeries },
@@ -655,28 +624,10 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
   }
 
   if (flowChart) {
-    for (const [pumpId, pump] of Object.entries(newData === oldData ? {} : newData.pumps || {})) {
-      if (pump.error) continue
-      if (!pump.channels) continue
-      if (!pumpDataMap[pumpId]) pumpDataMap[pumpId] = { channels: {} }
-      for (const [chId, chData] of Object.entries(pump.channels)) {
-        if (chData.read_ok === false) continue
-        if (!pumpDataMap[pumpId].channels[chId]) pumpDataMap[pumpId].channels[chId] = []
-        const flowRate = chData.running ? chData.flow_rate : 0
-        if (typeof flowRate !== 'number') continue
-        const flowRateMlMin = chData.running
-          ? flowRateToMlMin(flowRate, chData.flow_unit)
-          : 0
-        if (flowRateMlMin === null) continue
-        pumpDataMap[pumpId].channels[chId].push([now, flowRateMlMin])
-        pumpDataMap[pumpId].channels[chId] = pumpDataMap[pumpId].channels[chId].slice(-maxPoints)
-      }
-    }
-
     const flowSeries: LineSeriesOption[] = []
     const flowLegend: string[] = []
     for (const [pumpId, pData] of Object.entries(pumpDataMap)) {
-      if (!deviceInfo('pumps', pumpId)?.hasData || selectedDevice.value !== 'pumps') continue
+      if (selectedDevice.value !== 'pumps') continue
       for (const [chId, chSeries] of Object.entries(pData.channels)) {
         if (chSeries.length === 0) continue
         const name = `${pumpId} CH${chId}`
@@ -687,7 +638,8 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
           type: 'line',
           data: chSeries,
           smooth: false,
-          showSymbol: false,
+          showSymbol: true,
+          symbolSize: 4,
           lineStyle: { color: channelColors[colorIdx] },
           itemStyle: { color: channelColors[colorIdx] },
           areaStyle: { opacity: 0.1 },
@@ -699,7 +651,8 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
         { replaceMerge: ['series'] }
       )
   }
-})
+}
+watch([() => monitorHistory.revision, selectedDevice, wsConnected], renderCharts, { flush: 'post' })
 </script>
 
 <style scoped>
@@ -710,6 +663,8 @@ watch([realtimeData, selectedDevice, wsConnected], ([newData], [oldData]) => {
 .trend-toolbar button, .trend-toolbar select { border: 1px solid #b6cee6; background: white; color: #245483; border-radius: 6px; padding: 7px 10px; }
 .stale-readings { opacity: .5; }
 .stale-note, .trend-empty { color: #6b7280; font-size: 14px; }
+.trend-note { color: #52677c; font-size: 13px; line-height: 1.6; margin: 0 0 8px; }
+.stream-status { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .selector-heading { display: flex; justify-content: space-between; padding: 8px 12px 14px; font-size: 14px; font-weight: 600; }
 .selector-heading span { color: var(--el-text-color-secondary); font-size: 12px; }
 .device-choice { display: block; width: 100%; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--el-text-color-regular); text-align: left; cursor: pointer; font: inherit; }

@@ -1,4 +1,5 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
+import { createMonitorHistory, mergeMonitorFrames, recordMonitorFrame, MONITOR_FRESHNESS_MS } from '../utils/monitorHistory'
 import type { ValveState } from '../api/devices'
 import type { SyringeState } from '../api/syringePumps'
 
@@ -74,6 +75,8 @@ export interface MicrowaveRealtimeData {
 }
 
 export interface RealtimeData {
+  sampled_at_ms?: number
+  snapshot?: boolean
   valves: Record<string, ValveState>
   syringe_pumps: Record<string, SyringeState>
   type: string
@@ -89,17 +92,26 @@ const sharedFresh = ref(false)
 // Control consumers retain the existing 6s expiry; transport loss clears both.
 const monitorData = ref<RealtimeData | null>(null)
 const monitorFresh = ref(false)
+const monitorHistory = reactive(createMonitorHistory())
+const transportState = ref<'connecting' | 'open' | 'closed'>('connecting')
+const receivedOnConnection = ref(false)
+const monitorState = computed(() => transportState.value === 'connecting' ? 'connecting'
+  : transportState.value === 'closed' ? 'disconnected'
+  : !receivedOnConnection.value ? 'waiting'
+  : monitorFresh.value ? 'live' : 'stale')
 let monitorTimer: ReturnType<typeof setTimeout> | null = null
 function invalidateMonitor() {
   if (monitorTimer) clearTimeout(monitorTimer)
   monitorTimer = null
   monitorFresh.value = false
   monitorData.value = null
+  monitorHistory.interrupted = true
 }
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let freshnessTimer: ReturnType<typeof setTimeout> | null = null
 let refCount = 0
+let latestSampleAt = 0
 
 function invalidateData() {
   if (freshnessTimer) clearTimeout(freshnessTimer)
@@ -114,17 +126,21 @@ function connect() {
   }
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  transportState.value = 'connecting'
+  receivedOnConnection.value = false
   const socket = new WebSocket(`${protocol}//${location.host}/ws`)
   ws = socket
 
   socket.onopen = () => {
     if (ws !== socket) return
     sharedConnected.value = true
+    transportState.value = 'open'
   }
 
   socket.onclose = () => {
     if (ws !== socket) return
     sharedConnected.value = false
+    transportState.value = 'closed'
     invalidateData()
     invalidateMonitor()
     ws = null
@@ -143,8 +159,15 @@ function connect() {
     if (ws !== socket) return
     try {
       const parsed = JSON.parse(event.data)
+      if (parsed?.type === 'monitor_history') {
+        if (Array.isArray(parsed.frames)) mergeMonitorFrames(monitorHistory, parsed.frames)
+        return
+      }
       if (parsed?.type !== 'realtime') return
-      sharedData.value = {
+      const now = Date.now()
+      const at = parsed.sampled_at_ms ?? now // Compatibility with older servers.
+      if (typeof at !== 'number' || !Number.isFinite(at)) return
+      const frame: RealtimeData = {
         ...parsed,
         heaters: parsed.heaters ?? {},
         pumps: parsed.pumps ?? {},
@@ -152,13 +175,21 @@ function connect() {
         syringe_pumps: parsed.syringe_pumps ?? {},
         valves: parsed.valves ?? {},
       }
-      monitorData.value = sharedData.value
-      monitorFresh.value = true
+      recordMonitorFrame(monitorHistory, frame, at)
+      if (at < latestSampleAt) return
+      latestSampleAt = at
+      const age = Math.max(0, now - at)
+      receivedOnConnection.value = true
       if (monitorTimer) clearTimeout(monitorTimer)
-      monitorTimer = setTimeout(invalidateMonitor, 15000)
-      sharedFresh.value = true
+      monitorTimer = null
+      monitorFresh.value = age < MONITOR_FRESHNESS_MS
+      monitorData.value = monitorFresh.value ? frame : null
+      if (monitorFresh.value) monitorTimer = setTimeout(invalidateMonitor, MONITOR_FRESHNESS_MS - age)
       if (freshnessTimer) clearTimeout(freshnessTimer)
-      freshnessTimer = setTimeout(invalidateData, 6000)
+      freshnessTimer = null
+      sharedFresh.value = age < 6000
+      sharedData.value = sharedFresh.value ? frame : null
+      if (sharedFresh.value) freshnessTimer = setTimeout(invalidateData, 6000 - age)
     } catch (e) {
       console.error('[WS] parse error:', e)
     }
@@ -176,6 +207,7 @@ function disconnect() {
     ws = null
   }
   sharedConnected.value = false
+  transportState.value = 'closed'
   invalidateData()
   invalidateMonitor()
 }
@@ -196,5 +228,5 @@ export function useWebSocket() {
     }
   })
 
-  return { data: sharedData, connected: sharedConnected, fresh: sharedFresh, monitorData, monitorFresh }
+  return { data: sharedData, connected: sharedConnected, fresh: sharedFresh, monitorData, monitorFresh, monitorState, monitorHistory }
 }

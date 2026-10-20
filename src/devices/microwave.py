@@ -407,15 +407,16 @@ class MicrowaveDevice(BaseDevice):
         return True
 
     def start(self, mode: MicrowaveMode | str, *, should_stop=None) -> bool:
-        """Write the explicit mode bit and start bit to the control word."""
+        """Select the mode while idle before sending a separate start command."""
         with self._lock:
             return self._start(mode, should_stop or (lambda: False))
 
     def _start(self, mode, should_stop):
         self.last_command_error = None
         self.last_command_result = dict(command="start", success=False, blocks=[],
-            configuration_verified=False, before=copy.deepcopy(self._last_data.data) if self._last_data else None,
-            before_sampled_at=self._last_data.timestamp.isoformat() if self._last_data else None)
+            pre_start_blocks=[], configuration_verified=False,
+            pre_start_configuration_verified=False, mode_selection_write_attempted=False,
+            start_write_attempted=False)
         try:
             selected_mode = MicrowaveMode.from_value(mode)
         except ValueError:
@@ -426,11 +427,31 @@ class MicrowaveDevice(BaseDevice):
         if self._configuration_attempted and (expected is None or expected[0] != selected_mode.value):
             self.last_command_error = "microwave configuration invalid; configure the selected mode again before start"
             return False
+        if not self._read_idle_start_state("before", should_stop):
+            return False
         if should_stop():
             self.last_command_error = "microwave start superseded by stop request"
             return False
-        control_word = MODE_CONTROL_MASKS[selected_mode] | CONTROL_MICROWAVE_START
+        mode_word = MODE_CONTROL_MASKS[selected_mode]
+        self.last_command_result["written_mode_control_word"] = mode_word
+        self.last_command_result["mode_selection_write_attempted"] = True
+        if not self._write_register(CONTROL_WORD, mode_word):
+            self.last_command_error = "microwave mode-selection control-word write failed"
+            return False
+        if not self._read_idle_start_state("after_mode_selection", should_stop):
+            return False
+        if expected is not None:
+            if not self._verify_start_configuration(expected, "pre-start", should_stop):
+                return False
+            self.last_command_result["pre_start_configuration_verified"] = True
+        if not self._read_idle_start_state("before_start", should_stop):
+            return False
+        if should_stop():
+            self.last_command_error = "microwave start superseded by stop request"
+            return False
+        control_word = mode_word | CONTROL_MICROWAVE_START
         self.last_command_result["written_control_word"] = control_word
+        self.last_command_result["start_write_attempted"] = True
         if not self._write_register(CONTROL_WORD, control_word):
             self.last_command_error = "microwave start control-word write failed"
             return False
@@ -451,25 +472,8 @@ class MicrowaveDevice(BaseDevice):
                 self.last_command_result["after_start"] = copy.deepcopy(data.data)
                 self.last_command_result["after_start_sampled_at"] = data.timestamp.isoformat()
                 if expected is not None:
-                    for address, values in expected[1]:
-                        if should_stop():
-                            self.last_command_error = "microwave configuration verification superseded by stop request"
-                            return False
-                        block = dict(address=address, expected=list(values), actual=None)
-                        self.last_command_result["blocks"].append(block)
-                        try:
-                            actual = self._read_registers(address, len(values))
-                        except Exception as exc:
-                            self._expected_configuration = None
-                            block["error"] = str(exc)
-                            self.last_command_error = f"microwave post-start configuration read failed at {address}: {exc}"
-                            return False
-                        block["actual"] = copy.deepcopy(actual)
-                        if actual != values:
-                            self._expected_configuration = None
-                            self.last_command_error = (f"microwave post-start configuration mismatch at {address}: "
-                                                       f"expected={values} readback={actual}")
-                            return False
+                    if not self._verify_start_configuration(expected, "post-start", should_stop):
+                        return False
                     if should_stop():
                         self.last_command_error = "microwave start superseded by stop request"
                         return False
@@ -496,6 +500,53 @@ class MicrowaveDevice(BaseDevice):
         )
         self._logger.error(self.last_command_error)
         return False
+
+    def _read_idle_start_state(self, phase, should_stop):
+        if should_stop():
+            self.last_command_error = "microwave start superseded by stop request"
+            return False
+        try:
+            data = self.read_data()
+        except Exception as exc:
+            self.last_command_error = f"microwave {phase} status read failed: {exc}"
+            return False
+        self.last_command_result[phase] = copy.deepcopy(data.data)
+        self.last_command_result[phase + "_sampled_at"] = data.timestamp.isoformat()
+        if should_stop():
+            self.last_command_error = "microwave start superseded by stop request"
+            return False
+        state = data.microwave_status
+        if (state.control_active is not False or state.output_active is not False
+                or state.fault_code != 0):
+            self.last_command_error = f"microwave {phase}: idle, zero output and fault-free status required"
+            return False
+        return True
+
+    def _verify_start_configuration(self, expected, phase, should_stop):
+        blocks = self.last_command_result["pre_start_blocks" if phase == "pre-start" else "blocks"]
+        for address, values in expected[1]:
+            if should_stop():
+                self.last_command_error = "microwave configuration verification superseded by stop request"
+                return False
+            block = dict(address=address, expected=list(values), actual=None)
+            blocks.append(block)
+            try:
+                actual = self._read_registers(address, len(values))
+            except Exception as exc:
+                self._expected_configuration = None
+                block["error"] = str(exc)
+                self.last_command_error = f"microwave {phase} configuration read failed at {address}: {exc}"
+                return False
+            block["actual"] = copy.deepcopy(actual)
+            if should_stop():
+                self.last_command_error = "microwave configuration verification superseded by stop request"
+                return False
+            if actual != values:
+                self._expected_configuration = None
+                self.last_command_error = (f"microwave {phase} configuration mismatch at {address}: "
+                                           f"expected={values} readback={actual}")
+                return False
+        return True
 
     def stop(self) -> bool:
         """Write this implementation's conservative stop control word."""

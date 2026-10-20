@@ -86,7 +86,8 @@ class FakeApiDeviceManager:
         self.calls.append(("configure_microwave_manual", device_id, segments))
         return self.should_succeed
 
-    def start_microwave(self, device_id, mode):
+    def start_microwave(self, device_id, mode, *, cleanup_on_failure=False):
+        assert cleanup_on_failure is True
         self.calls.append(("start_microwave", device_id, mode.value))
         return self.should_succeed
 
@@ -110,9 +111,13 @@ class FakeConnectedMicrowave:
 class FakeWebSocket:
     def __init__(self, device_manager=None):
         self.app = SimpleNamespace(state=SimpleNamespace(device_manager=device_manager))
+        self.sent = []
 
     async def accept(self):
         return None
+
+    async def send_json(self, data):
+        self.sent.append(data)
 
     async def receive_text(self):
         raise WebSocketDisconnect()
