@@ -59,9 +59,10 @@
         <el-button :disabled="settingsDisabled || microwave.usedSegments >= 5" @click="addSegment">添加一段</el-button>
         <span class="unit-label">最多 5 段</span>
       </el-form-item>
-      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：每段到温后计时保温，确认停止后进入下一段。无需设置触摸屏执行范围，段间会短暂停机；运行期间须保持后端服务运行并现场看护。" />
+      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：每段到温后计时保温，确认停止后进入下一段。设备方案与执行范围须现场核对，段间会短暂停机；运行期间须保持后端服务运行并现场看护。" />
       <div v-if="hostProgram && (hostProgram.state !== 'idle' || hostProgram.status_error || hostProgram.recovery_required)" class="program-notice">
         <p>托管状态：{{ hostStateLabel }} · 逻辑段 {{ hostProgram.current_stage || 0 }}/{{ hostProgram.total_stages || 0 }} · {{ phaseLabel }}</p>
+        <MicrowaveHoldProgress :activity="hostProgram.activity" />
         <el-alert v-if="hostProgram.error || hostProgram.status_error" :title="hostProgram.error || hostProgram.status_error" type="error" :closable="false" />
         <el-button v-if="hostProgram.recovery_required" type="warning" @click="$emit('recover', microwaveId)">现场确认停止后解除锁定</el-button>
       </div>
@@ -77,10 +78,9 @@
             :min="0"
             :max="300"
             :step="1"
-            :precision="1"
             style="width: 140px"
           />
-          <span class="unit-label">°C</span>
+          <span class="unit-label">℃（整数）</span>
         </el-form-item>
 
         <el-form-item v-if="microwave.mode === 'manual_power'" label="功率">
@@ -175,6 +175,7 @@
 </template>
 
 <script setup lang="ts">
+import MicrowaveHoldProgress from './MicrowaveHoldProgress.vue'
 import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import deviceArtwork from '../assets/theme/microwave.webp'
 import { computed } from 'vue'
@@ -208,7 +209,8 @@ const props = defineProps<{
   microwave: MicrowaveDeviceState
   realtime: MicrowaveRealtimeData | null
   hostProgram?: { state: string; current_stage?: number; total_stages?: number; phase?: string;
-    recovery_required?: boolean; cleanup_pending?: boolean; status_error?: string; error?: string }
+    recovery_required?: boolean; cleanup_pending?: boolean; status_error?: string; error?: string;
+    activity?: InstanceType<typeof MicrowaveHoldProgress>['$props']['activity'] }
 }>()
 
 defineEmits<{

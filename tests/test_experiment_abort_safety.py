@@ -61,7 +61,7 @@ def test_on_error_stop_cleans_every_device_started_by_experiment():
         def start_pump_channel(self, *_args):
             return True
 
-        def start_microwave(self, _device_id, _mode):
+        def start_microwave(self, _device_id, _mode, **kwargs):
             return True
 
         def stop_heater(self, device_id):
@@ -72,7 +72,7 @@ def test_on_error_stop_cleans_every_device_started_by_experiment():
             self.stopped.append(("pump", device_id, channel))
             return True
 
-        def stop_microwave(self, device_id):
+        def stop_microwave(self, device_id, **kwargs):
             self.stopped.append(("microwave", device_id))
             return True
 

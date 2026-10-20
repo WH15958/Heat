@@ -163,7 +163,8 @@ def test_start_cannot_interleave_with_configuration_writes(method_name, segments
 
     def run_start():
         try:
-            results["start"] = device.start("manual_power")
+            mode = "manual_power" if method_name == "configure_manual" else method_name.removeprefix("configure_")
+            results["start"] = device.start(mode)
         except Exception as exc:
             errors.append(exc)
 
@@ -174,14 +175,16 @@ def test_start_cannot_interleave_with_configuration_writes(method_name, segments
     config_thread.start()
     first_write_completed = device.first_config_write_complete.wait(timeout=2)
     start_thread.start()
-    probe_completed = lock_probe_complete.wait(timeout=2)
+    # START must not even enter its write path while configuration owns the lock.
+    probe_during_configuration = lock_probe_complete.wait(timeout=.05)
     device.resume_config.set()
     config_thread.join(timeout=2)
     start_thread.join(timeout=2)
 
     assert first_write_completed is True
-    assert probe_completed is True
-    assert lock_available_to_start == [False]
+    assert probe_during_configuration is False
+    assert lock_probe_complete.is_set()
+    assert lock_available_to_start == [True]
     assert config_thread.is_alive() is False
     assert start_thread.is_alive() is False
     assert errors == []

@@ -178,6 +178,24 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         if action_type is None:
             raise ValueError(f"Unknown action type: {s.get('type')}")
 
+        if action_type.value.startswith("microwave.configure_"):
+            segments = params.get("segments", [])
+            if not isinstance(segments, list) or any(not isinstance(s, dict) for s in segments):
+                raise ValueError("Microwave segments must be a list of objects")
+            for segment in segments:
+                for names in (
+                    ("heating_temperature", "heat_temperature", "ramp_target_temperature", "target_temperature"),
+                    ("holding_temperature", "hold_temperature", "hold_target_temperature"),
+                    ("target_temperature", "ramp_target_temperature"),
+                    ("holding_deviation", "hold_deviation"),
+                ):
+                    name = next((name for name in names if name in segment), None)
+                    if name is None or segment[name] is None:
+                        continue
+                    value = _validate_nonnegative_finite_number(segment[name], name, step_label)
+                    if value != int(value):
+                        raise ValueError(f"微波设定温度与偏差必须为整数℃：{name}（步骤 {step_label}）")
+
         if action_type == ActionType.PUMP_START and wait.type == WaitType.PUMP_COMPLETE:
             repeat_count = params.get("repeat_count", 1)
             if isinstance(repeat_count, bool) or repeat_count != 1:
@@ -201,6 +219,14 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
                 raise ValueError("微波保护保温必须指定 wait.device_id")
             if "seconds" not in wait_data or seconds != round(seconds):
                 raise ValueError("微波保护保温时间必须填写非负整秒")
+            if "target_temperature" in wait_data or "temperature" in wait_data:
+                if not all(key in wait_data for key in ("tolerance", "timeout")):
+                    raise ValueError("微波温度保温须明确填写目标、tolerance 和 timeout")
+                wait.target_temperature = _validate_nonnegative_finite_number(
+                    target_temperature, "wait.target_temperature", step_label)
+                wait.tolerance = _validate_nonnegative_finite_number(tolerance, "wait.tolerance", step_label)
+                if timeout <= 0 or timeout < seconds:
+                    raise ValueError("微波温度保温 timeout 必须为正且不小于 seconds")
             if validate_devices:
                 from src.utils.config import ConfigManager
                 ids = {c.device_id for c in ConfigManager().load().microwaves if c.enabled}

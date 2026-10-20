@@ -18,7 +18,9 @@ class CoolingTests(unittest.TestCase):
                 value = values.pop(0)
                 if isinstance(value, Exception):
                     raise value
-                return {"material_temperature": value}
+                return {"material_temperature": value, "fault_code": 0,
+                        "status_confirmed": True, "control_active": False,
+                        "output_active": False, "stop_confirmed": True}
         executor = StepExecutor(Manager())
         return asyncio.run(executor._wait_condition(self.condition(**kwargs)))
 
@@ -38,6 +40,23 @@ class CoolingTests(unittest.TestCase):
         executor = StepExecutor(None)
         executor._should_stop = lambda: True
         self.assertFalse(asyncio.run(executor._wait_condition(self.condition())))
+
+    def test_requires_confirmed_stopped_control_even_without_output(self):
+        stopped = dict(material_temperature=40, fault_code=0, status_confirmed=True,
+                       control_active=False, output_active=False, stop_confirmed=True)
+        mutations = [dict(read_ok=False), dict(fault_code=3), dict(control_active=True),
+                     dict(output_active=True), dict(stop_confirmed=False), dict(status_confirmed=False)]
+        states = [{**stopped, **mutation} for mutation in mutations]
+        states += [{k: v for k, v in stopped.items() if k != missing} for missing in
+                   ('fault_code', 'status_confirmed', 'control_active', 'output_active', 'stop_confirmed')]
+        for state in states:
+            with self.subTest(state=state):
+                class Manager:
+                    def read_microwave_data(self, device_id):
+                        return state
+                executor = StepExecutor(Manager())
+                self.assertFalse(asyncio.run(executor._wait_condition(self.condition())))
+                self.assertIn('禁止排液', executor.last_error)
 
     def test_pause_prevents_read_and_completion(self):
         class Manager:

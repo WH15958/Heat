@@ -98,7 +98,7 @@ def test_new_step_and_new_engine_clear_previous_activity(monkeypatch):
 def test_hold_snapshot_uses_existing_clock_and_reads(monkeypatch):
     clock = fake_clock(monkeypatch)
     read = Mock(return_value=dict(read_ok=True, fault_code=0, material_temperature=60,
-        control_active=True, output_active=True))
+        control_active=True, output_active=True, status_confirmed=True))
     executor = execution.StepExecutor(Mock(read_microwave_data=read))
     step = ExperimentStep('hold', ActionType.WAIT, wait=WaitCondition(
         type=WaitType.MICROWAVE_MONITORED_HOLD, seconds=3, device_id='microwave1'))

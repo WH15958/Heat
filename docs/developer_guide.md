@@ -206,6 +206,8 @@ Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `40
 - 协议：原始协议表使用 `40001` 风格保持寄存器地址；代码必须通过 `holding_address()` 转成 PDU 地址，例如 `40001 -> 0`、`40151 -> 150`。
 - 控制字：`40151` 对应 PDU 地址 `150`，bit15 为恒速率、bit14 为自动功率、bit13 为手动功率、bit12 为微波启动；当前 stop 实现写 `0`，真实语义仍需实机确认。
 - 微波配置写入后按协议对可读段寄存器做精确读回。启停确认只使用 40151 中声明可读的 bit12；停止还要求状态块中的功率和电流归零。模式位不因整字可读而被假定可读。
+- 微波配置的温度与保温偏差寄存器使用整数℃，未发现协议定义的小数缩放。驱动在任何写入前拒绝非整数；REST 共用模型、编排校验、YAML 解析、托管程序及引导请求同样校验，允许 `50.0`，拒绝 `50.9`。测量温度的浮点精度不变。
+- `StepExecutor.execute` 在失败返回前保存驱动原始错误，避免后续 STOP 清理清空或覆盖它；微波到温/降温等待失败使用等待自身诊断。超时包含目标、容差、最后温度、扣除暂停的时长及控制状态/字。微波 configure/start/stop REST 失败响应优先返回 `get_last_command_error`，无详细原因时保留通用 HTTP 400。
 - 状态：`DeviceManager.read_microwave_data()` 暴露 `connection_port`、`running`、`control_word`、`control_active`、`output_active`、`stop_confirmed`、`status_confirmed`、`mode`、`current_segment`、`material_temperature`、`temperature_source`、`power_percent`、`current`、`runtime_seconds`、`fault_code`、`current_mode_code` 及兼容控制字段。`control_active` 只解释协议声明可读的启动位；`output_active` 由功率/电流判断；`stop_confirmed` 要求启动位清除且无输出；状态读取失败不得用缓存的停止值替代。`mode` 只对仓库已确认的控制掩码做保守解码。
 - 串口展示：`DeviceManager.get_all_status()`、加热器/泵读取结果和 WebSocket 实时 payload 会为 heater/pump/microwave 暴露 `connection_port`，用于前端确认当前连接的 COM 口；该字段只读展示，不改变设备控制语义。
 
@@ -245,7 +247,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 
 电脑托管 API 前缀为 `/api/microwave-program/{device_id}`：`POST /preview` 仅编译校验；`POST /start` 接收 `request_id`（32位小写十六进制）、`mode`、`stages`（1–5个 `{temperature, hold_seconds, power_percent}`）、可选 `heating_timeout`（默认600，1–3600秒）及显式 `hardware_confirmed=true`；`GET /current` 返回状态、逻辑段、阶段、错误和恢复/清理锁；`POST /stop` 停止本服务中的执行；`POST /acknowledge-interrupted` 要求 `{devices_stopped_confirmed: true}`，只解除现场确认后的锁，不重放。重复标识和相同请求返回原记录，参数不同返回409；旧标识即使完成、停止或解除锁定也不能再次执行。连接、有限非负温度、无故障、控制位清除和输出停止均需后端只读检查，不自动连接。
 
-`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段以原有 configure/start/monitored_hold/stop 动作编译四步，到目标 ±1℃ 后才开始保温；确认停止后才切换下一目标。每次配置五个硬件段为同一目标及 `heating_timeout + hold_seconds + 60` 秒保温，最大99时59分59秒。只写已知参数寄存器，不写未知起止段地址或将零秒解释为跳段；设备启动范围/方案与参数映射、计时重置仍待实机验收。段间停机，原始 REST/YAML/引导流程不改为此托管模式。
+`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段编译 configure/start/monitored_hold/stop 四步，到目标±1℃后在目标±3℃内累计有效保温；越界暂停累计，最多额外等待600秒，确认停止后切换下一目标。五个硬件段为同一目标及 `heating_timeout + hold_seconds + 600 + 60` 秒保护时长，最大99时59分59秒，超出则写入前拒绝。启动后复核本次已知参数块，读回一致不能证明未公开的运行方案。段间停机，方案映射及计时重置仍须实机验收；原始REST/YAML/引导流程不改为此托管模式。
 
 完整程序注册在共享 `_engines`，与普通/引导实验互斥，运行和清理期间保留占用，阻止手动写控制和断开；手动停止及全局急停先禁止后续步骤。托管不暴露暂停/恢复，通用实验暂停/恢复端点对此返回409，避免冻结电脑计时而固件仍加热。原子记录位于 `output/microwave_programs/mwprogram_<request_id>.json`，启动意图必须先落盘，每步先保存进度；存储失败停止并保留锁，日志保存失败也显式报告。重启后未完成或待清理记录视为中断，锁住实验和手动运动控制；可连接、读取、停止后人工确认解除，解除记录保存失败仍锁定。页面/WS生命周期只读，服务正常关闭等待托管停机；进程崩溃无法保证立即停机，长硬件计时不能替代独立联锁。
 
@@ -504,7 +506,7 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，正式进料不隐式回零；每批通过明确确认的预充入口依次执行已有 syringe_pump.initialize，确认完成及可信零位后才吸排预充液。
 
-微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃；温度读取失败、微波故障或仍输出不放行。收取前重复此检查，再切换产物出口及抽液。通道四排液使用 FLOW_MODE 及软件定时停泵，通道三清洗进液保留 TIME_QUANTITY、pump_complete 和显式 stop_channel；理论流量不冒充实际排空传感器。
+微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃，同时要求 fault_code=0、status_confirmed=true、control_active=false、output_active=false、stop_confirmed=true，read_ok 不得显式为 false；温度或停止状态未知、控制仍开启均不放行。收取前重复此检查，再切换产物出口及抽液。通道四排液使用 FLOW_MODE 及软件定时停泵，通道三清洗进液保留 TIME_QUANTITY、pump_complete 和显式 stop_channel；理论流量不冒充实际排空传感器。
 
 启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
 
@@ -513,7 +515,7 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 ### 引导批次预充接口与状态
 
-正式组的 `microwave_config` 与手动托管采用同样的五段覆盖策略：五个自动功率硬件段均写入当前组目标温度，设备段时长为 `ceil(heating_timeout) + hold_seconds + 60`，复用同步驱动的逐段写后读回；任一配置失败不执行后续 start。上层仍等待到温、按原请求监督保温并显式停止，不写未经确认的起止段寄存器。新编译的批次及导出 YAML 使用该策略，已保存的历史计划不改写；HMI实际方案映射及启动计时重置须实机确认。
+正式组的 `microwave_config` 与托管采用同样的五段覆盖策略：五段为当前组目标，保护时长 `ceil(heating_timeout) + hold_seconds + 600 + 60`；逐段写后读回，启动后再次有限读回本次参数块，不一致或读取失败则失败清理，不自动重写或重启。上层到温后累计合格保温并显式停止，不猜方案或起止段寄存器。新编译批次及导出YAML采用新规则，历史计划不改写；实际运行方案仍须厂家协议与实机确认。
 
 引擎首次进入 completed/failed/stopped 时冻结 `progress.elapsed`，新运行启动时重置，暂停仍计入累计用时。批次检查点保存 progress，服务重启后可读取最后保存的用时。终态新建清空表单，沿用参数新建只复制保存值；两者清除名称、校验和启动确认，保留旧批次记录；恢复锁定沿用 acknowledge-interrupted，解除时保留原失败原因，不改写为服务中断。
 
@@ -529,7 +531,13 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 ### 自动化保护等待与计时
 
-同步驱动及设备管理器保持原接口。`StepExecutor` 在编排层实现 `microwave_monitored_hold`：每秒同步读取经线程桥接的微波状态，校验有限非负物料温度、fault_code=0、可靠控制状态，保温控制提前结束超过 1 秒失败。到温等待也校验故障与控制。失败返回 False，由引擎停止已启动设备、记录失败，不进入收取或下一组。硬件保温时、分、秒寄存器由引导编译器根据整秒时长生成。
+`StepExecutor` 在编排层执行 `microwave_monitored_hold`：复用已有每秒读取；明确目标时按相邻有效且达标样本累计，任一越界不累计该区间，回温后继续，实际暂停后重新建立采样边界。无目标旧YAML保留纯计时监督。控制退出、状态未知或故障始终先于完成判断；单次读取或采样间隔超过 `1 + 3 * microwave.config.timeout` 秒失败，默认7秒。保护保温超时扣除实际暂停，引导式反应中的待处理暂停请求不扣时。失败返回False并进入既有清理与恢复锁。
+
+状态响应只增加可选字段：引导式 `progress.activity` 与托管 `activity` 中的 `qualified_seconds`、`hold_in_band`、`hold_timeout_seconds`；`remaining_seconds` 对温度保温使用有效时间，`elapsed_seconds` 保留实际有效等待时间。步骤结果保存 `hold_summary`，生成流程metadata保存 `microwave_hold_policy`。页面不自行累计，旧记录缺字段不伪造计时。
+
+同步驱动的 `last_command_result` 保存配置块预期/实读、控制字及启动前缓存/启动后快照。当前连接会话只在完整配置成功后保存预期寄存器；配置失败或断开使其失效。无本会话配置的原始手动启动可沿用HMI，但标记 `configuration_verified=false`，不能声称方案已确认。设备管理器在原控制锁内进行有界核对，执行器透传停止检查回调；引擎停止请求或停止代次变化使尚未发出的核对读取取消，已在途的同步读取仍等待返回再清理；原布尔控制接口和REST请求不变。
+
+设备管理器仅从已有调用生成诊断事件，内存保留最近200条，执行器在既有读数/步骤及清理边界增量收集到运行JSON的 `microwave_events`；缓冲缺口显式记录 `diagnostic_gap`。配置、启动和正常停止事件同时进入对应步骤 `device_result.microwave_events`；清理事件保留在运行级列表，避免覆盖原始失败。终态后的恢复清理诊断再次原子保存至同一日志，不改写终态、结束时间或样品记录；保存失败标为持久化错误。事件含设备、序号、UTC时间、动作、来源、结果；停止来源区分 experiment_step、user_stop、failure_cleanup、normal_cleanup、manual_stop、emergency_stop、disconnect、service_cleanup。已有采样曲线补充控制字、段号、模式原码、故障及温度源；状态变化和计时归零复用已有读取，不增加驱动后台轮询。未发现本系统STOP时只报告设备侧退出或外部来源未确认，不猜厂家模式枚举或浮点字序。
 
 引导式正式单组启用 `finish_reaction_before_pause`。微波启动至显式停止之间设置 `pause_pending`，不清除运行事件；停止成功后才真正暂停。停止请求清除 pending 并中断等待，恢复不重放。`GET /api/guided/current`、批次状态及普通实验 progress 响应增加布尔 `pause_pending`（普通实验默认 false）；路径不变。页面显示 pending 与 paused 两种状态，pending 时 resume 取消暂停请求。
 
@@ -581,3 +589,5 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 预充签名协议升级为 stable_then_dwell_flow_drain_v4，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
+
+`useWebSocket` 的 `data/fresh` 保留6秒有效期；只读 Dashboard 使用独立的 `monitorData/monitorFresh`（15秒）。2026-10-19实测整包采集约6.4–6.7秒，原6秒清空会周期性闪烁。两者共享同一连接和消息，不增加轮询；close/unmount立即清除两份状态，重连必须收到新包才恢复。连接状态与数据有效期分别展示，图表关闭更新动画。

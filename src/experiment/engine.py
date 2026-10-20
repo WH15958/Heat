@@ -41,6 +41,8 @@ class ExperimentEngine:
         self._executor = executor
         self._executor.set_stop_checker(lambda: self._stop_flag)
         self._exp_logger = exp_logger or ExperimentLogger()
+        if isinstance(self._executor, StepExecutor):
+            self._executor.microwave_event_recorder = self._exp_logger.record_microwave_events
         self._state = ExperimentState.IDLE
         self._steps: List[ExperimentStep] = []
         self._current_step = 0
@@ -82,6 +84,8 @@ class ExperimentEngine:
         activity = getattr(self._executor, "activity_snapshot", None)
         if activity and self._state in (ExperimentState.RUNNING, ExperimentState.PAUSED) and (not step or activity["step_id"] != step.id):
             activity = None
+        if activity:
+            activity["paused"] = self._state == ExperimentState.PAUSED
         return ExperimentProgress(
             current_step=self._current_step,
             total_steps=len(self._steps),
@@ -159,6 +163,8 @@ class ExperimentEngine:
                 await self._executor.release_valves()
             raise
         self._state = ExperimentState.RUNNING
+        if isinstance(self._executor, StepExecutor):
+            self._executor.begin_microwave_diagnostics(self._steps)
         self._start_time = time.monotonic()
         self._end_time = None
         self._task = asyncio.create_task(self._run())
@@ -374,7 +380,12 @@ class ExperimentEngine:
                 self._cleanup_result = False
                 return False
             try:
-                cleanup_task = asyncio.create_task(stop_active_devices())
+                if isinstance(self._executor, StepExecutor):
+                    source = "user_stop" if self._stop_flag else (
+                        "normal_cleanup" if self._current_step >= len(self._steps) else "failure_cleanup")
+                    cleanup_task = asyncio.create_task(stop_active_devices(source=source))
+                else:
+                    cleanup_task = asyncio.create_task(stop_active_devices())
                 self._cleanup_task = cleanup_task
             except Exception as e:
                 logger.error(f"Failed to start experiment active-device cleanup: {e}")

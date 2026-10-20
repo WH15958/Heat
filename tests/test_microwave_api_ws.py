@@ -90,7 +90,7 @@ class FakeApiDeviceManager:
         self.calls.append(("start_microwave", device_id, mode.value))
         return self.should_succeed
 
-    def stop_microwave(self, device_id):
+    def stop_microwave(self, device_id, **kwargs):
         self.calls.append(("stop_microwave", device_id))
         return self.should_succeed
 

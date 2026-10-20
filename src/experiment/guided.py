@@ -105,6 +105,8 @@ class GuidedRequest(BaseModel):
                 raise ValueError("整批最多 200 组")
         if max(self.axes[5]) > 1440:
             raise ValueError("单组保温时间最多 1440 分钟")
+        if any(value != int(value) for value in self.axes[4]):
+            raise ValueError("微波目标温度必须为整数℃")
         for minutes in self.axes[5]:
             hold_seconds(minutes)
         if self.clean_volume > self.reactor_available_ml:
@@ -236,7 +238,9 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     add("feed_both", "syringe_pair.dispense", dict(feeds=feeds))
     seconds = hold_seconds(row[5])
     # Cover retained HMI slot selections; the host owns the actual hold and stop.
-    guard = math.ceil(spec.heating_timeout) + seconds + 60
+    guard = math.ceil(spec.heating_timeout) + seconds + 600 + 60
+    if guard > 99*3600 + 59*60 + 59:
+        raise ValueError("阶段时间加设备保护计时超出99小时59分59秒")
     add("microwave_config", "microwave.configure_auto_power", dict(device_id="microwave1",
         segments=[dict(segment=n, heating_temperature=row[4], holding_temperature=row[4],
                        hours=guard//3600, minutes=guard%3600//60, seconds=guard%60)
@@ -244,7 +248,8 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     add("microwave_start", "microwave.start", dict(device_id="microwave1", mode="auto_power"),
         dict(type="microwave_temperature_reached", device_id="microwave1",
              target_temperature=row[4], tolerance=1, timeout=spec.heating_timeout))
-    add("hold", "wait", wait=dict(type="microwave_monitored_hold", device_id="microwave1", seconds=seconds))
+    add("hold", "wait", wait=dict(type="microwave_monitored_hold", device_id="microwave1", seconds=seconds,
+        target_temperature=row[4], tolerance=3, timeout=seconds+600))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
     cool = dict(type="microwave_temperature_below", device_id="microwave1",
                 target_temperature=45, timeout=spec.cooling_timeout)
@@ -263,6 +268,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     return dict(name=f"{spec.experiment_name} · 第 {index+1} 组", steps=steps, metadata=dict(
         batch_id=batch_id, experiment_name=spec.experiment_name, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
         guided_parameters=row, product_port=spec.product_port,
+        microwave_hold_policy=dict(tolerance=3, extra_wait_seconds=600, excursion="pause_accumulation"),
         theoretical_product_volume_ml=row[2]+row[3],
         product_drain_seconds=spec.product_drain_seconds, clean_drain_seconds=spec.clean_drain_seconds,
         recipe_file=f"output/guided_batches/plans/{batch_id}.json", recipe_group=index+1))
@@ -562,7 +568,8 @@ class GuidedBatch:
             if self.record["phase"] != "ready" or self.stopping or self.state != ExperimentState.PAUSED:
                 self.executor.release_resources_on_cleanup = True
                 try:
-                    if not await self.executor.stop_active_devices():
+                    if not await self.executor.stop_active_devices(source="user_stop" if self.stopping else (
+                            "normal_cleanup" if self.state == ExperimentState.COMPLETED else "failure_cleanup")):
                         self.state = ExperimentState.FAILED
                         self.record["error"] = (self.record["error"] or "") + "; 停机未确认"
                     self.save()
@@ -623,7 +630,7 @@ class GuidedBatch:
             await self.task
         success = await self.engine.stop() if self.engine else True
         self.executor.release_resources_on_cleanup = True
-        success = await self.executor.stop_active_devices() and success
+        success = await self.executor.stop_active_devices(source="user_stop") and success
         if self.priming_stop_pending:
             success = await self.stop_priming_devices() and success
         if success and self.state not in (ExperimentState.COMPLETED, ExperimentState.FAILED):

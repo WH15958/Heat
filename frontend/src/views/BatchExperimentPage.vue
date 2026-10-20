@@ -25,7 +25,8 @@
         <div class="activity-readings">
           <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? formatTemperature(reading.value) : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ !reading.read_ok?'读取未确认':reading.target==null?'最新读数':(reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target)?'已达标':'等待达标' }}</b></div>
           <div v-if="activity?.stable_required_seconds!=null" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
-          <div v-if="activity?.duration_seconds!=null" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
+          <MicrowaveHoldProgress :activity="activity" />
+          <div v-if="activity?.duration_seconds!=null && activity.qualified_seconds==null" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
           <div v-for="(device,id) in activity?.devices||{}" :key="id" class="reading"><small>{{ deviceLabel(String(id)) }}</small><strong>{{ device.read_ok!==true?'状态未知':device.relay_energized!=null?'已确认 '+(device.relay_energized?'NC':'NO'):device.busy===true||device.running===true||device.control_active===true?'设备运行中':device.result==='completed'?'动作已完成':device.running===false?'设备已停止':'等待设备确认' }}</strong><span v-for="feed in (activity?.feeds||[]).filter((f:any)=>f.device_id===id)" :key="feed.device_id">设定进样量 {{ feed.volume }} {{ feed.unit }}</span><span v-if="device.fault_code">故障码 {{ device.fault_code }}</span></div>
           <div v-if="Object.keys(activity?.parameters||{}).length||(!(activity?.readings?.length)&&!Object.keys(activity?.devices||{}).length)" class="reading"><small>相关设备 / 参数</small><strong>{{ activity?.device_ids?.map(deviceLabel).join(' / ')||currentDevice }}</strong><span v-if="activity?.parameters?.target_temperature!=null">目标 {{ activity.parameters.target_temperature }} ℃</span><span v-if="activity?.parameters?.temperature!=null">目标 {{ activity.parameters.temperature }} ℃</span><span v-if="activity?.parameters?.channel">通道 {{ activity.parameters.channel }}</span><span v-if="activity?.parameters?.flow_rate!=null">{{ activity.parameters.flow_rate }} mL/min</span><span v-if="activity?.parameters?.volume!=null">{{ activity.parameters.volume }} {{ activity.parameters.unit||'mL' }}</span><span v-if="activity?.parameters?.position">出口 {{ activity.parameters.position }}</span></div>
         </div>
@@ -114,6 +115,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import MicrowaveHoldProgress from '../components/MicrowaveHoldProgress.vue'
 import {computed,nextTick,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
@@ -151,7 +153,7 @@ const fixed=ref<NumberField[]>([
  {key:'cleanTime',label:'清洗排液时间',unit:'秒',value:null}
 ])
 const setting=(key:string)=>numeric(fixed.value.find(s=>s.key===key)!.value)
-const plan=computed(()=>{try{if(!Number.isInteger(repeats.value)||numeric(repeats.value)<1)throw new Error('重复次数须为正整数');const rows=combinations(axes.value.map(completeAxis));if(rows.length*numeric(repeats.value)>200)throw new Error('最多 200 组，请缩小范围');if(rows.some(r=>r.some((v,i)=>i===2||i===3?v<=0:v<0)))throw new Error('进样量须大于零，温度与时间不能为负');rows.forEach(r=>microwaveHoldSeconds(r[5]!));return{rows:rows.flatMap(r=>Array.from({length:numeric(repeats.value)},()=>r)),counts:axes.value.map(a=>valuesFor(a).length),error:''}}catch(e){return{rows:[] as number[][],counts:[] as number[],error:String(e)}}})
+const plan=computed(()=>{try{if(!Number.isInteger(repeats.value)||numeric(repeats.value)<1)throw new Error('重复次数须为正整数');const rows=combinations(axes.value.map(completeAxis));if(rows.length*numeric(repeats.value)>200)throw new Error('最多 200 组，请缩小范围');if(rows.some(r=>r.some((v,i)=>i===2||i===3?v<=0:v<0)))throw new Error('进样量须大于零，温度与时间不能为负');if(rows.some(r=>!Number.isInteger(r[4])))throw new Error('微波目标温度须为整数℃');rows.forEach(r=>microwaveHoldSeconds(r[5]!));return{rows:rows.flatMap(r=>Array.from({length:numeric(repeats.value)},()=>r)),counts:axes.value.map(a=>valuesFor(a).length),error:''}}catch(e){return{rows:[] as number[][],counts:[] as number[],error:String(e)}}})
 function goBack(i:number){if(i>=0&&i<=stage.value){stage.value=i;error.value=''}}
 const fieldErrors=ref<Record<string,string>>({})
 type FieldIssue={key:string;stage:number;message:string}
@@ -160,7 +162,7 @@ function fieldIssues(through:number):FieldIssue[]{
  const add=(key:string,page:number,message:string)=>issues.push({key,stage:page,message})
  if(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(experimentName.value)||Array.from(experimentName.value.trim()).length<1||Array.from(experimentName.value.trim()).length>80)add('experimentName',0,'请填写 1–80 个字符的实验名称，不含换行或控制字符')
  axes.value.slice(0,Math.min(through+1,3)*2).forEach((a,i)=>{
-  try{const values=valuesFor(a);if(values.some(v=>i===2||i===3?v<=0:v<0))throw new Error('请填写有效数值');if(i===5)values.forEach(microwaveHoldSeconds)}catch(e){add(a.key,Math.floor(i/2),(e as Error).message)}
+  try{const values=valuesFor(a);if(values.some(v=>i===2||i===3?v<=0:v<0))throw new Error('请填写有效数值');if(i===4&&values.some(v=>!Number.isInteger(v)))throw new Error('微波目标温度须为整数℃');if(i===5)values.forEach(microwaveHoldSeconds)}catch(e){add(a.key,Math.floor(i/2),(e as Error).message)}
  })
  if(through>=1)for(const [key,value] of [['speedA',speedA.value],['speedB',speedB.value]] as const)if(!Number.isInteger(value)||numeric(value)<5||numeric(value)>5000)add(key,1,'速度须为 5–5000 的整数步频')
  if(through>=3)for(const f of fixed.value.filter(f=>through>=4||['drainFlow','productTime'].includes(f.key))){
@@ -382,7 +384,7 @@ async function startBatch(){
  try{
   const key=requestKey.value
   if(startBlockReason.value)throw new Error(startBlockReason.value)
-  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，等待设定加热时间结束且稳定到温，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
+  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，两路稳定到温后等待设定脱气时间，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data

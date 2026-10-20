@@ -22,6 +22,9 @@ class ActivityProgress:
         self.reference = False
         self.stable_seconds = 0.0
         self.stable_required = None
+        self.qualified_seconds = None
+        self.hold_in_band = None
+        self.hold_timeout_seconds = None
         self.readings = []
         self.devices = {}
         self.frozen = None
@@ -58,9 +61,12 @@ class ActivityProgress:
             return copy.deepcopy(self.frozen)
         now = time.monotonic() if self.reference else self.clock()
         elapsed = max(0, now - self.started) if self.started is not None else None
+        credited = self.qualified_seconds if self.qualified_seconds is not None else elapsed
         return dict(step_id=self.step_id, state=self.state, wait_type=self.wait_type,
             elapsed_seconds=elapsed, duration_seconds=self.duration,
-            remaining_seconds=max(0, self.duration - elapsed) if self.duration is not None and elapsed is not None else None,
+            remaining_seconds=max(0, self.duration - credited) if self.duration is not None and credited is not None else None,
+            qualified_seconds=self.qualified_seconds, hold_in_band=self.hold_in_band,
+            hold_timeout_seconds=self.hold_timeout_seconds,
             reference=self.reference, stable_seconds=self.stable_seconds,
             stable_required_seconds=self.stable_required, readings=copy.deepcopy(self.readings),
             devices=copy.deepcopy(self.devices))
@@ -106,6 +112,8 @@ def guided_activity(step, observation):
             activity["feeds"] = [{key: feed[key] for key in ("device_id", "volume", "unit")} for feed in params["feeds"]]
     elif sid.startswith("microwave_") or sid == "hold":
         activity.update(stage="reaction", title={"hold": "微波反应保温", "microwave_start": "等待微波反应液升温", "microwave_stop": "正在停止微波", "microwave_config": "设置微波反应条件"}.get(sid, "微波反应"), description="物料到温后计时保温，结束后确认停止微波。前驱体加热器持续保温。")
+        if sid == "hold" and observation.get("qualified_seconds") is not None:
+            activity["description"] = "目标 ±3℃ 内累计有效保温，越界暂停累计、回温后继续；最多额外等待10分钟。前驱体持续保温。"
     elif sid.startswith("clean_"):
         parts = sid.split("_")
         cycle = int(parts[1]) + 1

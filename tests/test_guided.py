@@ -144,18 +144,18 @@ class FakeManager:
         self.calls.append(("microwave_config", did))
         return True
 
-    def start_microwave(self, did, mode):
+    def start_microwave(self, did, mode, **kwargs):
         self.microwave_on = True
         self.calls.append(("microwave_start", did))
         return True
 
-    def stop_microwave(self, did):
+    def stop_microwave(self, did, **kwargs):
         self.microwave_on = False
         self.calls.append(("microwave_stop", did))
         return True
 
     def read_microwave_data(self, did):
-        return {"material_temperature": self.temperature, "fault_code": 0,
+        return {"material_temperature": self.temperature, "fault_code": 0, "status_confirmed": True,
                 "output_active": self.microwave_on, "control_active": self.microwave_on,
                 "stop_confirmed": not self.microwave_on}
 

@@ -53,6 +53,43 @@ class StepExecutor:
         self._activity_step = None
         self._activity_children = []
         self._cleanup_count = 0
+        self._microwave_event_cursors = {}
+        self.microwave_event_recorder = None
+        self._step_microwave_events = []
+
+    def begin_microwave_diagnostics(self, steps):
+        self._microwave_event_cursors = {}
+        getter = getattr(self._dm, "get_microwave_events", None)
+        if not callable(getter):
+            return
+        ids = {s.params.get("device_id") or s.wait.device_id for s in steps
+               if s.type.value.startswith("microwave.") or s.wait.type.value.startswith("microwave_")}
+        for device_id in ids:
+            result = getter(device_id)
+            if isinstance(result, tuple) and len(result) == 2:
+                self._microwave_event_cursors[device_id] = result[0]
+
+    def capture_microwave_events(self, device_id=None):
+        getter = getattr(self._dm, "get_microwave_events", None)
+        if not callable(getter):
+            return []
+        events = []
+        for did in ([device_id] if device_id else list(self._microwave_event_cursors)):
+            result = getter(did, self._microwave_event_cursors.get(did, 0))
+            if not isinstance(result, tuple) or len(result) != 2:
+                continue
+            self._microwave_event_cursors[did], new_events = result
+            events.extend(new_events)
+        if events and callable(self.microwave_event_recorder):
+            self.microwave_event_recorder(events)
+        self._step_microwave_events.extend(events)
+        return events
+
+    async def _read_microwave_data(self, device_id):
+        try:
+            return await asyncio.to_thread(self._dm.read_microwave_data, device_id)
+        finally:
+            self.capture_microwave_events(device_id)
 
     async def reserve_valves(self, steps):
         ids = {s.params["device_id"] for s in steps if s.enabled and s.type == ActionType.VALVE_SWITCH}
@@ -175,6 +212,7 @@ class StepExecutor:
 
     async def execute(self, step: ExperimentStep) -> bool:
         self._activity_step = step
+        self._step_microwave_events = []
         self.activity.reset(step)
         self._activity_children = []
         success = False
@@ -182,7 +220,23 @@ class StepExecutor:
             success = await self._execute(step)
             return success
         finally:
+            if not success:
+                # Cleanup commands may replace the driver's last command error.
+                self._last_error = self.last_error
+                self._current_step = None
+            if step.type.value.startswith("microwave."):
+                self.capture_microwave_events(step.params.get("device_id"))
+            if self._step_microwave_events:
+                self.last_device_result = dict(self.last_device_result or {},
+                    microwave_events=list(self._step_microwave_events))
             self.activity.finish(success)
+            if step.wait.type == WaitType.MICROWAVE_MONITORED_HOLD:
+                snapshot = self.activity.snapshot()
+                self.last_device_result = dict(self.last_device_result or {}, hold_summary=dict(
+                    target_temperature=step.wait.target_temperature, tolerance=step.wait.tolerance,
+                    seconds=step.wait.seconds, timeout=step.wait.timeout,
+                    **{key: snapshot[key] for key in (
+                        "elapsed_seconds", "qualified_seconds", "hold_in_band", "state")}))
 
     async def _execute(self, step: ExperimentStep) -> bool:
         """执行一个步骤
@@ -327,10 +381,8 @@ class StepExecutor:
             elif step.type == ActionType.MICROWAVE_START:
                 self._active_microwaves.add(step.params["device_id"])
                 result = await loop.run_in_executor(
-                    None,
-                    self._dm.start_microwave,
-                    step.params["device_id"],
-                    step.params["mode"],
+                    None, lambda: self._dm.start_microwave(
+                        step.params["device_id"], step.params["mode"], should_stop=self._should_stop),
                 )
                 if not result:
                     logger.error(f"Step {step.id}: start_microwave returned False")
@@ -338,7 +390,7 @@ class StepExecutor:
 
             elif step.type == ActionType.MICROWAVE_STOP:
                 result = await loop.run_in_executor(
-                    None, self._dm.stop_microwave, step.params["device_id"]
+                    None, lambda: self._dm.stop_microwave(step.params["device_id"], source="experiment_step")
                 )
                 if not result:
                     logger.error(f"Step {step.id}: stop_microwave returned False")
@@ -477,6 +529,9 @@ class StepExecutor:
                 return False
 
             if step.wait.type != WaitType.NONE:
+                if step.wait.type in {WaitType.MICROWAVE_TEMPERATURE_REACHED, WaitType.MICROWAVE_TEMPERATURE_BELOW}:
+                    # The action succeeded; subsequent failures belong to its temperature wait.
+                    self._current_step = None
                 if not await self._wait_condition(step.wait):
                     return False
 
@@ -541,14 +596,14 @@ class StepExecutor:
             self.activity.device(device_id, self.last_device_result)
         return success and stopped and not self._should_stop()
 
-    async def stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
+    async def stop_active_devices(self, *, preserve_heaters: bool = False, source="failure_cleanup") -> bool:
         self._cleanup_count += 1
         try:
-            return await self._stop_active_devices(preserve_heaters=preserve_heaters)
+            return await self._stop_active_devices(preserve_heaters=preserve_heaters, source=source)
         finally:
             self._cleanup_count -= 1
 
-    async def _stop_active_devices(self, *, preserve_heaters: bool = False) -> bool:
+    async def _stop_active_devices(self, *, preserve_heaters: bool = False, source="failure_cleanup") -> bool:
         """Stop attempted devices; successful guided groups may retain batch heaters."""
         self._pump_start_confirmed.clear()
         loop = asyncio.get_running_loop()
@@ -607,7 +662,7 @@ class StepExecutor:
         for device_id in list(self._active_microwaves):
             try:
                 stopped = await loop.run_in_executor(
-                    None, self._dm.stop_microwave, device_id
+                    None, lambda did=device_id: self._dm.stop_microwave(did, source=source)
                 )
             except Exception as e:
                 logger.error(f"Failed to stop active microwave {device_id}: {e}")
@@ -616,6 +671,7 @@ class StepExecutor:
                 self._active_microwaves.discard(device_id)
             else:
                 success = False
+            self.capture_microwave_events(device_id)
 
         if success and self.release_resources_on_cleanup:
             await self.release_valves()
@@ -784,10 +840,10 @@ class StepExecutor:
         return False
 
     def _valid_microwave_state(self, data, *, require_control=True):
-        if (data.get("read_ok") is False or data.get("fault_code") != 0
+        if (("read_ok" in data and data["read_ok"] is not True) or data.get("fault_code") != 0
                 or not _is_nonnegative_finite_number(data.get("material_temperature"))
                 or (data.get("control_active") is not True and data.get("control_active") is not False)
-                or data.get("status_confirmed") is False
+                or data.get("status_confirmed") is not True
                 or (require_control and data.get("control_active") is not True)):
             self._last_error = "微波故障、温度无效、状态读取失败或提前退出控制"
             return False
@@ -798,40 +854,101 @@ class StepExecutor:
                 or condition.seconds != round(condition.seconds)):
             self._last_error = "微波保护保温必须指定设备并使用非负整秒"
             return False
+        supervised = condition.target_temperature is not None
+        if supervised and (not _is_nonnegative_finite_number(condition.target_temperature)
+                or not _is_nonnegative_finite_number(condition.tolerance)
+                or not _is_nonnegative_finite_number(condition.timeout)
+                or condition.timeout <= 0 or condition.timeout < condition.seconds):
+            self._last_error = "微波温度保温必须使用有效目标、容差及不小于保温时长的正超时"
+            return False
+        budget_getter = getattr(self._dm, "microwave_read_budget", None)
+        budget = budget_getter(condition.device_id) if callable(budget_getter) else 7.0
+        if not _is_nonnegative_finite_number(budget) or budget <= 0:
+            budget = 7.0
         started = self._wait_clock()
         self.activity.started = started
+        self.activity.qualified_seconds = 0.0 if supervised else None
+        self.activity.hold_timeout_seconds = condition.timeout if supervised else None
+        previous_sample = None
+        previous_in_band = False
+        pause_generation = self._pause_generation
         while True:
             if self._should_stop():
                 return False
             paused = await self._wait_for_resume()
             if paused is None:
                 return False
+            if pause_generation != self._pause_generation:
+                previous_sample = None
+                pause_generation = self._pause_generation
             next_poll = self._wait_clock() + 1.0
             try:
-                data = await asyncio.to_thread(self._dm.read_microwave_data, condition.device_id)
+                read_started = time.monotonic()
+                data = await self._read_microwave_data(condition.device_id)
+                read_duration = time.monotonic() - read_started
+                sampled = self._wait_clock()
                 self.last_device_result = data
                 self.activity.device(condition.device_id, data)
-                self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": None}],
-                    {condition.device_id: data.get("material_temperature") if data.get("read_ok") is not False else None})
+                self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": condition.target_temperature}],
+                    {condition.device_id: data.get("material_temperature") if data.get("read_ok") is not False else None},
+                    condition.tolerance if supervised else None)
                 if not self._valid_microwave_state(data, require_control=False):
                     return False
-                remaining = condition.seconds - (self._wait_clock() - started)
-                if data.get("control_active") is False and remaining > 1.0:
-                    self._last_error = (f"微波仪提前退出控制，保温失败：已保温 {condition.seconds - remaining:.1f} 秒，"
-                                        f"剩余 {remaining:.1f} 秒；控制字={data.get('control_word')}，"
+                elapsed = sampled - started
+                if data.get("control_active") is not True:
+                    credited = self.activity.qualified_seconds if supervised else elapsed
+                    stop_event = next((event for event in reversed(self._step_microwave_events)
+                                       if event.get("action") == "stop"), None)
+                    source = (f"本系统最近STOP请求来源={stop_event['source']}" if stop_event else
+                              "设备侧退出或外部来源未确认")
+                    self._last_error = (f"微波仪提前退出控制，保温失败：已保温 {credited:.1f} 秒，"
+                                        f"剩余 {max(0, condition.seconds-credited):.1f} 秒；控制字={data.get('control_word')}，"
                                         f"当前段={data.get('current_segment')}，设备运行秒数={data.get('runtime_seconds')}，"
-                                        f"故障码={data.get('fault_code')}")
+                                        f"故障码={data.get('fault_code')}；{source}")
                     return False
                 if self._should_stop():
                     return False
-                if remaining <= 0:
+                if pause_generation != self._pause_generation:
+                    previous_sample = None
+                    pause_generation = self._pause_generation
+                if read_duration > budget or (previous_sample is not None and sampled-previous_sample > budget):
+                    self._last_error = f"微波保温状态超过通讯预算 {budget:g} 秒，不能确认有效保温"
+                    return False
+                if self._is_paused():
+                    previous_sample = None
+                    continue
+                if supervised:
+                    in_band = abs(data['material_temperature']-condition.target_temperature) <= condition.tolerance
+                    self.activity.hold_in_band = in_band
+                    if elapsed > condition.timeout:
+                        self._last_error = f"微波保温超时：已等待 {elapsed:.1f} 秒，上限 {condition.timeout:g} 秒"
+                        return False
+                    if previous_sample is not None and previous_in_band and in_band:
+                        self.activity.qualified_seconds = min(condition.seconds,
+                            self.activity.qualified_seconds + max(0, sampled-previous_sample))
+                    remaining = condition.seconds - self.activity.qualified_seconds
+                    if remaining <= 0 and in_band:
+                        return True
+                    if elapsed >= condition.timeout:
+                        self._last_error = (f"微波保温超时：有效保温 {self.activity.qualified_seconds:.1f}/{condition.seconds:g} 秒，"
+                                            f"已等待 {elapsed:.1f} 秒；目标 {condition.target_temperature:g}±{condition.tolerance:g}℃，"
+                                            f"末次温度 {data['material_temperature']:g}℃")
+                        return False
+                    previous_in_band = in_band
+                else:
+                    remaining = condition.seconds - elapsed
+                if not supervised and remaining <= 0:
                     return True
+                previous_sample = sampled
             except Exception as exc:
                 self.activity.device(condition.device_id, {"read_ok": False})
                 self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": None}], {})
                 self._last_error = "微波保温状态读取失败：" + str(exc)
                 return False
-            paused = await self._pause_aware_sleep(min(max(0, next_poll - self._wait_clock()), remaining))
+            sleep_seconds = min(max(0, next_poll - self._wait_clock()), remaining if remaining > 0 else 1)
+            if supervised:
+                sleep_seconds = min(sleep_seconds, max(0, condition.timeout-(self._wait_clock()-started)))
+            paused = await self._pause_aware_sleep(sleep_seconds)
             if paused is None:
                 return False
 
@@ -980,6 +1097,24 @@ class StepExecutor:
         elif condition.type in {WaitType.MICROWAVE_TEMPERATURE_REACHED, WaitType.MICROWAVE_TEMPERATURE_BELOW}:
             cooling = condition.type == WaitType.MICROWAVE_TEMPERATURE_BELOW
             target_temperature = condition.target_temperature
+            last_data = {}
+
+            def timed_out():
+                elapsed = self._wait_clock() - start_time
+                if elapsed <= condition.timeout:
+                    return False
+                temperature = last_data.get("material_temperature")
+                temperature_text = f"{temperature:g}℃" if _is_nonnegative_finite_number(temperature) else "未知"
+                target_text = f"≤{target_temperature:g}℃" if cooling else f"{target_temperature:g}±{condition.tolerance:g}℃"
+                self._last_error = (
+                    f"微波{'降温' if cooling else '到温'}等待超时：目标 {target_text}，"
+                    f"最后温度 {temperature_text}，已等待 {elapsed:.1f} 秒（上限 {condition.timeout:g} 秒）；"
+                    f"控制状态={last_data.get('control_active', '未知')}，"
+                    f"控制字={last_data.get('control_word', '未知')}"
+                )
+                logger.warning(self._last_error)
+                return True
+
             logger.info(
                 f"Waiting for microwave {condition.device_id} to reach "
                 f"{target_temperature}C (tolerance={condition.tolerance}C, "
@@ -992,14 +1127,12 @@ class StepExecutor:
                 paused_duration = await self._wait_for_resume()
                 if paused_duration is None:
                     return False
-                elapsed = self._wait_clock() - start_time
-                if elapsed > condition.timeout:
-                    logger.warning(f"Microwave temperature wait timeout after {condition.timeout}s")
+                if timed_out():
                     return False
                 try:
-                    data = await loop.run_in_executor(
-                        None, self._dm.read_microwave_data, condition.device_id
-                    )
+                    data = await self._read_microwave_data(condition.device_id)
+                    last_data = data
+                    self.activity.device(condition.device_id, data)
                     material_temperature = data.get("material_temperature")
                     self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": target_temperature}],
                         {condition.device_id: material_temperature if data.get("read_ok") is not False else None}, None if cooling else condition.tolerance)
@@ -1010,20 +1143,25 @@ class StepExecutor:
                         return False
                     if self._is_paused():
                         continue
-                    if self._wait_clock() - start_time > condition.timeout:
+                    if timed_out():
                         return False
                     if cooling:
-                        if data.get("read_ok") is False or data.get("fault_code", 0) != 0 or data.get("output_active") is True:
-                            self._last_error = "Cooling wait failed: microwave read/fault/output state"
+                        if (data.get("read_ok") is False or data.get("fault_code") != 0
+                                or data.get("status_confirmed") is not True
+                                or data.get("control_active") is not False
+                                or data.get("output_active") is not False
+                                or data.get("stop_confirmed") is not True):
+                            self._last_error = "微波降温检查失败：读取、故障状态或停止状态未确认，禁止排液"
                             return False
                         if not _is_nonnegative_finite_number(material_temperature):
+                            self._last_error = "微波降温检查失败：物料温度无效，禁止排液"
                             logger.error("Cooling wait failed: invalid material temperature")
                             return False
                         if self._should_stop():
                             return False
                         if self._is_paused():
                             continue
-                        if self._wait_clock() - start_time > condition.timeout:
+                        if timed_out():
                             return False
                         if material_temperature <= target_temperature:
                             logger.info(f"Cooling complete: {material_temperature}C <= {target_temperature}C")
@@ -1038,6 +1176,7 @@ class StepExecutor:
                         )
                         return True
                 except Exception as e:
+                    self.activity.device(condition.device_id, {"read_ok": False})
                     self.activity.temperatures([{"device_id": condition.device_id, "target_temperature": target_temperature}], {})
                     logger.warning(
                         f"Microwave temperature wait read failed for "
@@ -1067,9 +1206,7 @@ class StepExecutor:
                     logger.warning(f"Microwave complete wait timeout after {condition.timeout}s")
                     return False
                 try:
-                    data = await loop.run_in_executor(
-                        None, self._dm.read_microwave_data, condition.device_id
-                    )
+                    data = await self._read_microwave_data(condition.device_id)
                     if data.get("fault_code"):
                         self._last_error = f"Microwave fault: {data['fault_code']}"
                         return False

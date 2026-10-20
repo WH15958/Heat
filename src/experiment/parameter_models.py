@@ -88,13 +88,13 @@ class MicrowaveSegmentRequest(BaseModel):
     """微波仪段参数请求"""
     segment: int = Field(strict=True, ge=1, le=MAX_SEGMENTS)
     heating_temperature: float = Field(
-        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False
+        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False, multiple_of=1
     )
     target_temperature: Optional[float] = Field(
-        default=None, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False
+        default=None, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False, multiple_of=1
     )
     holding_temperature: float = Field(
-        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False
+        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False, multiple_of=1
     )
     heating_power_percent: Optional[int] = Field(
         default=None, strict=True, ge=0, le=100
@@ -103,7 +103,7 @@ class MicrowaveSegmentRequest(BaseModel):
         default=None, strict=True, ge=0, le=100
     )
     holding_deviation: float = Field(
-        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False
+        default=0.0, strict=True, ge=0, le=0xFFFF, allow_inf_nan=False, multiple_of=1
     )
     hours: int = Field(default=0, strict=True, ge=0, le=0xFFFF)
     minutes: int = Field(default=0, strict=True, ge=0, le=0xFFFF)

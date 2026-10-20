@@ -1122,7 +1122,7 @@ async function startMicrowave(id: string) {
   microwave.starting = true
   try {
     await ElMessageBox.confirm(
-      '启动电脑托管程序，共 ' + microwave.usedSegments + ' 个逻辑段。后端将逐段配置温度、启动、等待到温、计时保温并确认停止，再进入下一段；段间会短暂停机。无需在触摸屏设置执行范围。\n本流程会覆盖设备五个硬件段的参数，运行期间须保持后端服务运行并有人看护。\n请确认炉门关闭、反应瓶非空载、探头没入物料，当前串口 ' + microwaveConnectionPort(id) + ' 对应目标设备。',
+      '启动电脑托管程序，共 ' + microwave.usedSegments + ' 个逻辑段。后端将逐段配置温度、启动、等待到温、计时保温并确认停止，再进入下一段；段间会短暂停机。设备方案与执行范围须现场核对。\n本流程会覆盖设备五个硬件段的参数，运行期间须保持后端服务运行并有人看护。\n请确认炉门关闭、反应瓶非空载、探头没入物料，当前串口 ' + microwaveConnectionPort(id) + ' 对应目标设备。',
       '微波仪启动确认',
       {
         confirmButtonText: '确认启动托管程序',

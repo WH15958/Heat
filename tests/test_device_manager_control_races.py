@@ -25,7 +25,7 @@ class _FakeControlDevice:
                 raise TimeoutError("test did not release pending start")
         return True
 
-    def start(self, *_args):
+    def start(self, *_args, **kwargs):
         self.start_calls += 1
         return True
 
@@ -195,7 +195,7 @@ class _BlockingMicrowave(_FakeControlDevice):
         self.calls.append("configure.end")
         return True
 
-    def start(self, *_args):
+    def start(self, *_args, **kwargs):
         self.calls.append("start")
         return True
 

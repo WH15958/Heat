@@ -69,6 +69,7 @@ class ExperimentRun:
     steps: List[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
     sensor_data: dict = field(default_factory=lambda: {"heaters": {}, "pumps": {}, "microwaves": {}})
+    microwave_events: List[dict] = field(default_factory=list)
     persistence_status: str = "pending"
     log_saved: Optional[bool] = None
     sample_record_saved: Optional[bool] = None
@@ -93,6 +94,16 @@ class ExperimentLogger:
 
     def on_log(self, callback: Callable):
         self._on_log = callback
+
+    def record_microwave_events(self, events):
+        if self._active_run and events:
+            self._active_run.microwave_events.extend(events)
+            # Recovery cleanup can add evidence after the run was finalized.
+            if self._active_run.finished_at and not self._save_to_file():
+                self._active_run.log_saved = False
+                self._active_run.persistence_status = "error"
+                if "microwave_diagnostics_not_saved" not in self._active_run.persistence_errors:
+                    self._active_run.persistence_errors.append("microwave_diagnostics_not_saved")
 
     def record_sensor_data(self, realtime_payload: dict):
         if not self._active_run or realtime_payload is None:
@@ -187,7 +198,9 @@ class ExperimentLogger:
                 }
             microwave_series = self._active_run.sensor_data["microwaves"][mid]
             recorded = False
-            for key in ("material_temperature", "power_percent", "current", "runtime_seconds"):
+            for key in ("material_temperature", "power_percent", "current", "runtime_seconds",
+                        "control_word", "control_active", "output_active", "current_segment",
+                        "current_mode_code", "fault_code", "temperature_source", "status_confirmed"):
                 value = mdata.get(key)
                 if value is None:
                     continue
