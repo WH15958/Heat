@@ -12,7 +12,7 @@
     </section>
     <div class="emergency-bar">
       <div class="emergency-description"><strong>全局设备控制</strong><span>停止所有已注册设备</span></div>
-      <el-button type="danger" size="large" @click="emergencyStop" class="emergency-button">
+      <el-button type="danger" plain size="large" @click="emergencyStop" class="emergency-button">
         紧急停止所有设备
       </el-button>
     </div>
