@@ -170,8 +170,8 @@
           <template #header>
             <div class="card-header">
               <span>加热器实时温度曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              <el-tag :type="wsConnected ? 'success' : transportConnected ? 'warning' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : transportConnected ? '已连接，等待数据更新' : '数据连接断开' }}
               </el-tag>
             </div>
           </template>
@@ -183,8 +183,8 @@
           <template #header>
             <div class="card-header">
               <span>微波合成仪物料温度曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              <el-tag :type="wsConnected ? 'success' : transportConnected ? 'warning' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : transportConnected ? '已连接，等待数据更新' : '数据连接断开' }}
               </el-tag>
             </div>
           </template>
@@ -196,8 +196,8 @@
           <template #header>
             <div class="card-header">
               <span>实时流量曲线</span>
-              <el-tag :type="wsConnected ? 'success' : 'danger'" size="small">
-                {{ wsConnected ? '数据连接正常' : '数据连接断开' }}
+              <el-tag :type="wsConnected ? 'success' : transportConnected ? 'warning' : 'danger'" size="small">
+                {{ wsConnected ? '数据连接正常' : transportConnected ? '已连接，等待数据更新' : '数据连接断开' }}
               </el-tag>
             </div>
           </template>
@@ -224,7 +224,7 @@ import microwaveArtwork from '../assets/theme/microwave.webp'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 
-const { data: realtimeData, fresh: wsConnected } = useWebSocket()
+const { monitorData: realtimeData, monitorFresh: wsConnected, connected: transportConnected } = useWebSocket()
 
 function heaterStatusLabel(status?: string): string {
   return ({ RUN: '运行', STOP: '停止', HOLD: '保持' } as Record<string, string>)[status || ''] || '状态未知'
@@ -468,6 +468,7 @@ function initCharts() {
       if (heaterTempChart) heaterTempChart.dispose()
       heaterTempChart = init(heaterTempChartRef.value, undefined, { width: heaterTempChartRef.value.clientWidth || 400, height: 350 })
       heaterTempChart.setOption({
+        animation: false,
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0, type: 'scroll' },
         grid: { left: 60, right: 20, top: 60, bottom: 35 },
@@ -480,6 +481,7 @@ function initCharts() {
       if (microwaveTempChart) microwaveTempChart.dispose()
       microwaveTempChart = init(microwaveTempChartRef.value, undefined, { width: microwaveTempChartRef.value.clientWidth || 400, height: 350 })
       microwaveTempChart.setOption({
+        animation: false,
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0, type: 'scroll' },
         grid: { left: 60, right: 20, top: 60, bottom: 35 },
@@ -492,6 +494,7 @@ function initCharts() {
       if (flowChart) flowChart.dispose()
       flowChart = init(flowChartRef.value, undefined, { width: flowChartRef.value.clientWidth || 400, height: 350 })
       flowChart.setOption({
+        animation: false,
         tooltip: { trigger: 'axis' },
         legend: { data: [], top: 0, type: 'scroll' },
         grid: { left: 60, right: 20, top: 60, bottom: 35 },

@@ -38,10 +38,10 @@ class Manager(FakeManager):
 
     configure_microwave_manual = configure_microwave_auto_power
 
-    def start_microwave(self, did, mode):
+    def start_microwave(self, did, mode, **kwargs):
         return super().start_microwave(did, mode) and self.start_ok
 
-    def stop_microwave(self, did):
+    def stop_microwave(self, did, **kwargs):
         self.calls.append(('microwave_stop', did))
         if self.stop_ok:
             self.microwave_on = False
@@ -97,7 +97,7 @@ def test_host_stages_stop_between_targets_and_replace_all_five_slots(mode):
         assert [c[0] for c in dm.calls] == ['microwave_config', 'microwave_start', 'microwave_stop'] * 2
         assert [[s.segment for s in config] for config in dm.configurations] == [list(range(1, 6))] * 2
         assert [{s.heating_temperature for s in config} for config in dm.configurations] == [{30}, {40}]
-        assert all(s.hours == 0 and s.minutes == 11 and s.seconds == 0 for config in dm.configurations for s in config)
+        assert all(s.hours == 0 and s.minutes == 21 and s.seconds == 0 for config in dm.configurations for s in config)
         record = program.stored_records({run.record['program_id']: run})[0]
         assert record['current_stage'] == 2
         assert record['state'] == 'completed'
@@ -116,8 +116,8 @@ def test_failure_stops_and_blocks_next_stage(failure):
             setattr(dm, failure + '_ok', False)
         else:
             original = dm.start_microwave
-            def start(*args):
-                result = original(*args)
+            def start(*args, **kwargs):
+                result = original(*args, **kwargs)
                 dm.fail_read = True
                 return result
             dm.start_microwave = start
@@ -168,6 +168,7 @@ def test_previews_reads_and_invalid_requests_never_write_hardware():
         assert client.get('/api/microwave-program/microwave1/current').json()['state'] == 'idle'
         for mutation in [dict(mode='constant_rate'), dict(stages=[]), dict(hardware_confirmed=False),
                          dict(stages=[dict(temperature=301, hold_seconds=1)]),
+                         dict(stages=[dict(temperature=30.9, hold_seconds=1)]),
                          dict(stages=[dict(temperature=30, hold_seconds=.5)])]:
             body = {**spec().model_dump(), **mutation}
             assert client.post('/api/microwave-program/microwave1/start', json=body).status_code in (409, 422)
@@ -221,7 +222,7 @@ def test_supported_stage_counts_and_custom_guard(count):
                 heating_timeout=37)
     steps = program.compile_steps('microwave1', program.ProgramRequest(**body))
     assert len(steps) == count * 4
-    assert steps[0].params['segments'][0]['minutes'] == 3
+    assert steps[0].params['segments'][0]['minutes'] == 13
     assert steps[0].params['segments'][0]['seconds'] == 40
     assert steps[1].wait.timeout == 37
     assert steps[2].wait.seconds == 123
@@ -295,6 +296,9 @@ def test_heating_timeout_stops_and_locks():
         await asyncio.wait_for(run.task, 3)
         assert run.state.value == 'failed' and run.record['recovery_required']
         assert len(dm.configurations) == 1 and not dm.microwave_on
+        assert '微波到温等待超时' in run.record['error']
+        assert '最后温度 20℃' in run.record['error']
+        assert 'microwave.start failed' not in run.record['error']
     asyncio.run(scenario())
 
 
@@ -401,7 +405,7 @@ def test_host_parameters_reach_known_registers_with_readback(mode):
     assert method(step.params['segments'])
     if mode == 'auto_power':
         assert [addr for _, addr, _ in protocol.multi_writes] == [auto_power_segment_start(n) for n in range(1, 6)]
-        assert all(values == [30, 30, 0, 11, 0] for _, _, values in protocol.multi_writes)
+        assert all(values == [30, 30, 0, 21, 0] for _, _, values in protocol.multi_writes)
     else:
         assert [addr for _, addr, _ in protocol.multi_writes] == [
             addr for n in range(1, 6) for addr in (manual_segment_start(n), manual_hold_time_start(n))]

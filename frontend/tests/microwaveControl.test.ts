@@ -71,7 +71,7 @@ test('preview checks logical stages without motion; cancellation sends no start;
     p.confirmation(async () => { throw 'cancel' })
     await p.state.startMicrowave('microwave1')
     assert.equal(p.calls.length, 1)
-    assert.match(p.dialogs.at(-1)!, /无需在触摸屏设置执行范围/)
+    assert.match(p.dialogs.at(-1)!, /设备方案与执行范围须现场核对/)
     p.confirmation(async () => {})
     await p.state.startMicrowave('microwave1')
     assert.equal(p.calls.filter(c => c[0] === 'start').length, 1)
@@ -80,6 +80,21 @@ test('preview checks logical stages without motion; cancellation sends no start;
     assert.equal(program.microwaveProgramConfigured(p.microwave), false)
     await p.state.startMicrowave('microwave1')
     assert.equal(p.calls.filter(c => c[0] === 'start').length, 1)
+  } finally { p.dispose() }
+})
+
+test('fractional temperature is rejected before preview or start without rounding', async () => {
+  const p = page()
+  try {
+    p.microwave.segments[2].temperature = 50.9
+    await p.state.configureMicrowave('microwave1')
+    await p.state.startMicrowave('microwave1')
+    assert.equal(p.calls.length, 0)
+    assert.equal(p.microwave.segments[2].temperature, 50.9)
+    assert.match(p.errors[0]!, /第 2 段温度须为整数/)
+    p.microwave.segments[2].temperature = 50.0
+    await p.state.configureMicrowave('microwave1')
+    assert.equal(p.calls[0]![2].stages[1].temperature, 50)
   } finally { p.dispose() }
 })
 

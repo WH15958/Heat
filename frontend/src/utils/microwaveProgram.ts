@@ -25,6 +25,9 @@ export function microwaveProgramPayload(program: MicrowaveProgram): MicrowaveSeg
   }
   return Array.from({ length: program.usedSegments }, (_, index) => {
     const segment = program.segments[index + 1]
+    if (segment && !Number.isInteger(segment.temperature)) {
+      throw new Error(`第 ${index + 1} 段温度须为整数℃`)
+    }
     const inRange = (value: number, max: number) => Number.isFinite(value) && value >= 0 && value <= max
     if (!segment || segment.segment !== index + 1 || !inRange(segment.temperature, 300)
         || ![segment.hours, segment.minutes, segment.seconds].every(Number.isInteger)

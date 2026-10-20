@@ -1,4 +1,6 @@
 import math
+import copy
+from datetime import datetime, timezone
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -39,6 +41,9 @@ class DeviceManager:
         self._pump_stop_generations: Dict[str, int] = {}
         self._microwave_locks: Dict[str, threading.Lock] = {}
         self._microwave_stop_generations: Dict[str, int] = {}
+        self._microwave_events = {}
+        self._microwave_event_sequences = {}
+        self._microwave_observations = {}
         self._pump_channel_index: Dict[str, int] = {}
         self._pump_channel_cache: Dict[str, Dict[str, dict]] = {}
         self._global_stop_depth = 0
@@ -564,7 +569,8 @@ class DeviceManager:
         self._request_microwave_stop(device_id)
         with self._microwave_control_lock(device_id):
             return self._stop_and_disconnect(
-                "microwave", device_id, microwave, microwave.stop, "Disconnect"
+                "microwave", device_id, microwave,
+                lambda: self._stop_microwave_command(device_id, "disconnect"), "Disconnect"
             )
 
     def read_heater_data(self, device_id: str) -> dict:
@@ -672,8 +678,71 @@ class DeviceManager:
             raise ValueError(f"Microwave not found: {device_id}")
         if not microwave.is_connected():
             raise IOError("Device not connected")
-        data = microwave.read_data()
-        return self._microwave_payload(microwave, data.data)
+        try:
+            data = microwave.read_data()
+        except Exception as exc:
+            self._record_microwave_event(device_id, "read_failed", "observation", error=str(exc))
+            raise
+        payload = self._microwave_payload(microwave, data.data)
+        self._observe_microwave(device_id, payload)
+        return payload
+
+    def microwave_read_budget(self, device_id):
+        microwave = self._microwaves[device_id]
+        return 1.0 + 3.0 * microwave.config.timeout
+
+    def _record_microwave_event(self, device_id, action, source, **details):
+        with self._lock:
+            sequence = self._microwave_event_sequences.get(device_id, 0) + 1
+            self._microwave_event_sequences[device_id] = sequence
+            event = dict(sequence=sequence, device_id=device_id,
+                at=datetime.now(timezone.utc).isoformat(), action=action, source=source, **copy.deepcopy(details))
+            events = self._microwave_events.setdefault(device_id, [])
+            events.append(event)
+            del events[:-200]
+        logger.info("Microwave diagnostic: %s", event)
+
+    def get_microwave_events(self, device_id, after=None):
+        """Read memory only. None establishes a cursor without importing old events."""
+        with self._lock:
+            latest = self._microwave_event_sequences.get(device_id, 0)
+            events = self._microwave_events.get(device_id, [])
+            selected = [] if after is None else [event for event in events if event["sequence"] > after]
+            if after is not None and events and after < events[0]["sequence"]-1:
+                selected = [dict(device_id=device_id, action="diagnostic_gap", source="observation",
+                                 missing_before_sequence=events[0]["sequence"]), *selected]
+            return latest, copy.deepcopy(selected)
+
+    def _observe_microwave(self, device_id, payload):
+        keys = ("control_word", "control_active", "output_active", "current_segment",
+                "current_mode_code", "fault_code", "temperature_source", "status_confirmed")
+        state = {key: payload.get(key) for key in keys}
+        runtime = payload.get("runtime_seconds")
+        with self._lock:
+            previous = self._microwave_observations.get(device_id)
+            self._microwave_observations[device_id] = (state, runtime)
+        reset = bool(previous and isinstance(runtime, (int, float))
+                     and isinstance(previous[1], (int, float)) and runtime < previous[1])
+        if previous is None or previous[0] != state or reset:
+            self._record_microwave_event(device_id, "state_change", "observation", state=state,
+                runtime_seconds=runtime, runtime_reset=reset, material_temperature=payload.get("material_temperature"))
+
+    def _microwave_command_event(self, device_id, command, source, success):
+        microwave = self._microwaves[device_id]
+        result = getattr(microwave, "last_command_result", None)
+        error = getattr(microwave, "last_command_error", None)
+        self._record_microwave_event(device_id, command, source, success=success is True,
+            result=result if isinstance(result, dict) else None,
+            error=error if isinstance(error, str) else None)
+
+    def _stop_microwave_command(self, device_id, source, *, emergency=False):
+        microwave = self._microwaves[device_id]
+        success = False
+        try:
+            success = microwave.emergency_stop() if emergency else microwave.stop()
+            return success
+        finally:
+            self._microwave_command_event(device_id, "stop", source, success)
 
     def configure_microwave_manual(self, device_id: str, segments) -> bool:
         """配置微波仪手动功率模式参数"""
@@ -684,7 +753,12 @@ class DeviceManager:
             if not microwave.is_connected():
                 logger.warning(f"Microwave {device_id} not connected")
                 return False
-            return microwave.configure_manual(segments)
+            success = False
+            try:
+                success = microwave.configure_manual(segments)
+                return success
+            finally:
+                self._microwave_command_event(device_id, "configure_manual", "configuration", success)
 
     def configure_microwave_auto_power(self, device_id: str, segments) -> bool:
         """配置微波仪自动功率模式参数"""
@@ -695,7 +769,12 @@ class DeviceManager:
             if not microwave.is_connected():
                 logger.warning(f"Microwave {device_id} not connected")
                 return False
-            return microwave.configure_auto_power(segments)
+            success = False
+            try:
+                success = microwave.configure_auto_power(segments)
+                return success
+            finally:
+                self._microwave_command_event(device_id, "configure_auto_power", "configuration", success)
 
     def configure_microwave_constant_rate(self, device_id: str, segments) -> bool:
         """配置微波仪恒速率模式参数"""
@@ -706,30 +785,42 @@ class DeviceManager:
             if not microwave.is_connected():
                 logger.warning(f"Microwave {device_id} not connected")
                 return False
-            return microwave.configure_constant_rate(segments)
+            success = False
+            try:
+                success = microwave.configure_constant_rate(segments)
+                return success
+            finally:
+                self._microwave_command_event(device_id, "configure_constant_rate", "configuration", success)
 
-    def start_microwave(self, device_id: str, mode) -> bool:
+    def start_microwave(self, device_id: str, mode, *, should_stop=None) -> bool:
         """启动微波仪输出"""
         microwave = self._microwaves.get(device_id)
         if microwave is None:
             raise ValueError(f"Microwave not found: {device_id}")
         start_generation = self._microwave_start_generation(device_id)
-        if start_generation is None:
-            logger.warning(f"Microwave {device_id} start rejected during global stop")
+        if start_generation is None or (should_stop and should_stop()):
+            logger.warning(f"Microwave {device_id} start rejected by stop request")
             return False
         if not microwave.is_connected():
             logger.warning(f"Microwave {device_id} not connected")
             return False
         with self._microwave_control_lock(device_id):
-            if self._microwave_generation(device_id) != start_generation:
+            if self._microwave_generation(device_id) != start_generation or (should_stop and should_stop()):
                 logger.warning(f"Microwave {device_id} start superseded by stop request")
                 return False
             if not microwave.is_connected():
                 logger.warning(f"Microwave {device_id} not connected")
                 return False
-            return microwave.start(mode)
+            success = False
+            try:
+                success = microwave.start(mode, should_stop=lambda: (
+                    self._microwave_generation(device_id) != start_generation
+                    or bool(should_stop and should_stop())))
+                return success
+            finally:
+                self._microwave_command_event(device_id, "start", "start_request", success)
 
-    def stop_microwave(self, device_id: str) -> bool:
+    def stop_microwave(self, device_id: str, *, source="manual_stop") -> bool:
         """停止微波仪输出"""
         microwave = self._microwaves.get(device_id)
         if microwave is None:
@@ -739,7 +830,7 @@ class DeviceManager:
             if not microwave.is_connected():
                 logger.warning(f"Microwave {device_id} not connected")
                 return False
-            return microwave.stop()
+            return self._stop_microwave_command(device_id, source)
 
     def is_microwave_experiment_control_allowed(self, device_id: str) -> bool:
         """兼容旧调用：微波仪 YAML 自动控制当前始终允许。"""
@@ -849,7 +940,7 @@ class DeviceManager:
                         continue
                     attempted = True
                     device_attempted = True
-                    result = microwave.emergency_stop()
+                    result = self._stop_microwave_command(device_id, "emergency_stop", emergency=True)
                     report.append(self._stop_report("microwave", device_id, True, result))
                     if result is False:
                         success = False
@@ -1838,7 +1929,8 @@ class DeviceManager:
             self._request_microwave_stop(device_id)
             with self._microwave_control_lock(device_id):
                 device_success = self._cleanup_device(
-                    "microwave", device_id, microwave, microwave.stop
+                    "microwave", device_id, microwave,
+                    lambda did=device_id: self._stop_microwave_command(did, "service_cleanup")
                 )
             success = device_success and success
         return success

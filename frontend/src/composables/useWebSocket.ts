@@ -85,6 +85,17 @@ export interface RealtimeData {
 const sharedData = ref<RealtimeData | null>(null)
 const sharedConnected = ref(false)
 const sharedFresh = ref(false)
+// Read-only monitoring tolerates the measured 6–7s full-device sweep.
+// Control consumers retain the existing 6s expiry; transport loss clears both.
+const monitorData = ref<RealtimeData | null>(null)
+const monitorFresh = ref(false)
+let monitorTimer: ReturnType<typeof setTimeout> | null = null
+function invalidateMonitor() {
+  if (monitorTimer) clearTimeout(monitorTimer)
+  monitorTimer = null
+  monitorFresh.value = false
+  monitorData.value = null
+}
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let freshnessTimer: ReturnType<typeof setTimeout> | null = null
@@ -115,6 +126,7 @@ function connect() {
     if (ws !== socket) return
     sharedConnected.value = false
     invalidateData()
+    invalidateMonitor()
     ws = null
     if (refCount > 0) {
       reconnectTimer = setTimeout(connect, 3000)
@@ -140,6 +152,10 @@ function connect() {
         syringe_pumps: parsed.syringe_pumps ?? {},
         valves: parsed.valves ?? {},
       }
+      monitorData.value = sharedData.value
+      monitorFresh.value = true
+      if (monitorTimer) clearTimeout(monitorTimer)
+      monitorTimer = setTimeout(invalidateMonitor, 15000)
       sharedFresh.value = true
       if (freshnessTimer) clearTimeout(freshnessTimer)
       freshnessTimer = setTimeout(invalidateData, 6000)
@@ -161,6 +177,7 @@ function disconnect() {
   }
   sharedConnected.value = false
   invalidateData()
+  invalidateMonitor()
 }
 
 export function useWebSocket() {
@@ -179,5 +196,5 @@ export function useWebSocket() {
     }
   })
 
-  return { data: sharedData, connected: sharedConnected, fresh: sharedFresh }
+  return { data: sharedData, connected: sharedConnected, fresh: sharedFresh, monitorData, monitorFresh }
 }

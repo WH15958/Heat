@@ -38,6 +38,7 @@ function page(fill = true, fresh = false) {
   }
   const exports = {} as any
   runInNewContext(compiled, { exports, document:{querySelector:()=>null}, require: (name: string) => {
+    if (name.endsWith('.vue')) return {}
     assert.ok(name in imports, name)
     return imports[name]
   } })
@@ -62,6 +63,24 @@ function page(fill = true, fresh = false) {
     response: (value: any) => { postResponse = value },
     snapshot: (value: any) => { snapshot = value }, failRead: (value: boolean) => { readFailure = value }, dispose: () => scope.stop() }
 }
+
+test('microwave temperature requires integers in single, range and list modes', () => {
+  const p = page()
+  try {
+    const axis = p.state.axes.value[4]
+    axis.start = 50.9
+    assert.ok(p.state.fieldIssues(2).some((e:any)=>e.key===axis.key&&e.stage===2&&/整数/.test(e.message)))
+    assert.equal(p.state.plan.value.rows.length, 0)
+    axis.mode = 'range'; axis.start = 50; axis.end = 51; axis.interval = 0.5
+    assert.ok(p.state.fieldIssues(2).some((e:any)=>e.key===axis.key&&/整数/.test(e.message)))
+    axis.mode = 'list'; axis.list = '50, 50.9'
+    assert.ok(p.state.fieldIssues(2).some((e:any)=>e.key===axis.key&&/整数/.test(e.message)))
+    axis.list = '50, 51'
+    assert.equal(p.state.fieldIssues(2).filter((e:any)=>e.key===axis.key).length, 0)
+    assert.equal(p.state.plan.value.rows.length, 2)
+    assert.equal(p.calls.length, 0)
+  } finally { p.dispose() }
+})
 
 test('new experiment clears parameters but preserves the terminal record and sends no control', async () => {
   const p = page()

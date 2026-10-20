@@ -55,12 +55,12 @@ class FakeMicrowaveExperimentManager:
         self.configured_segments = segments
         return self.configure_result
 
-    def start_microwave(self, device_id, mode):
+    def start_microwave(self, device_id, mode, **kwargs):
         self.calls.append(("start_microwave", device_id))
         self.start_mode = mode
         return self.start_result
 
-    def stop_microwave(self, device_id):
+    def stop_microwave(self, device_id, **kwargs):
         self.calls.append(("stop_microwave", device_id))
         return self.stop_result
 
@@ -263,7 +263,7 @@ def test_emergency_stop_false_result_fails_step():
 
 def test_microwave_temperature_reached_success():
     dm = FakeMicrowaveExperimentManager()
-    dm.read_payloads = [{"material_temperature": 79.8, "running": True, "control_active": True, "fault_code": 0}]
+    dm.read_payloads = [{"material_temperature": 79.8, "running": True, "control_active": True, "fault_code": 0, "status_confirmed": True}]
     executor = StepExecutor(dm)
     step = ExperimentStep(
         id="wait_temp",

@@ -89,9 +89,11 @@ def _microwave_segments(
     return segments
 
 
-def _raise_if_false(result: bool, action: str):
+def _raise_if_false(result: bool, action: str, dm=None, device_id=None):
     if not result:
-        raise HTTPException(status_code=400, detail=f"Microwave {action} failed")
+        get_detail = getattr(dm, "get_last_command_error", None)
+        detail = get_detail(device_id) if callable(get_detail) else None
+        raise HTTPException(status_code=400, detail=detail or f"Microwave {action} failed")
 
 
 @router.get("/devices")
@@ -318,7 +320,7 @@ async def configure_microwave_manual(
         result = await loop.run_in_executor(
             None, dm.configure_microwave_manual, device_id, segments
         )
-        _raise_if_false(result, "configure manual")
+        _raise_if_false(result, "configure manual", dm, device_id)
         return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -340,7 +342,7 @@ async def configure_microwave_auto_power(
         result = await loop.run_in_executor(
             None, dm.configure_microwave_auto_power, device_id, segments
         )
-        _raise_if_false(result, "configure auto_power")
+        _raise_if_false(result, "configure auto_power", dm, device_id)
         return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -362,7 +364,7 @@ async def configure_microwave_constant_rate(
         result = await loop.run_in_executor(
             None, dm.configure_microwave_constant_rate, device_id, segments
         )
-        _raise_if_false(result, "configure constant_rate")
+        _raise_if_false(result, "configure constant_rate", dm, device_id)
         return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -385,7 +387,7 @@ async def start_microwave(
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, dm.start_microwave, device_id, mode)
-        _raise_if_false(result, "start")
+        _raise_if_false(result, "start", dm, device_id)
         return {"success": True, "device_id": device_id, "mode": mode.value}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -402,7 +404,7 @@ async def stop_microwave(device_id: str, request: Request):
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, dm.stop_microwave, device_id)
-        _raise_if_false(result, "stop")
+        _raise_if_false(result, "stop", dm, device_id)
         return {"success": True, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

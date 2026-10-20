@@ -41,6 +41,7 @@ declare module 'vue' {
     ExperimentGuide: typeof import('./src/components/ExperimentGuide.vue')['default']
     HeaterControl: typeof import('./src/components/HeaterControl.vue')['default']
     MicrowaveControl: typeof import('./src/components/MicrowaveControl.vue')['default']
+    MicrowaveHoldProgress: typeof import('./src/components/MicrowaveHoldProgress.vue')['default']
     ParameterFields: typeof import('./src/components/experiment/ParameterFields.vue')['default']
     PumpControl: typeof import('./src/components/PumpControl.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
