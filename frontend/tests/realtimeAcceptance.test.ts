@@ -109,3 +109,30 @@ test('actual pump card does not interpret a missing/unknown run status as STOP',
   const html = await renderPump({ read_ok: true, running: null, run_status: 'UNKNOWN' })
   assert.match(html, /状态未知/)
 })
+
+
+test('monitor survives a 6–7s sweep while control data still expires at 6s', () => {
+  const rig = websocket()
+  rig.sockets[0].onopen(); rig.emit()
+  const sample = rig.state.monitorData.value
+  rig.expire(6000)
+  assert.equal(rig.state.fresh.value, false)
+  assert.equal(rig.state.data.value, null)
+  assert.equal(rig.state.monitorFresh.value, true)
+  assert.equal(rig.state.monitorData.value, sample)
+  rig.emit() // Next full-device sweep, after the control freshness deadline.
+  assert.equal(rig.state.monitorFresh.value, true)
+  rig.expire(15000)
+  assert.equal(rig.state.connected.value, true)
+  assert.equal(rig.state.monitorFresh.value, false)
+  assert.equal(rig.state.monitorData.value, null)
+  rig.emit()
+  rig.sockets[0].close()
+  assert.equal(rig.state.monitorData.value, null)
+  assert.equal(rig.state.monitorFresh.value, false)
+  rig.expire(3000)
+  rig.sockets[1].onopen()
+  assert.equal(rig.state.monitorData.value, null)
+  rig.unmount()
+  assert.equal(rig.timers.size, 0)
+})
