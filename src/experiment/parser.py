@@ -79,6 +79,7 @@ WAIT_MAP = {
     "none": WaitType.NONE,
     "duration": WaitType.DURATION,
     "temperature_reached": WaitType.TEMPERATURE_REACHED,
+    "heater_pair_reached": WaitType.HEATER_PAIR_REACHED,
     "heater_pair_stable": WaitType.HEATER_PAIR_STABLE,
     "microwave_temperature_reached": WaitType.MICROWAVE_TEMPERATURE_REACHED,
     "microwave_temperature_below": WaitType.MICROWAVE_TEMPERATURE_BELOW,
@@ -250,11 +251,15 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         if on_error not in {"stop", "skip"}:
             raise ValueError(f"Unknown on_error policy for step {step_id}: {on_error}")
 
-        if wait_type_name == "heater_pair_stable":
-            if not enabled or on_error != "stop" or seconds <= 0 or timeout <= 0:
-                raise ValueError("Heater stability wait must be enabled, stop on error and have positive seconds/timeout")
+        if wait_type_name in ("heater_pair_reached", "heater_pair_stable"):
+            if not enabled or on_error != "stop" or timeout <= 0:
+                raise ValueError("Heater pair wait must be enabled, stop on error and have positive timeout")
+            if wait_type_name == "heater_pair_stable" and seconds <= 0:
+                raise ValueError("Heater stability wait requires positive seconds")
+            if wait_type_name == "heater_pair_reached" and seconds != 0:
+                raise ValueError("Heater reached wait requires seconds=0")
             if not isinstance(wait.targets, list) or len(wait.targets) != 2:
-                raise ValueError("Heater stability wait requires two targets")
+                raise ValueError("Heater pair wait requires two targets")
             ids = []
             for target in wait.targets:
                 if (not isinstance(target, dict) or set(target) != {"device_id", "target_temperature"}
@@ -263,14 +268,14 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
                 _validate_nonnegative_finite_number(target["target_temperature"], "wait.targets.target_temperature", step_label)
                 ids.append(target["device_id"])
             if len(set(ids)) != 2:
-                raise ValueError("Heater stability wait requires distinct heaters")
+                raise ValueError("Heater pair wait requires distinct heaters")
             if validate_devices:
                 from src.utils.config import ConfigManager
                 configured = {c.device_id: c for c in ConfigManager().load().heaters if c.enabled}
                 for target in wait.targets:
                     heater = configured.get(target["device_id"])
                     if heater is None or not heater.min_temperature <= target["target_temperature"] <= heater.max_temperature:
-                        raise ValueError("Heater stability target is not a configured heater or is out of range")
+                        raise ValueError("Heater pair target is not a configured heater or is out of range")
 
         if action_type in (ActionType.SYRINGE_PAIR_DISPENSE,):
             if on_error != "stop" or enabled is not True:

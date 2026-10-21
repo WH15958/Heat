@@ -579,9 +579,9 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=precursor_timeout（默认3600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
 
-加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_stable` 和 `prime_heat_duration`（第一组目标、±3℃、30秒、precursor_timeout），然后才吸排液；`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=stable_then_dwell_flow_drain_v4` 及 heater1/2 配置，旧预充签名不再匹配；复用现有 YAML 动作和等待类型。
+加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=reached_then_dwell_flow_drain_v5` 及 heater1/2 配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
 
-引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_stable`；通过后 `prime_heat_duration` 使用既有 duration 等待，暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 stable_then_dwell_flow_drain_v4。
+引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_reached`；通过后 `prime_heat_duration` 使用既有 duration 等待，温度波动不改变计时，实际暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 reached_then_dwell_flow_drain_v5。
 
 
 引导式 `GuidedRequest.experiment_name` 必填：严格字符串，去除首尾空格后1–80个Unicode字符，拒绝控制字符、格式控制及行/段分隔符，允许重名。名称纳入请求签名，保存到批次/计划顶层及流程metadata；运行name分别为“名称 · 预充”和“名称 · 第 N 组”，沿用现有历史接口及导出。旧记录只读兼容，不自动补名称，不复用旧预充资格；新请求缺少名称返回422。ID生成规则不变。
@@ -601,6 +601,8 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor.activity_snapshot` 只复制执行时已有的观测；`ActivityProgress` 不访问设备。双路稳定循环记录实际稳定窗口，暂停清零；duration/monitored_hold 使用原暂停扣时单调时钟。泵在原 START 确认后记录单调时钟，reference=true 的剩余时长不因编排暂停冻结，也不参与完成判断。并行进料聚合子执行器已缓存的状态。切换步骤、装载新组时清除观测，步骤退出冻结快照，展示不改变驱动调用顺序或数量。引导层再按编译步骤生成动作说明，通用执行器不解释引导阶段。
 
+预充前到温快照的 `wait_type=heater_pair_reached` 表示两路温度按“≥各自目标”判断，不显示连续稳定倒计时；旧记录的 `heater_pair_stable` 继续按原容差和稳定时长展示。
+
 状态顶层新增 `stop_requested` 和 `cleanup_in_progress`；后者观察执行器清理及预充失败清理的在途调用。原 `cleanup_pending` 仍保留其资源/恢复含义，不能把它当作“正在清理”。已结束批次可能保留 stop_requested=true，客户端须优先判断终态。
 
 前端保持 2 秒轮询，不自行递减动作剩余时间；独立检查距成功响应是否超过 6 秒。控制命令使用响应序号，停止可以覆盖待确认的暂停/继续；较早响应不得覆盖停止反馈。网络失败只通过读取核对，不自动重发。字段定位由本地校验及 422 loc 映射，设备/跨字段错误仍为页面提示。
@@ -614,7 +616,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor._run_timed_flow` 从 START 确认后按单调时钟计时，在 Web/编排层约每秒复用 read_pump_status 监督当前通道；读取失败或提前停止立即失败并清理。每次短睡眠最多 50ms，停止请求可中断；已发出的流量动作在暂停中仍计时、监督和到时停泵，步骤边界由引擎等待继续。所有退出路径尝试停止，停止未确认保留活动设备供原清理/恢复机制处理；不自动重启泵。串口调用耗时可能推迟停泵确认，不保证硬实时精度。进度 wait_type=flow_duration 是只读动作标记，不是新增 YAML wait 类型。
 
-预充签名协议升级为 stable_then_dwell_flow_drain_v4，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
+预充签名协议为 reached_then_dwell_flow_drain_v5，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
 

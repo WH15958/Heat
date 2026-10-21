@@ -82,9 +82,9 @@
           <p class="hint">未填字段保留引擎默认值；已有别名参数可在高级 YAML 中核对。</p>
         </details>
         <details open><summary>步骤后的等待</summary>
-          <select :value="step.wait?.type || 'none'" @change="set(['steps', selected, 'wait', 'type'], inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
+          <select :value="step.wait?.type || 'none'" @change="changeWaitType(inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
           <ParameterFields :fields="waitFields(step.wait?.type)" :values="step.wait || {}" :devices="devicesFor(waitGroup(step.wait?.type))" @change="(k, v) => set(['steps', selected, 'wait', k], v)" />
-          <template v-if="step.wait?.type === 'heater_pair_stable'">
+          <template v-if="['heater_pair_stable','heater_pair_reached'].includes(step.wait?.type || '')">
             <div v-for="i in 2" :key="i"><strong>加热器 {{ i }}</strong><ParameterFields :fields="heaterStableTargetFields" :values="step.wait?.targets?.[i-1] || {}" :devices="devicesFor('heater')" @change="(k, v) => set(['steps', selected, 'wait', 'targets', i-1, k], v)" /></div>
           </template>
         </details>
@@ -148,6 +148,15 @@ function mutate(change: (doc: Document) => void) {
   try { changeSource(editSource(source.value, change)) } catch (e) { ElMessage.error(String(e)) }
 }
 function set(path: Path, value: unknown) { mutate(doc => setValue(doc, path, value)) }
+function changeWaitType(type: string) {
+  mutate(doc => {
+    setValue(doc, ['steps', selected.value, 'wait', 'type'], type)
+    if (type === 'heater_pair_reached') {
+      doc.deleteIn(['steps', selected.value, 'wait', 'seconds'])
+      doc.deleteIn(['steps', selected.value, 'wait', 'tolerance'])
+    }
+  })
+}
 function add(type: string, position?: string) {
   mutate(doc => doc.addIn(['steps'], { id: uniqueId(doc, type), type, params: position ? { position } : {}, enabled: true, on_error: 'stop' }))
   selected.value = stepsFrom(inspection.value.doc).length - 1
@@ -181,8 +190,8 @@ const localErrors = computed(() => {
   const ids = new Set<string>()
   return steps.value.flatMap((s, i) => {
     const errors = fieldErrors(parameterFields(s), s.params || {}).concat(fieldErrors(waitFields(s.wait?.type), s.wait || {}))
-    if (s.wait?.type === 'heater_pair_stable') {
-      for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait.targets?.[i] || {}))
+    if (['heater_pair_stable','heater_pair_reached'].includes(s.wait?.type || '')) {
+      for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait?.targets?.[i] || {}))
     }
     if (typeof s.id !== 'string' || !s.id.trim() || ids.has(s.id)) errors.push('步骤 ID 为空或重复')
     ids.add(s.id)

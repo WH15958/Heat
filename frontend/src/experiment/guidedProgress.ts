@@ -58,3 +58,11 @@ export async function batchExport(batch:any,get:(url:string)=>Promise<{data:any}
 export function formatTemperature(value:unknown):string {
  return typeof value==='number'&&Number.isFinite(value)?`${value.toFixed(1)} ℃`:'温度未知'
 }
+
+export function temperatureReadingStatus(reading:any,waitType?:string):string {
+ if(!reading.read_ok)return '读取未确认'
+ if(reading.target==null)return '最新读数'
+ const reached=waitType==='heater_pair_reached'?reading.value>=reading.target:
+  reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target
+ return reached?'已达标':'等待达标'
+}

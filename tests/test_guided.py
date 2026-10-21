@@ -279,7 +279,7 @@ class GuidedTests(unittest.TestCase):
         self.assertFalse(any(s["type"] == "microwave.start" for s in data["steps"]))
         ids = [s["id"] for s in data["steps"]]
         self.assertLess(ids.index("prime_initialize_2"), ids.index("prime_heat_0_set"))
-        self.assertLess(ids.index("prime_heat_both_stable"), ids.index("prime_1_1_aspirate"))
+        self.assertLess(ids.index("prime_heat_both_reached"), ids.index("prime_1_1_aspirate"))
         self.assertLess(ids.index("prime_recheck_temperature"), ids.index("prime_drain"))
         for changes in (dict(reactor_available_ml=7), dict(source_available_a_ml=3),
                         dict(waste_available_ml=8), dict(prime_cycles=0), dict(prime_drain_seconds=0), dict(prime_drain_flow=0),
@@ -296,18 +296,23 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
             current = guided.priming_signature(request)
         fields = json.loads(digest.call_args.args[0])
-        self.assertEqual(fields.pop("priming_protocol"), "stable_then_dwell_flow_drain_v4")
-        previous_fields = dict(fields, priming_protocol="heated_precursors_v2")
+        self.assertEqual(fields.pop("priming_protocol"), "reached_then_dwell_flow_drain_v5")
+        previous_fields = dict(fields, priming_protocol="stable_then_dwell_flow_drain_v4")
         self.assertNotEqual(current, hashlib.sha256(json.dumps(previous_fields, sort_keys=True, allow_nan=False).encode()).hexdigest())
         self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
         fields["devices"] = [d for d in fields["devices"] if d["device_id"] not in ("heater1", "heater2")]
         legacy = hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()
         self.assertNotEqual(current, legacy)
         data = guided.priming_recipe(request, "heated")
-        wait = next(s["wait"] for s in data["steps"] if s["id"] == "prime_heat_both_stable")
+        wait = next(s["wait"] for s in data["steps"] if s["id"] == "prime_heat_both_reached")
         self.assertEqual([t["target_temperature"] for t in wait["targets"]], [40, 35])
-        self.assertEqual((wait["tolerance"], wait["seconds"], wait["timeout"]), (3, 30, request.precursor_timeout))
+        self.assertEqual(wait["type"], "heater_pair_reached")
+        self.assertEqual(wait.get("seconds", 0), 0)
+        self.assertEqual(wait["timeout"], request.precursor_timeout)
         formal = guided.recipe(request.rows()[0], request, "heated", 0)["steps"]
+        formal_wait = next(s["wait"] for s in formal if s["id"] == "heat_both_stable")
+        self.assertEqual((formal_wait["type"], formal_wait["tolerance"], formal_wait["seconds"]),
+                         ("heater_pair_stable", 3, 30))
         self.assertLess([s["id"] for s in formal].index("heat_both_stable"),
                         [s["id"] for s in formal].index("aspirate_0"))
 

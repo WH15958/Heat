@@ -272,6 +272,30 @@ function editor(api: any) {
     '../experiment/catalog': moduleFromSource('experiment/catalog.ts', { '../api/devices': devices }),
     '../api/devices': { devicesApi: {} }, '../api/experimentEditor': { editorApi: api } })
 }
+test('dual-heater reach is editable without stability fields and retains two required targets', async () => {
+  const catalog = moduleFromSource('experiment/catalog.ts', { '../api/devices': devices })
+  assert.ok(catalog.waitOptions.some((option:any) => option.value === 'heater_pair_reached'))
+  assert.deepEqual(plain(catalog.waitFields('heater_pair_reached')).map((field:any) => field.key), ['timeout'])
+  assert.deepEqual(plain(catalog.waitFields('heater_pair_stable')).map((field:any) => field.key), ['seconds', 'tolerance', 'timeout'])
+  const p = editor({})
+  try {
+    const s = p.state
+    s.source.value = 'name: reach\nsteps:\n  - id: preheat\n    type: wait\n    wait:\n      type: heater_pair_stable\n      seconds: 30\n      tolerance: 3\n      timeout: 3600\n      targets:\n        - {device_id: heater1, target_temperature: 50}\n        - {device_id: heater2, target_temperature: 60}\n'
+    await vue.nextTick()
+    s.changeWaitType('heater_pair_reached')
+    await vue.nextTick()
+    assert.equal(s.step.value.wait.type, 'heater_pair_reached')
+    assert.equal(s.step.value.wait.seconds, undefined)
+    assert.equal(s.step.value.wait.tolerance, undefined)
+    assert.equal(s.step.value.wait.timeout, 3600)
+    assert.deepEqual(plain(s.step.value.wait.targets), [{device_id:'heater1',target_temperature:50}, {device_id:'heater2',target_temperature:60}])
+    assert.deepEqual(plain(s.localErrors.value), [])
+    s.set(['steps', 0, 'wait', 'targets', 1, 'target_temperature'], undefined)
+    await vue.nextTick()
+    assert.ok(s.localErrors.value.some((error:string) => error.includes('目标温度')))
+  } finally { p.dispose() }
+})
+
 test('late save cannot bind imported B to A; next save targets B without A revision', async () => {
   const pending = deferred(), writes: any[] = []
   const p = editor({ save: async (...args: any[]) => { writes.push(args); return writes.length === 1 ? pending.promise : { data: { revision: 'rev-B' } } } })

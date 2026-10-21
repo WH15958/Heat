@@ -959,6 +959,9 @@ class StepExecutor:
                 return False
 
     async def _wait_heater_pair_stable(self, condition):
+        reached = condition.type == WaitType.HEATER_PAIR_REACHED
+        tolerance = None if reached else condition.tolerance
+        timeout_error = "两路前驱体到温等待超时" if reached else "两路前驱体温度稳定等待超时"
         start = self._wait_clock()
         stable_since = None
         pause_generation = self._pause_generation
@@ -970,7 +973,7 @@ class StepExecutor:
                 stable_since = None
                 pause_generation = generation
             if self._wait_clock() - start > condition.timeout:
-                self._last_error = "两路前驱体温度稳定等待超时"
+                self._last_error = timeout_error
                 return False
             readings = {}
             try:
@@ -985,11 +988,11 @@ class StepExecutor:
                         raise ValueError(f'{target["device_id"]} 温度无效或读取失败')
                     readings[target["device_id"]] = data
             except Exception as exc:
-                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, condition.tolerance)
+                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, tolerance)
                 self._last_error = "前驱体温度读取失败：" + str(exc)
                 return False
             if len(readings) == len(condition.targets):
-                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, condition.tolerance)
+                self.activity.temperatures(condition.targets, {k: v["pv"] for k, v in readings.items()}, tolerance)
             self.last_device_result = {"device_type": "heater_pair", "heaters": readings}
             if self._should_stop():
                 return False
@@ -998,8 +1001,14 @@ class StepExecutor:
                 continue
             now = self._wait_clock()
             if now - start > condition.timeout:
-                self._last_error = "两路前驱体温度稳定等待超时"
+                self._last_error = timeout_error
                 return False
+            if reached:
+                if all(readings[t["device_id"]]["pv"] >= t["target_temperature"] for t in condition.targets):
+                    return True
+                if await self._pause_aware_sleep(1.0) is None:
+                    return False
+                continue
             if all(abs(readings[t["device_id"]]["pv"] - t["target_temperature"]) <= condition.tolerance
                    for t in condition.targets):
                 if stable_since is None:
@@ -1024,7 +1033,7 @@ class StepExecutor:
             return await self._wait_syringe(condition.device_id, condition.timeout)
         if condition.type == WaitType.MICROWAVE_MONITORED_HOLD:
             return await self._monitored_hold(condition)
-        if condition.type == WaitType.HEATER_PAIR_STABLE:
+        if condition.type in (WaitType.HEATER_PAIR_REACHED, WaitType.HEATER_PAIR_STABLE):
             return await self._wait_heater_pair_stable(condition)
         loop = asyncio.get_event_loop()
         start_time = self._wait_clock()

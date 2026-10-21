@@ -43,6 +43,7 @@ class WaitType(Enum):
     NONE = "none"
     DURATION = "duration"
     TEMPERATURE_REACHED = "temperature_reached"
+    HEATER_PAIR_REACHED = "heater_pair_reached"
     HEATER_PAIR_STABLE = "heater_pair_stable"
     MICROWAVE_TEMPERATURE_REACHED = "microwave_temperature_reached"
     MICROWAVE_TEMPERATURE_BELOW = "microwave_temperature_below"
@@ -64,7 +65,7 @@ class WaitCondition:
         timeout: 超时秒数
         channel: 泵通道号（PUMP_COMPLETE使用）
         target_temperature: 目标温度（MICROWAVE_TEMPERATURE_REACHED使用）
-        targets: 两路设备及目标温度（HEATER_PAIR_STABLE使用）
+        targets: 两路设备及目标温度（HEATER_PAIR_REACHED/HEATER_PAIR_STABLE使用）
         hold_mode: 微波保温计时方式，qualified兼容旧YAML，timed为固定计时
     """
     type: WaitType = WaitType.NONE

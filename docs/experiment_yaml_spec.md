@@ -509,6 +509,26 @@
 
 引导式每组使用 ±3℃、连续30秒，约每秒读取一次两路温度；任一路越界或暂停后重新计时。稳定时长与总超时使用单调时钟，总超时扣除实际暂停。读取失败、非有限或无效温度及超时均停止实验，停止请求可中断等待。原 `temperature_reached` 单设备等待语义不变。
 
+### 双路加热器到温等待 `heater_pair_reached`
+
+用于预充前的升温门槛：同一轮读取中，两路有效实测温度均达到或超过各自显式目标（`pv >= target_temperature`）后立即继续，不要求稳定窗口，超过目标也可通过。`targets` 必须列出两个不同的已启用加热器及各自设备范围内的目标温度；`timeout` 必须为正数，`seconds` 必须为0（可省略），步骤必须启用且 `on_error: stop`。`tolerance` 不参与达标判断。
+
+```yaml
+- id: precursor_temperature_reached
+  type: wait
+  on_error: stop
+  wait:
+    type: heater_pair_reached
+    targets:
+      - device_id: heater1
+        target_temperature: 50
+      - device_id: heater2
+        target_temperature: 50
+    timeout: 3600
+```
+
+复用双路稳定等待的读取频率及错误检查：实际暂停期间不读取或通过等待，总超时扣除暂停；读取失败、故障、无效温度及超时均失败，停止可中断。该门槛不包含后续保温时长，需另接 `duration` 等待。旧 `heater_pair_stable` YAML 的对称容差及稳定计时语义不变。
+
 ### 5.4 `pump_complete`
 
 等待指定泵通道运行结束。
@@ -884,9 +904,9 @@ interval_time: 0
 
 引导式 recipe 不在反应前停前驱体加热器；外层 GuidedBatch 在成功组间保留加热器，到整批结束/失败/停止时全停机。独立运行导出的单组 YAML 使用普通引擎，完成时仍清理全部活动设备，不能仅凭 YAML 推断有跨组保温。搭建式的阀位及 heater.stop 编排保持自由。
 
-引导式批次的预充 YAML 在两泵初始化后，使用现有 `heater.set_temperature`、`heater.start`、`heater_pair_stable` 按第一组目标加热（容差3℃、连续30秒），通过后才预充吸排。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
+引导式批次的预充 YAML 在两泵初始化后，使用 `heater.set_temperature`、`heater.start`、`heater_pair_reached` 按第一组目标加热，两路实测温度均达到或超过各自目标后通过；不要求 ±3℃ 连续30秒。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组仍使用 `heater_pair_stable` 再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
 
-引导式预充在两路 heater.start 和双路稳定到温等待通过后执行 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，结束后执行预充吸排；前置双路稳定到温等待默认超时3600秒；普通 YAML 等待类型和默认值保持原语义。
+引导式预充在两路 heater.start 和 `prime_heat_both_reached` 到温等待通过后立即执行 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，温度波动不暂停或重置计时，结束后执行预充吸排；前置双路到温等待默认超时3600秒。旧 YAML 等待类型和默认值保持原语义，历史流程快照不改写。
 
 
 引导式生成流程使用填写的实验名称：预充 `name` 为“名称 · 预充”，正式组为“名称 · 第 N 组”，`metadata.experiment_name` 保存整批名称。该字段属于追踪信息，不替代 `batch_id`、`sample_id` 或运行ID；普通 YAML 无需提供此字段，历史文件不迁移。

@@ -393,7 +393,7 @@ def test_precharge_time_required_and_changes_signature():
     assert guided.priming_signature(spec(prime_heat_minutes=30)) != guided.priming_signature(spec(prime_heat_minutes=45))
 
 
-def test_precharge_heating_delay_starts_after_stability_with_independent_timeout(prepared_env, monkeypatch):
+def test_precharge_heating_delay_starts_at_target_with_independent_timeout(prepared_env, monkeypatch):
     clock=fake_clock(monkeypatch)
     monkeypatch.setattr(execution.asyncio, 'get_running_loop', asyncio.get_running_loop, raising=False)
     monkeypatch.setattr(execution.StepExecutor, '_wait_heater_pair_stable', real_stability_wait)
@@ -401,19 +401,23 @@ def test_precharge_heating_delay_starts_after_stability_with_independent_timeout
         request=spec(prime_heat_minutes=30, precursor_timeout=60)
         steps=guided.priming_recipe(request,'timing')['steps']
         ids=[s['id'] for s in steps]
-        assert ids.index('prime_heat_1_start') < ids.index('prime_heat_both_stable') < ids.index('prime_heat_duration') < ids.index('prime_1_1_aspirate')
+        assert ids.index('prime_heat_1_start') < ids.index('prime_heat_both_reached') < ids.index('prime_heat_duration') < ids.index('prime_1_1_aspirate')
         delay=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_duration')]]))['steps'][0]
-        stable=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_both_stable')]]))['steps'][0]
-        dm=Mock(read_heater_data=Mock(return_value=dict(pv=30)))
+        reached=parser.parse_experiment_data(dict(steps=[steps[ids.index('prime_heat_both_reached')]]))['steps'][0]
+        def read(did):
+            return dict(pv=30 if did == 'heater1' or clock.now >= 5 else 29.9)
+        dm=Mock(read_heater_data=Mock(side_effect=read))
         executor=execution.StepExecutor(dm)
-        assert await executor._wait_condition(stable.wait)
-        assert 30 <= clock.now < 32
+        assert await executor._wait_condition(reached.wait)
+        assert 5 <= clock.now < 6.1
         reads=dm.read_heater_data.call_count
+        # The established dwell remains a fixed timer; temperature drift adds no time.
+        dm.read_heater_data.side_effect=AssertionError('No temperature polling during dwell')
         start=clock.now
         assert await executor._wait_condition(delay.wait)
         assert 1800 <= clock.now-start < 1801
         assert dm.read_heater_data.call_count == reads
-        assert stable.wait.timeout == 60
+        assert reached.wait.timeout == 60
         formal=guided.recipe(request.rows()[0],request,'timing',0)['steps']
         assert not any(s['id']=='prime_heat_duration' for s in formal)
         assert next(s for s in formal if s['id']=='heat_both_stable')['wait']['timeout']==60
