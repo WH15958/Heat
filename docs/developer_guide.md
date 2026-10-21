@@ -8,6 +8,7 @@
 ## 你现在应该看什么
 
 - 想理解系统结构：看“架构总览”
+- 想选择网页热更新、源码桌面测试或安装版运行：看 [日常开发与运行选择](daily_development.md)
 - 想扩展实验能力：看“新增实验动作 / 等待条件标准流程”
 - 想接入新设备：看“新增设备驱动标准流程”
 - 想确认 merge 前要做什么：看 [testing_and_merge_flow.md](testing_and_merge_flow.md)
