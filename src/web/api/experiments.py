@@ -21,16 +21,17 @@ _engines: dict = {}
 _source_lock = asyncio.Lock()
 _stop_generation = 0
 _stopping = 0
+_desktop_exiting = False
 
 
-def control_generation():
-    if _stopping:
+def control_generation(*, allow_stop=False):
+    if _stopping or (_desktop_exiting and not allow_stop):
         raise HTTPException(409, "全局停止或服务关闭处理中")
     return _stop_generation
 
 
-def check_control_generation(generation):
-    if _stopping or generation != _stop_generation:
+def check_control_generation(generation, *, allow_stop=False):
+    if _stopping or (_desktop_exiting and not allow_stop) or generation != _stop_generation:
         raise HTTPException(409, "停止请求已取消待执行操作，请重新确认")
 
 
@@ -47,7 +48,7 @@ def end_stop():
     _stopping -= 1
 
 
-async def shutdown():
+async def shutdown() -> bool:
     begin_stop()
     try:
         async with _source_lock:
@@ -57,6 +58,7 @@ async def shutdown():
             results = await asyncio.gather(*(e.stop() for e in engines), return_exceptions=True)
             if any(result is not True for result in results):
                 logger.error("One or more experiments failed to stop during shutdown")
+            return all(result is True for result in results)
     finally:
         end_stop()
 

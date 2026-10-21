@@ -3,6 +3,8 @@ import yaml
 from pathlib import Path
 from typing import List
 
+from src.utils.runtime_paths import data_path
+
 from src.experiment.actions import (
     ExperimentStep,
     ActionType,
@@ -11,7 +13,7 @@ from src.experiment.actions import (
     validate_flow_duration,
 )
 
-EXPERIMENTS_DIR = Path("experiments")
+EXPERIMENTS_DIR = data_path("experiments")
 
 
 def _validate_nonnegative_finite_number(value, field_name: str, step_id: str):
@@ -386,7 +388,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
     }
 
 
-def list_experiments(directory: str = "experiments") -> List[dict]:
+def list_experiments(directory: str | None = None) -> List[dict]:
     """列出所有可用的实验
 
     Args:
@@ -395,7 +397,7 @@ def list_experiments(directory: str = "experiments") -> List[dict]:
     Returns:
         List[dict]: 实验摘要列表
     """
-    exp_dir = Path(directory)
+    exp_dir = Path(directory) if directory is not None else data_path("experiments")
     if not exp_dir.exists():
         return []
     results = []

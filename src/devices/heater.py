@@ -122,6 +122,7 @@ class AIHeaterDevice(BaseDevice):
         
         self._heater_config: HeaterConfig = config
         self._protocol: Optional[AIBUSProtocol] = None
+        self._cleanup_pending = False
         self._model_code: Optional[int] = None
         self._decimal_places: int = config.decimal_places
         self.last_command_error: Optional[str] = None
@@ -149,10 +150,14 @@ class AIHeaterDevice(BaseDevice):
             ConnectionError: 连接失败
         """
         with self._lock:
+            if self._cleanup_pending:
+                return False
             if self.is_connected():
                 return True
             if self._status == DeviceStatus.CONNECTING:
                 raise ConnectionError("Connection already in progress")
+            if self._protocol is not None and not self.disconnect():
+                return False
             self.status = DeviceStatus.CONNECTING
         
         protocol = None
@@ -195,12 +200,17 @@ class AIHeaterDevice(BaseDevice):
             return True
             
         except Exception as e:
+            cleanup_failed = False
             if protocol is not None:
                 try:
-                    protocol.close()
+                    cleanup_failed = protocol.close() is False
                 except Exception as close_err:
+                    cleanup_failed = True
                     self._logger.warning(f"Failed to close protocol during error cleanup: {close_err}")
             with self._lock:
+                if cleanup_failed:
+                    self._protocol = protocol
+                    self._cleanup_pending = True
                 self.status = DeviceStatus.ERROR
             self._logger.error(f"Failed to connect: {e}")
             raise ConnectionError(f"Failed to connect to heater: {e}")
@@ -215,11 +225,17 @@ class AIHeaterDevice(BaseDevice):
         with self._lock:
             if self._protocol is not None:
                 try:
-                    self._protocol.close()
+                    if self._protocol.close() is False:
+                        self._cleanup_pending = True
+                        self.status = DeviceStatus.ERROR
+                        return False
                 except Exception as e:
+                    self._cleanup_pending = True
                     self._logger.error(f"Error during disconnect: {e}")
-                finally:
-                    self._protocol = None
+                    self.status = DeviceStatus.ERROR
+                    return False
+                self._protocol = None
+            self._cleanup_pending = False
             
             self.status = DeviceStatus.DISCONNECTED
             return True

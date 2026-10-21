@@ -19,7 +19,11 @@ async def protect_guided_devices(request: Request):
         yield
         return
     from src.web.api.experiments import _engines, _source_lock, control_generation, check_control_generation
-    generation = control_generation()
+    generation = control_generation(allow_stop=True)
+    is_stop = request.url.path.endswith("/stop")
+    if request.url.path.endswith("/command"):
+        is_stop = (await request.json()).get("action") == "stop"
+    check_control_generation(generation, allow_stop=is_stop)
     if request.scope.get("endpoint") is stop_microwave:
         # Cancel an in-flight start before waiting for its source lock; no I/O here.
         try:
@@ -27,11 +31,7 @@ async def protect_guided_devices(request: Request):
         except ValueError as exc:
             raise HTTPException(404, str(exc))
     async with _source_lock:
-        check_control_generation(generation)
-        is_stop = request.url.path.endswith("/stop")
-        if request.url.path.endswith("/command"):
-            is_stop = (await request.json()).get("action") == "stop"
-        check_control_generation(generation)
+        check_control_generation(generation, allow_stop=is_stop)
         batches = [b for b in _engines.values()
                    if b.state.value in ("running", "paused") or b.cleanup_pending]
         if batches:

@@ -36,19 +36,23 @@
 
 <script setup lang="ts">
 import DeviceConnectionControls from './DeviceConnectionControls.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import valveArtwork from '../assets/theme/valve.webp'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { devicesApi, type ValveState } from '../api/devices'
+import { usePendingConfirmation } from '../composables/pendingConfirmation'
 
 const props = defineProps<{ valveId: string; state: ValveState }>()
 const emit = defineEmits<{ update: [id: string, state: ValveState] }>()
 const busy = ref(false)
 const error = ref('')
+const confirmations = usePendingConfirmation()
+watch(() => [props.state.connected, props.state.connection_port, props.state.experiment_owned], () => confirmations.cancel(), { flush: 'sync' })
 const position = computed(() => !props.state.read_ok || props.state.relay_energized === null
   ? '未知（请刷新）' : props.state.relay_energized ? '吸合 · NC（通电）' : '关闭 · NO（断电）')
 
 async function operate(action: 'connect' | 'disconnect' | 'status' | 'switch', energized?: boolean) {
+  if (action === 'disconnect') confirmations.cancel()
   if (busy.value) return
   busy.value = true
   error.value = ''
@@ -76,10 +80,11 @@ async function switchPosition(energized: boolean) {
   if (busy.value) return
   busy.value = true
   try {
-    await ElMessageBox.confirm(
+    const confirmed = await confirmations.confirm('switch', () => ElMessageBox.confirm(
       `确认切换 ${props.valveId}（${props.state.connection_port}）到公共口 → ${energized ? 'NC（通电）' : 'NO（断电）'}？请确认出口、接液容器和现场条件允许切换。`,
       '流路切换确认', { type: 'warning', confirmButtonText: '确认切换', cancelButtonText: '取消' },
-    )
+    ), () => props.state.connected && !props.state.experiment_owned)
+    if (!confirmed) { busy.value = false; return }
   } catch {
     busy.value = false
     return

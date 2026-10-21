@@ -13,10 +13,12 @@ from typing import Optional
 
 from logging.handlers import RotatingFileHandler
 
+from src.utils.runtime_paths import data_path
+
 
 def setup_logging(
     level: str = "INFO",
-    log_dir: str = "logs",
+    log_dir: Optional[str] = None,
     max_file_size_mb: int = 10,
     backup_count: int = 5,
     console_output: bool = True,
@@ -55,7 +57,7 @@ def setup_logging(
         root_logger.addHandler(console_handler)
     
     if file_output:
-        log_path = Path(log_dir)
+        log_path = Path(log_dir) if log_dir is not None else data_path("logs")
         log_path.mkdir(parents=True, exist_ok=True)
         
         log_filename = f"system_{datetime.now().strftime('%Y%m%d')}.log"
@@ -94,7 +96,7 @@ class DeviceLogger:
     为设备操作提供独立的日志文件。
     """
     
-    def __init__(self, device_id: str, log_dir: str = "logs"):
+    def __init__(self, device_id: str, log_dir: Optional[str] = None):
         """
         初始化设备日志记录器
         
@@ -106,7 +108,7 @@ class DeviceLogger:
         self.logger = logging.getLogger(f"device.{device_id}")
         
         if not self.logger.handlers:
-            log_path = Path(log_dir) / "devices"
+            log_path = (Path(log_dir) if log_dir is not None else data_path("logs")) / "devices"
             log_path.mkdir(parents=True, exist_ok=True)
             
             log_filename = f"{device_id}_{datetime.now().strftime('%Y%m%d')}.log"

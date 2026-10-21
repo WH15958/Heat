@@ -1,127 +1,16 @@
 ---
 name: "doc-sync"
-description: "Synchronizes Heat project documentation. Invoke when user asks to update docs, or types /git, or after significant code changes."
+description: "按 Heat 当前规则同步受影响的文档；适用于文档更新、/git 和提交准备。"
 ---
 
-# Documentation Sync for Heat Project
+# Heat 文档同步入口
 
-Synchronize all project documentation to reflect the latest code changes. This skill enforces the documentation update process defined in heat.md section 8.2.
+先读 [AGENTS.md](../../../AGENTS.md) 的文档对应表、验证矩阵和 Git 规则；当前事实以 [PROJECT_CONTEXT.md](../../../context/PROJECT_CONTEXT.md) 和代码为准。完整流程见 [测试与合并指南](../../../docs/testing_and_merge_flow.md)。
 
-## When to Invoke
+1. 用定向 git status/diff 和当前任务确定实际变更，保留用户已有改动。
+2. 仅按 AGENTS.md 文档对应表更新受影响的文档；内部实现不自动要求更新用户指南或 README。只有长期项目事实、硬件边界或 agent 规则变化时才更新 context；不编造版本号或追加流水。
+3. 按验证矩阵检查。仅文档/规则改动做 diff 与内容一致性检查；涉及可执行示例时定向验证示例。后端、前端及硬件行为分别选择相关测试、生产构建和实验室确认，不用编译代替行为验证。
+4. “同步文档”本身不授权提交；用户要求 /git 时，按需验证、更新必要文档、只暂存相关文件、检查暂存 diff 后提交。不要收集无关或生成文件。
+5. 仅在用户明确确认后推送当前获批准的任务分支；双远程与分支归档规则沿用测试指南，不硬编码历史分支。新建分支/工作树仍须事先明确批准，不在 master 开发。
 
-- When user asks to update documentation
-- When user types `/git`
-- After significant code changes that affect user-facing features or APIs
-- When user asks to commit and push
-
-## Documentation Update Process
-
-### Step 1: Analyze Changes
-
-Identify what changed since the last documentation update:
-
-1. Run `git log --oneline -10` to see recent commits
-2. Review the current conversation context for what was modified
-3. Categorize changes by type:
-
-| Change Type | Docs to Update |
-|-------------|---------------|
-| New feature / UI change | PROJECT_CONTEXT.md, user_guide.md, README.md |
-| API / parameter change | PROJECT_CONTEXT.md, developer_guide.md |
-| Bug fix | PROJECT_CONTEXT.md (if lesson learned) |
-| Refactor | developer_guide.md (if architecture changed) |
-
-### Step 2: Update Documents in Order
-
-Update each document following these specific guidelines:
-
-#### 2.1 Update `context/PROJECT_CONTEXT.md`
-
-This is the AI memory file — **most important**.
-
-- **Version number**: Increment minor version (e.g., v2.8 → v2.9) for feature additions, patch (v2.8.1) for bug fixes
-- **Change log**: Add entry to section 8 (变更记录) with:
-  - Date
-  - Version
-  - Summary of changes
-  - Files modified
-- **Architecture**: Update if code structure changed
-- **Lessons learned**: Add to section 9 (经验教训) if a bug revealed new insight
-- **API changes**: Update relevant interface definitions
-
-Format for change log entry:
-```markdown
-### 8.X YYYY-MM-DD 变更标题（vX.Y）
-
-**变更内容：**
-- 具体变更1
-- 具体变更2
-
-**涉及文件：**
-- `path/to/file.py`: 变更说明
-
-**经验教训：**
-- 教训描述（如适用）
-```
-
-#### 2.2 Update `docs/user_guide.md`
-
-Only update if changes affect **user-facing behavior**:
-
-- New UI elements or interactions
-- Changed operation procedures
-- New device parameters or modes
-- Changed error messages or warnings
-
-Do NOT update for:
-- Internal refactoring
-- Bug fixes with no user-visible change
-- Developer-only API changes
-
-#### 2.3 Update `docs/developer_guide.md`
-
-Only update if changes affect **developer workflows**:
-
-- New API endpoints or parameters
-- Changed function signatures
-- New validation rules
-- Architecture changes
-- New development constraints
-
-#### 2.4 Update `README.md`
-
-Only update for:
-- New features (update feature table)
-- Progress changes (update completion status)
-- Changed project structure or setup instructions
-
-### Step 3: Compile Verification
-
-Before committing, verify no syntax errors were introduced:
-
-- `python -m py_compile` for any Python files touched
-- No verification needed for .md files
-
-### Step 4: Git Commit
-
-1. Stage all changed documentation files
-2. Commit with format: `docs: <brief description>`
-3. Show the commit diff to user
-4. **Wait for user confirmation before pushing**
-
-### Step 5: Push (After User Confirmation)
-
-Push to both remotes:
-```bash
-git push origin develop-web
-git push github develop-web
-```
-
-## Important Rules
-
-- **Never skip PROJECT_CONTEXT.md** — it's the AI memory file
-- **Never fabricate changes** — only document what actually changed
-- **Never auto-push** — always wait for user confirmation
-- **Keep version numbers consistent** across all documents
-- **Use Chinese** for all documentation content (matching project convention)
-- **Preserve existing document structure** — don't reorganize sections
+不因调用本 skill 自动推送、清理目录或运行实机。长中文文档定点修改，保持原结构和术语。

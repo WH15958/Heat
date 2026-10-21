@@ -58,6 +58,7 @@ class ExperimentEngine:
         self._on_progress: Optional[Callable] = None
         self._on_complete: Optional[Callable] = None
         self._task: Optional[asyncio.Task] = None
+        self._stop_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_result: Optional[bool] = None
         self._stop_result: Optional[bool] = None
@@ -130,6 +131,8 @@ class ExperimentEngine:
         if self._state in (ExperimentState.RUNNING, ExperimentState.PAUSED):
             logger.warning("Experiment already active")
             return
+        if self._stop_task is not None and not self._stop_task.done():
+            raise RuntimeError("Cannot start experiment while prior stop is still pending")
         if self.cleanup_pending and not await self._cleanup_active_devices():
             error = "Cannot start experiment while prior device cleanup still fails"
             logger.error(error)
@@ -139,6 +142,7 @@ class ExperimentEngine:
         self._cleanup_task = None
         self._cleanup_result = None
         self._stop_result = None
+        self._stop_task = None
         self._completion_notified = False
         self._pause_event.set()
         if isinstance(self._executor, StepExecutor):
@@ -311,10 +315,17 @@ class ExperimentEngine:
 
     async def stop(self):
         self.request_stop()
+        # Requests only wait for the owned stop; disconnect/cancellation must not
+        # interrupt device cleanup or durable finalization.
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop())
+        return await asyncio.shield(self._stop_task)
+
+    async def _stop(self):
         running_task = self._task
         waited_for_running_task = running_task is not None and not running_task.done()
         if waited_for_running_task:
-            await running_task
+            await asyncio.shield(running_task)
             if self._stop_result is not None:
                 return self._stop_result
 
@@ -331,7 +342,7 @@ class ExperimentEngine:
         """Wait for execution and terminal cleanup without cancelling device work."""
         if self._task is not None:
             try:
-                await self._task
+                await asyncio.shield(self._task)
             except Exception:
                 self.request_stop()
                 cleanup_ok = await self._cleanup_active_devices()
@@ -371,37 +382,27 @@ class ExperimentEngine:
     async def _cleanup_active_devices(self) -> bool:
         if self._cleanup_result is True:
             return True
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._perform_cleanup())
+        return await asyncio.shield(self._cleanup_task)
 
-        cleanup_task = self._cleanup_task
-        if cleanup_task is None:
+    async def _perform_cleanup(self) -> bool:
+        try:
             stop_active_devices = getattr(self._executor, "stop_active_devices", None)
             if not callable(stop_active_devices):
-                logger.error("Experiment executor does not support active-device cleanup")
-                self._cleanup_result = False
-                return False
-            try:
-                if isinstance(self._executor, StepExecutor):
-                    source = "user_stop" if self._stop_flag else (
-                        "normal_cleanup" if self._current_step >= len(self._steps) else "failure_cleanup")
-                    cleanup_task = asyncio.create_task(stop_active_devices(source=source))
-                else:
-                    cleanup_task = asyncio.create_task(stop_active_devices())
-                self._cleanup_task = cleanup_task
-            except Exception as e:
-                logger.error(f"Failed to start experiment active-device cleanup: {e}")
-                self._cleanup_result = False
-                return False
-
-        try:
-            cleanup_result = bool(await cleanup_task)
+                raise RuntimeError("Experiment executor does not support active-device cleanup")
+            if isinstance(self._executor, StepExecutor):
+                source = "user_stop" if self._stop_flag else (
+                    "normal_cleanup" if self._current_step >= len(self._steps) else "failure_cleanup")
+                result = await stop_active_devices(source=source)
+            else:
+                result = await stop_active_devices()
+            self._cleanup_result = bool(result)
         except Exception as e:
             logger.error(f"Experiment active-device cleanup failed: {e}")
-            cleanup_result = False
+            self._cleanup_result = False
         finally:
-            if self._cleanup_task is cleanup_task:
-                self._cleanup_task = None
-
-        self._cleanup_result = cleanup_result
+            self._cleanup_task = None
         return self._cleanup_result
 
     def _finish_terminal_run(

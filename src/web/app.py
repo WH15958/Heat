@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from src.web.api.guided import router as guided_router
 from src.web.api.microwave_program import router as microwave_program_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
+from src.desktop.lifecycle import DesktopShutdown, DesktopShutdownMiddleware
 
 logger = get_logger(__name__)
 
@@ -165,11 +167,15 @@ async def lifespan(app: FastAPI):
     setup_logging(level="INFO", console_output=True, file_output=True)
     app.state.device_manager = create_device_manager()
     app.state.device_read_coordinator = DeviceReadCoordinator()
+    app.state.desktop_shutdown = DesktopShutdown(app) if os.environ.get("HEAT_DESKTOP_MODE") == "1" else None
     push_task = asyncio.create_task(data_push_loop(app))
     syringe_task = asyncio.create_task(syringe_supervisor(app.state.device_manager))
     yield
     logger.info("Shutting down...")
-    await stop_experiments()
+    desktop_shutdown = app.state.desktop_shutdown
+    already_cleaned = desktop_shutdown is not None and desktop_shutdown.succeeded
+    if not already_cleaned:
+        await stop_experiments()
     push_task.cancel()
     syringe_task.cancel()
     try:
@@ -180,7 +186,7 @@ async def lifespan(app: FastAPI):
         await push_task
     except asyncio.CancelledError:
         pass
-    if not await asyncio.to_thread(app.state.device_manager.cleanup):
+    if not already_cleaned and not await asyncio.to_thread(app.state.device_manager.cleanup):
         logger.error("One or more devices failed to stop or disconnect during shutdown")
 
 
@@ -201,6 +207,7 @@ app = FastAPI(
     version="2.2",
     lifespan=lifespan,
 )
+app.add_middleware(DesktopShutdownMiddleware)
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",

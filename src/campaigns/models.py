@@ -1,7 +1,20 @@
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import math
 from typing import Any, Dict, List, Optional
+
+
+def validate_finite_numbers(value: Any) -> None:
+    """Scientific records may contain nested JSON, but never NaN or infinity."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("数值必须为有限值，不能使用 NaN 或 Infinity")
+    if isinstance(value, dict):
+        for item in value.values():
+            validate_finite_numbers(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            validate_finite_numbers(item)
 
 
 def utc_now_iso() -> str:

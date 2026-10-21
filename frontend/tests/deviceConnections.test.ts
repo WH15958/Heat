@@ -8,6 +8,7 @@ import * as vue from 'vue'
 import * as connection from '../src/composables/connectionBatch'
 import * as program from '../src/utils/microwaveProgram'
 import * as calculations from '../src/utils/pumpCalculations'
+import * as confirmations from '../src/composables/pendingConfirmation'
 
 const source = readFileSync(new URL('../src/views/ControlPanel.vue', import.meta.url), 'utf8')
 const script = compileScript(parse(source).descriptor, { id: 'connection-test' }).content
@@ -43,6 +44,7 @@ function page() {
     '../api/devices': { devicesApi: api, FLOW_UNITS: [], PUMP_MODES: [], TUBE_MODELS: [] },
     '../api/syringePumps': { syringeApi: { connect: (id: string) => request('connect', id), read: (id: string) => request('read', id) } },
     '../composables/connectionBatch': connection,
+    '../composables/pendingConfirmation': confirmations,
     '../utils/microwaveProgram': program,
     '../utils/pumpCalculations': calculations,
     '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), connected: vue.ref(false), fresh: vue.ref(false) }) },

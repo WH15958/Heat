@@ -3,7 +3,7 @@
 > 仅供 AI / 自动化协作者使用。  
 > 人类开发者优先看 `docs/developer_guide.md`，实验操作人员优先看 `docs/user_guide.md`。
 
-最后更新：2026-09-30
+最后更新：2026-10-21
 
 ---
 
@@ -23,6 +23,10 @@
 - 领域：实验室 / 小型工业自动化控制
 - 目标：统一管理加热器、蠕动泵、注射泵、实验流程、实时监控、日志与样品记录
 - 当前主运行方式：FastAPI + Vue Web 界面
+- Windows 桌面入口：`python -m src.desktop.main`，内置 Python 发布时复用原 Web 界面与独立本机后台；原浏览器入口保留。安装、迁移和构建见 [docs/desktop_app.md](../docs/desktop_app.md)。
+- 桌面可写数据根目录为 `%LOCALAPPDATA%\Heat\workspace`，由后台在业务导入前设置 `HEAT_DATA_DIR`；发行包不得携带实际仪器配置或运行历史。
+- 桌面关闭窗口收至托盘，不停止实验；明确退出须确认停止、保存和清理，失败保留后台。后台崩溃后不自动重启或续跑，恢复锁仍需现场确认。Windows 11 x64 干净虚拟机及实机验收尚未完成。
+- 托盘显示／退出回调只派发工作线程，保留原有退出互斥与停机确认；桌面日志记录带时间戳的退出阶段。2026-10-21 间歇退出卡住尚未复现，本次旧版经确认正常退出，不应宣称已证实死锁根因；修复及验收范围见 [退出跟进记录](../docs/archive/reviews/desktop-exit-followup-2026-10-21.md)。
 - 辅助运行方式：`src/main.py` 中的本地控制入口仍存在，但不是主协作路径
 
 ### 1.2 当前真实技术栈
@@ -63,6 +67,19 @@
 - `pump.start`
 - `pump.stop`
 - `pump.stop_channel`
+- `syringe_pump.initialize`
+- `syringe_pump.configure`
+- `syringe_pump.move`
+- `syringe_pump.aspirate`
+- `syringe_pump.dispense`
+- `syringe_pump.valve`
+- `syringe_pump.stop`
+- `syringe_pump.resume`
+- `syringe_pump.io`
+- `syringe_pump.program_load`
+- `syringe_pump.program_store`
+- `syringe_pump.program_run`
+- `syringe_pump.repeat`
 - `valve.switch`
 - `syringe_pair.dispense`
 - `microwave.configure_manual`
@@ -84,8 +101,10 @@
 - `microwave_temperature_reached`
 - `microwave_temperature_below`
 - `microwave_complete`
+- `microwave_monitored_hold`
+- `syringe_pump_complete`
 
-不要在文档或代码里编造当前不存在的动作名。
+以上为当前 YAML 可用类型；完整参数与边界见 [实验 YAML 规范](../docs/experiment_yaml_spec.md)。`syringe_pump.pause` 仅供手动硬件暂停，YAML 解析明确拒绝；实验暂停仍使用动作边界，恢复不重放。不要在文档或代码里编造当前不存在的动作名。
 
 ---
 
@@ -263,6 +282,13 @@ AI 不应做的是：
 - 微波仪：检查 `allow_real_hardware_writes`、`enable_control_writes`、`allow_experiment_control`、控制字写入、状态 payload 和 `docs/microwave_smoke_test.md`
 
 实机验证不是每次都必须做，但如果改动触及真实设备控制时序、协议写入顺序、串口管理，软件验证不足以替代实机验证。
+
+### 6.1 桌面安装包构建时机（2026-10-21 用户约定）
+
+- 用户已将安装包构建时机交给 Codex 判断：积累一批稳定修复并通过相应验证后，集中构建一个新版本安装包，无需每次另行询问构建许可。
+- 日常修改按影响范围运行测试、导入检查及必要的前端生产构建；不要求每次修改或测试都生成安装包。
+- 桌面依赖、资源收集、冻结后的运行路径或安装流程变化时，由 Codex 按需提前构建验证；准备交付或升级时，核对安装包包含的修复范围、版本及验收状态。
+- 安装替换、在用后台退出以及 Git 提交、推送和对外分发，继续按各自已有授权与流程执行；安装包构建成功不替代实机及干净离线环境验收。
 
 ---
 

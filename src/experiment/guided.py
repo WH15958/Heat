@@ -22,9 +22,10 @@ from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
 from src.devices.syringe_commands import SyringeCommand
+from src.utils.runtime_paths import data_path
 
 
-BATCH_DIR = Path("output/guided_batches")
+BATCH_DIR = data_path("output/guided_batches")
 TERMINAL = {"completed", "failed", "stopped", "interrupted"}
 
 
@@ -344,6 +345,7 @@ class GuidedBatch:
         self.state = ExperimentState.IDLE
         self.stopping = False
         self.task = None
+        self._stop_task = None
         self.persistence_failure = None
         self.priming_stop_pending = False
         self._priming_cleanup_count = 0
@@ -386,6 +388,21 @@ class GuidedBatch:
             self.record["persistence_status"] = "error"
             self.persistence_failure = str(exc)
             raise
+
+    def retry_persistence(self):
+        """Repair terminal storage without changing execution or recovery state."""
+        if self.exp_logger is None:
+            return False
+        saved = self.exp_logger.retry_persistence()
+        run = self.exp_logger.active_run
+        if run is None or not run.finished_at:
+            return False
+        for entry in [self.record["priming"], *self.record["groups"]]:
+            if entry.get("run_id") == run.run_id:
+                entry["persistence_status"] = run.persistence_status
+                entry["persistence_errors"] = list(run.persistence_errors)
+        self.save()
+        return saved
 
     def snapshot(self):
         result = dict(self.record)
@@ -626,8 +643,13 @@ class GuidedBatch:
 
     async def stop(self):
         self.request_stop()
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop())
+        return await asyncio.shield(self._stop_task)
+
+    async def _stop(self):
         if self.task and not self.task.done():
-            await self.task
+            await asyncio.shield(self.task)
         success = await self.engine.stop() if self.engine else True
         self.executor.release_resources_on_cleanup = True
         success = await self.executor.stop_active_devices(source="user_stop") and success

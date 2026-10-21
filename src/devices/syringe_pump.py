@@ -19,6 +19,9 @@ class SyringePumpDevice:
         self.config = config
         self.serial_factory = serial_factory
         self.handle = self.protocol = None
+        self._port = None
+        self._handle_registered = False
+        self._connect_failed = False
         self.mode = None  # No query for N: do not assume a prior application's mode.
         self.orientation = None
         self.trusted = False
@@ -30,7 +33,7 @@ class SyringePumpDevice:
         self.snapshot = self.unknown()
 
     def is_connected(self):
-        return self.handle is not None and self.handle.is_open
+        return self.handle is not None and self.handle.is_open and self.protocol is not None
 
     def unknown(self, error=None):
         return {"read_ok": False, "busy": None, "initialized": None, "position": None,
@@ -39,6 +42,9 @@ class SyringePumpDevice:
                 "theoretical_volume_ul": None, "read_error": error, "read_at": None}
 
     def connect(self, port):
+        if self._connect_failed or (not self.is_connected() and self._port is not None):
+            if not self.disconnect():
+                raise RuntimeError("串口清理未完成，不能重新连接")
         if self.is_connected():
             return True
         if not port:
@@ -46,6 +52,7 @@ class SyringePumpDevice:
         mgr = get_serial_manager()
         if not mgr.acquire_port(port, force=False):
             raise RuntimeError("串口被占用")
+        self._port = port
         try:
             self.handle = self.serial_factory(port=None, baudrate=self.config.connection.baudrate,
                                               bytesize=8, parity="N", stopbits=1,
@@ -54,6 +61,7 @@ class SyringePumpDevice:
             self.handle.rts = self.handle.dtr = False
             self.handle.port = port
             mgr.register_handle(port, self.handle)
+            self._handle_registered = True
             self.handle.open()
             self.protocol = SyringeProtocol(self.handle, self.config.connection.address,
                                             self.config.protocol, self.config.connection.timeout)
@@ -64,16 +72,33 @@ class SyringePumpDevice:
             self.stop_confirmed = False
             self.read_status()
             return True
-        except Exception:
-            mgr.release_port(port)
-            self.handle = self.protocol = None
+        except Exception as exc:
+            self._connect_failed = True
+            self.last_command_error = str(exc)
+            try:
+                self.disconnect()
+            except Exception as cleanup_error:
+                self.last_command_error = f"{exc}; serial cleanup failed: {cleanup_error}"
             raise
 
     def disconnect(self):
-        if self.handle:
-            if not get_serial_manager().release_port(self.handle.port):
+        if self.handle is not None and self._port is not None and not self._handle_registered:
+            try:
+                if self.handle.is_open:
+                    self.handle.close()
+                if self.handle.is_open:
+                    return False
+            except Exception as exc:
+                self.last_command_error = str(exc)
+                return False
+        port = self._port if self._port is not None else getattr(self.handle, "port", None)
+        if port is not None:
+            if not get_serial_manager().release_port(port):
                 return False
         self.handle = self.protocol = None
+        self._port = None
+        self._handle_registered = False
+        self._connect_failed = False
         self.trusted = False
         self.mode = self.orientation = None
         self.loaded = None

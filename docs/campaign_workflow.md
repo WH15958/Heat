@@ -38,7 +38,11 @@ data/campaigns/characterizations.json
 
 这些文件会在首次访问 Campaign API 时自动创建。已有的 `data/datasets/samples.csv` 不迁移、不替代，仍用于现有实验样品记录链路。
 
+桌面版明确退出时可重试终态运行的样品／日志保存，沿用原 `run_id`、`sample_id` 和执行结果，跳过已成功写入的样品，不自动推进 Trial 或重跑实验，见 [桌面版说明](desktop_app.md)。
+
 表征结果与 Trial 状态通过恢复日志共同提交；任一步文件写入失败时回滚，服务中断后在下次访问前恢复。存储失败时接口返回错误，不把部分保存当作成功；解除存储故障后可以重试。
+
+已有 JSON 或恢复日志为空白、损坏、结构不合法或含非有限数值时，接口返回存储不可用（`503`），保留原文件，不视为空库继续写入；系统不自动修复历史数据，须先由维护者排查存储及数据来源。
 
 ---
 
@@ -53,6 +57,7 @@ data/campaigns/characterizations.json
 4. 点击生成 Trial
 5. 根据 Trial 参数在现有 `/experiment` 页面选择或准备 YAML，并手动执行实验
 6. 回到 `/campaigns`，为 Trial 填写 `run_id` 和 `sample_id`
+   两个标识分别更新；只保存其中一个不会清空另一个。切换 Campaign 后须重新选择当前 Trial，较早读取不会覆盖新 Campaign 的记录。
 7. 离线完成 PL、UV-Vis、XRD 等表征
 8. 在 `/campaigns` 录入表征类型、主目标值、额外指标和原始文件路径
 9. 将可靠结果标记为 `accepted_for_planner`，供后续 ML planner 使用
@@ -98,6 +103,8 @@ Trial 支持以下状态：
 ## 5. API 概览
 
 当前提供以下接口：
+
+参数 `parameters` 与指标 `metrics` 中的数值必须有限，嵌套结构同样检查；NaN、Infinity 和 `1e309` 形成的溢出值会返回 `400` 且不保存。合法字符串、布尔值和 null 可按原字段规则保留，不被强制转换成数值。
 
 ```text
 GET  /api/campaigns
@@ -145,20 +152,20 @@ planner 可以建议实验参数，但最终执行仍由 Heat 的实验页面、
 
 推荐及其 Trial 批次作为一次存储操作处理。写入前保存恢复日志 `data/campaigns/recommendation.pending.json`，两份记录都保存成功后才移除日志。写入失败或进程中断后，下次访问会恢复操作前的两份记录；恢复失败时拒绝访问并保留日志，避免暴露孤立 Trial。该机制沿用单服务进程的存储锁，不支持多个服务进程同时写同一目录。
 
-修改 Campaign 相关功能后，至少执行：
+按 [AGENTS.md 验证矩阵](../AGENTS.md#6-validation-matrix) 选择检查。Campaign 后端改动执行 metadata、相关导入及受影响的行为测试，例如：
 
 ```powershell
 python tests\test_metadata.py
-python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws; import src.web.api.campaigns"
-cd frontend
-npm run build -- --mode production
+python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws; import src.web.api.campaigns; import src.campaigns.store; import src.ml.planner"
 ```
 
-如果安装了 `pytest`，再执行：
+使用 `pytest` 运行相关行为测试：
 
 ```powershell
 python -m pytest tests\test_campaigns.py -q
 ```
+
+仅前端源码改动才需要 `cd frontend; npm run build -- --mode production`；仅文档、规则改动执行 `git diff --check -- <paths>` 与内容一致性检查。必要测试依赖缺失时按 AGENTS.md 先确认安装，不把未执行的行为测试视为通过。
 
 批量条件设计 Demo（`/experiment/batch/template`）独立于 Campaign：从现有 YAML 生成参数组合，使用既有 batch_id、condition_id、sample_index 标记另存的单组文件，不创建 Trial，不注入 recommendation，不启动实验或实验队列。具体操作见用户指南“批量条件设计 Demo”。
 

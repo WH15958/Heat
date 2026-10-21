@@ -129,7 +129,9 @@ def test_protocol_releases_reserved_port_when_serial_open_fails(
 
         assert manager.is_port_acquired("COM_FAIL") is False
         assert manager._port_handles == {}
-        assert list(tmp_path.iterdir()) == []
+        assert list(tmp_path.glob("*.lock")) == []
+        # The unlocked OS guard keeps a stable file identity between owners.
+        assert [path.suffix for path in tmp_path.iterdir()] == [".guard"]
     finally:
         manager.cleanup()
 

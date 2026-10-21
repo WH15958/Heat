@@ -1,97 +1,17 @@
 ---
 name: "code-review"
-description: "Reviews code against Heat project rules. Invoke after code modifications, before commits, or when user asks for code review."
+description: "按 Heat 当前安全边界和验证矩阵审查代码；适用于 /review、修改后审查及提交准备。"
 ---
 
-# Code Review for Heat Project
+# Heat 代码审查入口
 
-Review code changes against Heat project development rules. This skill enforces the self-check checklist defined in heat.md section 9.2.
+先读 [AGENTS.md](../../../AGENTS.md)、[PROJECT_CONTEXT.md](../../../context/PROJECT_CONTEXT.md) 与相关区域文档。验证选择遵循 [测试与合并指南](../../../docs/testing_and_merge_flow.md)，以当前代码为事实来源。
 
-## When to Invoke
+1. 用定向 diff 确认审查范围、已有改动和可复现问题；不为个人风格重构相邻代码。
+2. 设备/协议：src/devices 保持同步，不添加内部线程、轮询或队列，不绕过串口/资源管理。检查返回 False、超时、锁/句柄所有权、协议时序、停止确认与失败重试；不凭锁类型名称判定正确性。
+3. Web/编排/桌面：允许在这些上层进行异步或线程桥接，但须验证取消、退出、资源清理、并发和持久化结果。IPC/托盘线程不因使用线程或 daemon 就自动成为缺陷。WebSocket 生命周期不得控制硬件；长等待须可中断，暂停/恢复不得重放。
+4. 前端/API：核对真实路由与请求、失败反馈、单位/参数边界、状态来源、草稿持久化和组件清理；展示不能伪造设备成功，也不能让离线页面显示可执行控制。
+5. 按影响范围运行 metadata、相关导入/行为测试或前端生产构建；仅文档/规则做 diff 与内容一致性检查。语法检查是辅助，不能证明停止、时序或保存行为正确。缺失关键依赖按 AGENTS.md 处理，不静默降低验证。
+6. 报告有证据的缺陷，注明路径/行号、触发条件、实际影响、复现方式及验证限制；区分已确认、待核实和实机待验收，不把无证据的风格偏好判为缺陷。
 
-- After any code modification (Python or TypeScript/Vue)
-- Before Git commits
-- When user asks for code review
-- When user types `/review`
-
-## Review Process
-
-### Step 1: Identify Changed Files
-
-Use `git diff --name-only` or read the files that were just modified in the current conversation.
-
-### Step 2: Execute Checklist
-
-For each changed file, check the following items:
-
-#### Python Files Checklist
-
-| # | Check Item | Rule Source | Pass Criteria |
-|---|-----------|-------------|---------------|
-| 1 | Serial port threading | 2.1 | No threads created inside `src/devices/` |
-| 2 | Lock protection | 5.1/5.2 | All serial access protected by `RLock`, lock scope minimized |
-| 3 | Device safety | 4.2 | Write ops check connection, return values checked |
-| 4 | Parameter validation | 4.4 | Numeric type/range/default values complete |
-| 5 | Resource cleanup | 5.1 | `try...finally` covers all exception paths |
-| 6 | No daemon threads | 5.1 | No `daemon=True` threads |
-| 7 | No bare while True | 5.1 | All loops check `stop_event.is_set()` |
-| 8 | No long sleep | 5.1 | Long sleeps split into short intervals |
-| 9 | Protocol stateless | 2.2 | Protocol classes don't cache data or maintain state |
-| 10 | run_in_executor | 2.3 | No direct device calls in async functions |
-| 11 | Common pitfalls | 5.3 | `x or default` → `x if x is not None else default`; enum safety; deepcopy; retry_count ≥ 1 |
-| 12 | Code style | 3.1 | snake_case, type annotations, no comments, line ≤ 100 chars |
-
-#### TypeScript/Vue Files Checklist
-
-| # | Check Item | Rule Source | Pass Criteria |
-|---|-----------|-------------|---------------|
-| 1 | Component cleanup | 3.2 | `onUnmounted` closes WebSocket, timers, popups |
-| 2 | ECharts usage | 7.2 | `replaceMerge` for setOption, `ResizeObserver`, try-catch on init, dynamic units |
-| 3 | Element Plus | 7.3 | `:loading` on delete, `ElMessageBox.confirm`, precision/step match |
-| 4 | Data flow | 7.1 | Real-time via WebSocket, operations via REST API, params persisted to localStorage |
-| 5 | Code style | 3.2 | camelCase/PascalCase naming, Composition API, `<script setup lang="ts">` |
-
-### Step 3: Compile Verification
-
-Run the appropriate compile check:
-
-- Python: `python -m py_compile <file>`
-- Frontend: `cd frontend && npx vue-tsc --noEmit`
-
-### Step 4: Output Report
-
-Format the review report as:
-
-```
-## Code Review Report
-
-**Files Reviewed**: <file list>
-
-### Checklist Results
-
-| # | Check Item | Result | Details |
-|---|-----------|--------|---------|
-| 1 | Serial port threading | ✅/❌ | <details if failed> |
-| ... | ... | ... | ... |
-
-### Compile Verification
-- <file>: ✅ passed / ❌ <error>
-
-### Summary
-- **Result**: PASS / FAIL
-- **Issues Found**: <count>
-- **Critical Issues**: <count>
-```
-
-### Verdict Rules
-
-- **PASS**: All checklist items pass + compile verification passes
-- **FAIL**: Any critical item fails (items 1-5 for Python, items 1-2 for Vue) OR compile fails
-- On FAIL: Fix the issues and re-run the review
-
-## Important Notes
-
-- This is a self-check by the same AI that wrote the code — be extra strict
-- When in doubt, mark as FAIL rather than PASS
-- Critical items (serial safety, lock, device safety) are non-negotiable
-- Always run compile verification — it's the only objective check
+审查请求不自动授权修复、提交、推送或操作硬件。修复已获授权时采用最小改动并复验；真实串口、设备 start/stop 和 SOP 的结论仍由用户/实验室确认。不额外施加无依据的全局注释、行宽、锁类型或上层线程禁令。

@@ -55,6 +55,10 @@ Vue 前端
 
 本地装饰资源位于 `frontend/src/assets/theme/`，由用户提供的图片裁切并压缩为 WebP。插画使用空 `alt` 和非交互样式；状态、故障和参数必须继续使用真实文本及现有数据源。修改主题时同时检查 Element Plus 懒加载样式的优先级和弹窗，不将设备事件处理迁入展示层。
 
+前端异步结果须匹配当前操作对象：普通实验详情与文件名仅在本次读取成功后一起提交选择，加载/失败时禁止启动，待确认时切换实验撤销旧启动；文件名路径段统一 URL 编码，保留 `#` 与字面 `%20`。Campaign 切换清空旧列表及 Trial 选择，过期读取不能回填；`run_id`/`sample_id` 分别 PATCH。控制确认在离页、设备断连、相关停止或 WebSocket 失联时撤销未提交动作，已发送动作仍由明确停止处理；失联不阻止用户明确确认急停。
+
+控制参数的本机存储写入失败时保留输入并持续显示警告，下一次成功写入才清除。编辑器保存响应必须仍属于原文档；新导入/读取的文档不能被旧响应覆盖，同一文档提交保存后继续编辑也须保留为未保存修改。
+
 ## 2. 核心开发约束
 
 ### 2.1 设备驱动必须保持同步
@@ -125,6 +129,16 @@ FastAPI 是异步的，但设备是同步的。
 
 Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH Python；`scripts/launch_heat.py` 负责前置检查、日志和启动互斥，并在主线程执行原有 `run_server.py`，保留 Uvicorn 的 Ctrl+C/lifespan 退出流程。`output/heat-launcher.lock` 为进程持有的 Windows 文件锁，退出时自动释放，空闲锁文件无需删除。就绪检测线程仅在启动阶段读取 `/openapi.json` 和首页，不触发设备操作；其回归测试为 `python -m unittest discover -s tests -p test_launcher.py`。
 
+#### Windows 桌面入口
+
+`python -m src.desktop.main` 启动窗口和托盘，`src.desktop.backend` 为独立的本机单 worker 后台；二者通过认证的 Windows 命名管道交换 JSON。窗口生命周期不控制设备，明确退出经独立协调器完成停止、持久化及清理，失败保留后台。桌面后台在业务导入前设置 `HEAT_DATA_DIR`，可写数据位于 `%LOCALAPPDATA%\Heat\workspace`；静态页面仍属于安装资源，原 Web 启动的路径与入口保留。
+
+退出协调器在执行器停止或保存失败时调用 `DeviceManager.cleanup(disconnect=False)`，继续停止其它设备并保留连接，供停止、急停和明确重试使用；全部确认后再正常清理断开。已结束运行的存储失败通过 `ExperimentLogger.retry_persistence()` 重试，仅修复样品和日志保存标志，不修改运行结果、结束时间或步骤，不再次发送结束事件；已保存的样品跳过写入。引导批次同步同一 `run_id` 的预充／组记录持久化字段，保留失败状态和恢复锁。
+
+托盘原生菜单回调仅启动 `HeatShowWindow`／`HeatExit` 工作线程，避免确认、IPC 等待及 WinForms 同步 Invoke 占用托盘消息循环；`Desktop.operation` 仍负责启动／退出互斥。退出阶段和启动版本写入带时间戳的 `desktop/desktop.log`；排查时结合后台日志，不能仅凭确认框消失推定已结束。线程行为回归位于 `tests/test_desktop_tray_dispatch.py`。
+
+首次迁移、WebView 资料目录、构建隔离环境、离线运行时、发布产物及 Windows 11 x64/真实设备待验收清单统一见 [desktop_app.md](desktop_app.md)。不得将开发机实际配置或历史目录作为发行默认资源。
+
 ### 3.2 实验引擎
 
 - `src/experiment/parser.py`：解析 YAML、校验实验文件名
@@ -132,6 +146,8 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `src/experiment/executor.py`：逐步执行动作，处理等待、失败和返回值
 - `src/experiment/engine.py`：状态机与 run 生命周期
 - `src/experiment/experiment_logger.py`：run / step 日志与持久化
+
+普通实验、引导批次和微波托管的停止由各自持有的停止任务负责；调用方通过 `asyncio.shield` 等待，外部取消等待不会连带取消设备清理与最终持久化。停止或保存失败仍保留显式重试和恢复锁，不把调用方请求结束解释为停机成功；同步驱动及原有暂停语义不变。
 
 ### 3.3 设备与协议
 
@@ -143,6 +159,10 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `src/protocols/microwave_params.py`：微波仪 Modbus 地址、模式和控制字常量
 
 说明：蠕动泵在 Heat 中按 Modbus RTU 驱动，但现场物理接线不在软件层写死为 RS485。若实验室当前使用 RS232 线缆，以现场接线事实为准；不要把“协议是 Modbus RTU”和“物理层一定是 RS485”混为一谈。
+
+串口跨进程所有权在系统临时目录 `heat_serial_locks` 中按端口管理：占用期间持有非阻塞 OS 文件锁（Windows `msvcrt`、POSIX `flock`），释放时才关闭句柄。1 字节 `.guard` 文件永久保留，不能通过删除它或换 inode 绕过锁；文件存在本身不代表端口仍被占用。`.lock` 另记 `owner_token`，非所有者不能删除，陈旧清理不能删除仍持有 OS 锁的记录；无 token 的旧版记录仅在确认原进程已死且取得 OS 锁后允许接管。维护时不要手工删除 guard 来“解锁”。
+
+协议断开返回 `False` 时保留句柄和占用，未登记的本次自有句柄也须在释放占用前确认关闭。加热器、蠕动泵、微波和阀的连接清理／断开失败后，先显式断开成功再重新连接；蠕动泵原有重连路径清理失败后停止重试。注射泵后续显式连接会先重试旧资源清理，失败不得覆盖旧对象；协议未建立不算已连接，读状态失败但协议已建立时仍保留 STOP 通路。Modbus 响应 deadline 使用单调时钟，但不据此承诺整个串行 I/O 的严格总时限。
 
 泵控制的防错边界：
 
@@ -165,6 +185,8 @@ Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `40
 - `src/science/sample_record.py`：`samples.csv` 写入与去重
 - `ExperimentRun.persistence_status` 独立记录追踪持久化结果；`log_saved`、`sample_record_saved` 和 `persistence_errors` 用于区分“设备流程完成”和“记录完整落盘”
 - 实验日志、`samples.csv` 和 campaign JSON 采用同目录临时文件加 `os.replace()` 的原子替换；进程内写入使用锁保护读改写序列
+
+Campaign 参数与表征指标递归检查数值是否有限，含嵌套结构；NaN、Infinity 或 `1e309` 形成的溢出值返回 HTTP `400`，不写入数据，合法字符串、布尔值和 null 不因数值检查被转换。已有 Campaign JSON 或恢复日志若空白、损坏、结构非法或含非有限数值，按存储不可用返回 `503` 并保留原文件，不将坏文件当作空库覆盖，也不自动修复历史。
 
 ---
 
@@ -391,12 +413,12 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 ## 9. 合并前检查清单
 
-合并前至少确认：
+合并前按 [AGENTS.md 的验证矩阵](../AGENTS.md#6-validation-matrix) 与 [测试指南 10.1 节](testing_and_merge_flow.md#101-按变更类型选择验证) 确认：
 
 - 代码改动与文档改动一致
-- `tests/test_metadata.py` 通过
-- Web 关键模块可导入
-- 前端 `npm run build` 通过
+- 仅文档、规则或 Skill 改动完成 diff 和内容一致性检查
+- 后端改动完成 metadata、相关导入及受影响的行为检查；前端源码改动完成生产构建
+- 硬件控制语义改动另由用户／实验室确认实机 smoke test
 - 临时产物未误入版本控制
 
 更详细的流程见：

@@ -138,9 +138,12 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { syringeApi, syringeResult, type SyringeState } from '../api/syringePumps'
 import deviceArtwork from '../assets/theme/syringe-pump.webp'
+import { usePendingConfirmation } from '../composables/pendingConfirmation'
 const props = defineProps<{ state: SyringeState }>()
 const emit = defineEmits<{ update: [state: SyringeState] }>()
 const pending = ref(false)
+const confirmations = usePendingConfirmation()
+watch(() => [props.state.device_id, props.state.connected, props.state.connection_port, props.state.owner], () => confirmations.cancel(), { flush: 'sync' })
 const activeTab = ref('operate')
 const basicSections = ref<string[]>([]), advancedSections = ref<string[]>([])
 const defaultInitCode = props.state.capacity_ml >= 2.5 ? 0 : props.state.capacity_ml >= 0.5 ? 1 : 2
@@ -168,6 +171,7 @@ watch(setting, key => {
 function error(e: any) { ElMessage.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : e.message || '请求失败') }
 async function refresh() { try { emit('update', (await syringeApi.read(props.state.device_id)).data) } catch (e) { emit('update', { ...props.state, read_ok: false }); error(e) } }
 async function send(body: Record<string, unknown>, stop = false) {
+  if (stop) confirmations.cancel()
   if (pending.value && !stop) return
   pending.value = true
   try {
@@ -179,16 +183,20 @@ async function send(body: Record<string, unknown>, stop = false) {
   } catch (e) { error(e) } finally { pending.value = false }
 }
 async function connect() { pending.value = true; try { const res = await syringeApi.connect(props.state.device_id); if (!res.data.success) throw new Error('设备返回连接失败'); emit('update', { ...props.state, connected: true, read_ok: false }); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
-async function disconnect() { pending.value = true; try { await syringeApi.disconnect(props.state.device_id); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
+async function disconnect() { confirmations.cancel(); pending.value = true; try { await syringeApi.disconnect(props.state.device_id); await refresh() } catch (e) { error(e) } finally { pending.value = false } }
 async function initialize() {
-  try { await ElMessageBox.confirm('初始化会将活塞移向上端并切阀。请确认安装、液路和现场看护，过载原因已排除。', '初始化确认', { type: 'warning' }) }
-  catch { return }
-  await send({ action: 'initialize', direction: direction.value, initialization_code: initCode.value, confirm: true, timeout: timeout.value })
+  if (!canInitialize.value) return
+  const body = { action: 'initialize', direction: direction.value, initialization_code: initCode.value, confirm: true, timeout: timeout.value }
+  if (!await confirmations.confirm('write', () => ElMessageBox.confirm('初始化会将活塞移向上端并切阀。请确认安装、液路和现场看护，过载原因已排除。', '初始化确认', { type: 'warning' }),
+    () => canInitialize.value && body.direction === direction.value && body.initialization_code === initCode.value && body.timeout === timeout.value)) return
+  await send(body)
 }
 async function storeProgram() {
-  try { await ElMessageBox.confirm(`写入EEPROM槽位 ${slot.value} 会覆盖该槽位；确认上电自动运行已按现场要求禁用。`, '存储确认', { type: 'warning' }) }
-  catch { return }
-  await send({ action: 'program_store', program: program.value, name: programName.value, slot: slot.value, confirm: true, timeout: timeout.value })
+  if (!canControl.value) return
+  const body = { action: 'program_store', program: program.value, name: programName.value, slot: slot.value, confirm: true, timeout: timeout.value }
+  if (!await confirmations.confirm('write', () => ElMessageBox.confirm(`写入EEPROM槽位 ${body.slot} 会覆盖该槽位；确认上电自动运行已按现场要求禁用。`, '存储确认', { type: 'warning' }),
+    () => canControl.value && body.program === program.value && body.name === programName.value && body.slot === slot.value && body.timeout === timeout.value)) return
+  await send(body)
 }
 async function diagnose() { try { details.value = JSON.stringify((await syringeApi.diagnostics(props.state.device_id)).data, null, 2) } catch (e) { error(e) } }
 async function loadPrograms() { try { details.value = JSON.stringify((await syringeApi.programs(props.state.device_id)).data, null, 2); ElMessage.info('登记程序已显示在诊断区') } catch (e) { error(e) } }

@@ -35,26 +35,26 @@ env/
 ~$*
 
 # Logs
-logs/
-*.log
+/logs/
 
-# Data files
-data/
-*.csv
-*.xlsx
-*.xls
+# Runtime data (keep controlled fixtures and manufacturer source files visible)
+/data/
 
 # Reports (generated)
-reports/*.html
-reports/*.png
-output/
+/reports/
+/output/
 # Progress-report and group-presentation exports belong outside the repository.
 docs/project_progress_report_*.html
 docs/Heat_project_progress_report_*.pptx
 docs/archive/presentation/
 
-# Config with sensitive info (if any)
-# config/local_config.yaml
+# Private environment/configuration files; examples remain reviewable
+.env
+.env.*
+!.env.example
+!.env.*.example
+/config/local_config.yaml
+/config/local_config.yml
 
 # OS
 .DS_Store
@@ -68,6 +68,7 @@ htmlcov/
 # Distribution
 *.manifest
 *.spec
+!packaging/desktop/heat.spec
 
 # Frontend
 frontend/node_modules/

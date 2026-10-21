@@ -1914,25 +1914,26 @@ class DeviceManager:
             if pump_lock:
                 pump_lock.release()
 
-    def cleanup(self) -> bool:
-        """Stop connected devices before releasing their resources."""
+    def cleanup(self, *, disconnect: bool = True) -> bool:
+        """Stop connected devices, optionally retaining connections for a retry."""
         self._begin_global_stop()
         try:
-            return self._cleanup_devices()
+            return self._cleanup_devices(disconnect=disconnect)
         finally:
             self._end_global_stop()
 
-    def _cleanup_devices(self) -> bool:
-        """Stop and disconnect every registered device."""
+    def _cleanup_devices(self, *, disconnect: bool = True) -> bool:
+        """Stop every registered device and release connections when requested."""
         success = True
-        for did, valve in self.valves.items():
-            with self._valve_locks[did]:
-                success = valve.disconnect() and success
+        if disconnect:
+            for did, valve in self.valves.items():
+                with self._valve_locks[did]:
+                    success = valve.disconnect() and success
         for controller in self.syringe_pumps.values():
             try:
                 if controller.device.is_connected():
                     stopped = controller.stop()
-                    if stopped:
+                    if stopped and disconnect:
                         with controller.lock:
                             stopped = controller.device.disconnect()
                     success = stopped and success
@@ -1943,14 +1944,14 @@ class DeviceManager:
             self._request_heater_stop(device_id)
             with self._heater_control_lock(device_id):
                 device_success = self._cleanup_device(
-                    "heater", device_id, heater, heater.stop
+                    "heater", device_id, heater, heater.stop, disconnect=disconnect
                 )
             success = device_success and success
         for device_id, pump in self._pumps.items():
             self._request_pump_abort(device_id)
             with self._pump_control_lock(device_id):
                 device_success = self._cleanup_device(
-                    "pump", device_id, pump, pump.stop_all
+                    "pump", device_id, pump, pump.stop_all, disconnect=disconnect
                 )
                 success = device_success and success
         for device_id, microwave in self._microwaves.items():
@@ -1958,20 +1959,21 @@ class DeviceManager:
             with self._microwave_control_lock(device_id):
                 device_success = self._cleanup_device(
                     "microwave", device_id, microwave,
-                    lambda did=device_id: self._stop_microwave_command(did, "service_cleanup")
+                    lambda did=device_id: self._stop_microwave_command(did, "service_cleanup"),
+                    disconnect=disconnect,
                 )
             success = device_success and success
         return success
 
     @staticmethod
-    def _cleanup_device(kind: str, device_id: str, device, stop) -> bool:
+    def _cleanup_device(kind: str, device_id: str, device, stop, *, disconnect: bool = True) -> bool:
         return DeviceManager._stop_and_disconnect(
-            kind, device_id, device, stop, "Cleanup"
+            kind, device_id, device, stop, "Cleanup", disconnect=disconnect
         )
 
     @staticmethod
     def _stop_and_disconnect(
-        kind: str, device_id: str, device, stop, operation: str
+        kind: str, device_id: str, device, stop, operation: str, *, disconnect: bool = True
     ) -> bool:
         connection_check_failed = False
         try:
@@ -1999,6 +2001,9 @@ class DeviceManager:
                 f"{device_id}: {e}"
             )
             return False
+
+        if not disconnect:
+            return not connection_check_failed
 
         try:
             if not device.disconnect():

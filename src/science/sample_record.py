@@ -2,14 +2,14 @@ import csv
 import os
 import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Iterable, Optional
 
 from src.utils.logger import get_logger
+from src.utils.runtime_paths import data_path
 
 logger = get_logger(__name__)
 
-SAMPLES_DIR = Path("data/datasets")
+SAMPLES_DIR = data_path("data/datasets")
 SAMPLES_CSV = SAMPLES_DIR / "samples.csv"
 _SAMPLE_FILE_LOCK = threading.Lock()
 

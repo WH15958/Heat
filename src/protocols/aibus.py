@@ -144,6 +144,7 @@ class AIBUSProtocol:
         self._stopbits = stopbits
         self._serial: Optional[serial.Serial] = None
         self._port_acquired = False
+        self._serial_registered = False
         self._logger = logging.getLogger(f"{__name__}.AIBUS[{address}]")
         
     @property
@@ -173,13 +174,13 @@ class AIBUSProtocol:
         Raises:
             serial.SerialException: 串口打开失败
         """
-        if self.is_open:
+        if self.is_open and self._serial_registered:
             return True
 
         serial_manager = get_serial_manager()
         if self._port_acquired:
-            serial_manager.release_port(self._port)
-            self._port_acquired = False
+            if not self.close():
+                raise serial.SerialException(f"Failed to release serial port: {self._port}")
 
         if not serial_manager.acquire_port(self._port):
             raise serial.SerialException(f"Serial port already in use: {self._port}")
@@ -196,18 +197,13 @@ class AIBUSProtocol:
                 timeout=self._timeout
             )
             serial_manager.register_handle(self._port, serial_handle)
+            self._serial_registered = True
             self._serial = serial_handle
             self._logger.info(f"Serial port opened: {self._port}")
             return True
         except Exception as e:
-            if serial_handle is not None:
-                try:
-                    serial_handle.close()
-                except Exception:
-                    pass
-            serial_manager.release_port(self._port)
-            self._port_acquired = False
-            self._serial = None
+            self._serial = serial_handle
+            self.close()
             self._logger.error(f"Failed to open serial port: {e}")
             raise
     
@@ -218,20 +214,23 @@ class AIBUSProtocol:
         Returns:
             bool: 关闭成功返回True
         """
-        success = True
         try:
+            if self._serial is not None and (not self._port_acquired or not self._serial_registered):
+                if self._serial.is_open:
+                    self._serial.close()
+                if self._serial.is_open:
+                    return False
             if self._port_acquired:
-                success = get_serial_manager().release_port(self._port)
-            elif self._serial is not None and self._serial.is_open:
-                self._serial.close()
-            self._logger.info("Serial port closed")
+                if not get_serial_manager().release_port(self._port):
+                    return False
         except Exception as e:
             self._logger.error(f"Error closing serial port: {e}")
-            success = False
-        finally:
-            self._port_acquired = False
-            self._serial = None
-        return success
+            return False
+        self._port_acquired = False
+        self._serial_registered = False
+        self._serial = None
+        self._logger.info("Serial port closed")
+        return True
     
     def _build_address_bytes(self) -> bytes:
         """

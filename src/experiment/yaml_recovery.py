@@ -10,8 +10,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from src.experiment.engine import ExperimentEngine, ExperimentState
+from src.utils.runtime_paths import data_path
 
-RECOVERY_DIR = Path(__file__).resolve().parents[2] / 'output' / 'yaml_runs'
+RECOVERY_DIR = data_path('output/yaml_runs', legacy=Path(__file__).resolve().parents[2] / 'output' / 'yaml_runs')
 TERMINAL = {'completed', 'failed', 'stopped'}
 
 
@@ -143,9 +144,9 @@ class PersistentExperimentEngine(ExperimentEngine):
         finally:
             self._finalize_record()
 
-    async def stop(self):
+    async def _stop(self):
         try:
-            success = await super().stop()
+            success = await super()._stop()
         except Exception as exc:
             self.record.update(recovery_required=True, error=str(exc))
             return False

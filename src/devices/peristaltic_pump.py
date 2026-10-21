@@ -154,6 +154,7 @@ class LabSmartPumpDevice(BaseDevice):
         self._closed = False
         self.connection_error = None
         self._protocol: Optional[ModbusRTUProtocol] = None
+        self._cleanup_pending = False
         self._channel_data: Dict[int, PumpChannelData] = {}
         self._consecutive_failures = 0
         self._max_failures_before_reconnect = 5
@@ -213,12 +214,16 @@ class LabSmartPumpDevice(BaseDevice):
             bool: 连接成功返回True
         """
         with self._lock:
+            if self._cleanup_pending:
+                return False
             if self.connection_error and self._protocol is not None and self._protocol.is_connected:
                 return False
             if self.status == DeviceStatus.CONNECTED:
                 return True
             if self._status == DeviceStatus.CONNECTING:
                 self._logger.error("Connection already in progress")
+                return False
+            if self._protocol is not None and not self.disconnect():
                 return False
             self.status = DeviceStatus.CONNECTING
             self.connection_error = None
@@ -241,15 +246,10 @@ class LabSmartPumpDevice(BaseDevice):
             )
             
             if not protocol.connect():
-                with self._lock:
-                    self.status = DeviceStatus.ERROR
-                return False
+                raise ConnectionError("Protocol connection failed")
             
             if not protocol.is_connected:
-                protocol.disconnect()
-                with self._lock:
-                    self.status = DeviceStatus.ERROR
-                return False
+                raise ConnectionError("Protocol is not connected")
             
             with self._lock:
                 if self.status == DeviceStatus.CONNECTED:
@@ -275,12 +275,17 @@ class LabSmartPumpDevice(BaseDevice):
             
         except Exception as e:
             self._logger.error(f"Failed to connect pump: {e}")
+            cleanup_failed = False
             if protocol is not None:
                 try:
-                    protocol.disconnect()
+                    cleanup_failed = protocol.disconnect() is False
                 except Exception as close_err:
+                    cleanup_failed = True
                     self._logger.warning(f"Failed to disconnect protocol during error cleanup: {close_err}")
             with self._lock:
+                if cleanup_failed:
+                    self._protocol = protocol
+                    self._cleanup_pending = True
                 self.status = DeviceStatus.ERROR
             return False
     
@@ -292,10 +297,19 @@ class LabSmartPumpDevice(BaseDevice):
             bool: 断开成功返回True
         """
         with self._lock:
-            self._closed = True
             if self._protocol is not None:
-                self._protocol.disconnect()
+                try:
+                    released = self._protocol.disconnect() is not False
+                except Exception as e:
+                    self._logger.error(f"Failed to disconnect pump: {e}")
+                    released = False
+                if not released:
+                    self._cleanup_pending = True
+                    self.status = DeviceStatus.ERROR
+                    return False
                 self._protocol = None
+            self._cleanup_pending = False
+            self._closed = True
             
             self.status = DeviceStatus.DISCONNECTED
             self.connection_error = None
@@ -308,7 +322,8 @@ class LabSmartPumpDevice(BaseDevice):
             if self._lock.acquire(blocking=False):
                 try:
                     if self._protocol is not None:
-                        self._protocol.disconnect()
+                        if self._protocol.disconnect() is False:
+                            return
                         self._protocol = None
                     self._closed = True
                 finally:
@@ -503,11 +518,18 @@ class LabSmartPumpDevice(BaseDevice):
 
     def _try_reconnect_locked(self):
         """尝试重新连接串口（在锁内调用）"""
+        if self._cleanup_pending:
+            return
         if self._protocol is not None:
             try:
-                self._protocol.disconnect()
-            except Exception:
-                pass
+                released = self._protocol.disconnect() is not False
+            except Exception as e:
+                self._logger.error(f"Failed to release pump before reconnect: {e}")
+                released = False
+            if not released:
+                self._cleanup_pending = True
+                self.status = DeviceStatus.ERROR
+                return
             self._protocol = None
 
         try:
@@ -526,16 +548,18 @@ class LabSmartPumpDevice(BaseDevice):
                 timeout=self.config.timeout,
             )
 
+            self._protocol = protocol
             if protocol.connect():
-                self._protocol = protocol
                 self._consecutive_failures = 0
                 self.status = DeviceStatus.ERROR if self.connection_error else DeviceStatus.CONNECTED
                 logger.info(f"Pump {self.config.device_id} serial port reopened; device response not yet confirmed")
             else:
                 self.status = DeviceStatus.ERROR
+                self._cleanup_pending = True
                 logger.error(f"Pump {self.config.device_id} reconnect failed")
         except Exception as e:
             self.status = DeviceStatus.ERROR
+            self._cleanup_pending = self._protocol is not None
             logger.error(f"Pump {self.config.device_id} reconnect error: {e}")
 
     def _read_float(self, address: int) -> Optional[float]:

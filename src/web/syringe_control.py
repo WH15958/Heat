@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 from src.devices.syringe_commands import SyringeCommand
 from src.devices.syringe_pump import SyringePumpDevice
 from src.utils.serial_binding import resolve_connection
+from src.utils.runtime_paths import data_path
 
 
 class SyringeController:
-    def __init__(self, config, registry_dir=Path("data/syringe_programs"), device=None):
+    def __init__(self, config, registry_dir=None, device=None):
         self.device = device or SyringePumpDevice(config)
         self.config = config
         self.lock = threading.RLock()
@@ -21,7 +22,7 @@ class SyringeController:
         self.generation = 0
         self.stopping = 0
         self.binding = None
-        self.registry_dir = Path(registry_dir)
+        self.registry_dir = Path(registry_dir) if registry_dir is not None else data_path("data/syringe_programs")
         self.verified_slots = {}
         self.events = []
 

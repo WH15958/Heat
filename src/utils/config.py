@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar
 import logging
 
+from src.utils.runtime_paths import data_path
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound='BaseConfig')
@@ -685,7 +687,7 @@ class ConfigManager:
     def _get_default_config_path(self) -> str:
         """获取默认配置文件路径"""
         base_dir = Path(__file__).parent.parent.parent
-        config_dir = base_dir / "config"
+        config_dir = data_path("config", legacy=base_dir / "config")
         config_dir.mkdir(parents=True, exist_ok=True)
         return str(config_dir / self.DEFAULT_CONFIG_FILENAME)
     

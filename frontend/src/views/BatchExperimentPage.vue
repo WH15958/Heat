@@ -124,6 +124,8 @@ import {computed,nextTick,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
 import axios from 'axios'
+import {usePendingConfirmation} from '../composables/pendingConfirmation'
+const confirmations=usePendingConfirmation()
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
@@ -391,7 +393,7 @@ async function startBatch(){
  try{
   const key=requestKey.value
   if(startBlockReason.value)throw new Error(startBlockReason.value)
-  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，两路稳定到温后等待设定脱气时间，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
+  if(!await confirmations.confirm('start',()=>ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，两路稳定到温后等待设定脱气时间，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})))return
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
@@ -405,6 +407,7 @@ async function startBatch(){
  }catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}
 }
 async function controlBatch(action:string){
+ if(action==='stop')confirmations.cancel()
  if(controlling.value||pendingControl.value==='stop'||(pendingControl.value&&action!=='stop'))return
  const sequence=++controlSequence
  ++refreshSequence
@@ -443,7 +446,7 @@ function returnToSetup(reuse=false){
  error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true;draftEnabled=true
  void router.replace({query:{...route.query,new:'1'}})
 }
-async function acknowledgeInterrupted(){controlling.value=true;try{await ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'});++refreshSequence;batch.value=(await axios.post(`/api/guided/${batch.value.batch_id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
+async function acknowledgeInterrupted(){if(controlling.value)return;const id=batch.value.batch_id;controlling.value=true;try{if(!await confirmations.confirm('recover',()=>ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'}),()=>batch.value.batch_id===id))return;++refreshSequence;batch.value=(await axios.post(`/api/guided/${id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
 
 const draftKey='heat.guided-draft.v1'
 const draftNotice=ref('')

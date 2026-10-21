@@ -768,7 +768,7 @@ interval_time: 0
 
 ## MSP1-CX 注射泵动作与等待
 
-独立设备 ID 为 `syringe_pump1`、`syringe_pump2`。所有动作参数含 `device_id`；解析时检查设备类型、参数和程序语法，执行前再核对连接、Q状态及行程。泵2默认未配置，引用它的启用步骤使实验在任何运动前失败。
+独立设备 ID 为 `syringe_pump1`、`syringe_pump2`。所有动作参数含 `device_id`；解析时检查设备类型、参数和程序语法，执行前再核对连接、Q状态及行程。引用的注射泵未配置、未启用或未连接时，启动前检查失败；当前配置已启用两台泵，现场身份和实际端口仍以配置及唯一绑定解析为准。
 
 | 动作前缀 `syringe_pump.` | 参数（除device_id） |
 | --- | --- |
@@ -802,7 +802,7 @@ interval_time: 0
   type: valve.switch
   params:
     device_id: valve1
-    position: NO
+    position: "NO"
   wait:
     type: duration
     seconds: 0.2

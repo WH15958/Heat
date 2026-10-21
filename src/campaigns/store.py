@@ -16,17 +16,33 @@ from src.campaigns.models import (
     utc_now_iso,
     validate_campaign_status,
     validate_trial_status,
+    validate_finite_numbers,
 )
 from src.utils.logger import get_logger
+from src.utils.runtime_paths import data_path
 
 logger = get_logger(__name__)
 
-CAMPAIGNS_DIR = Path("data/campaigns")
+CAMPAIGNS_DIR = data_path("data/campaigns")
 CAMPAIGNS_JSON = CAMPAIGNS_DIR / "campaigns.json"
 TRIALS_JSON = CAMPAIGNS_DIR / "trials.json"
 RECOMMENDATIONS_JSON = CAMPAIGNS_DIR / "recommendations.json"
 CHARACTERIZATIONS_JSON = CAMPAIGNS_DIR / "characterizations.json"
 _STORE_LOCK = threading.RLock()
+
+
+class CampaignStorageError(RuntimeError):
+    """Existing records are unreadable; preserve them for explicit recovery."""
+
+
+def _validate_rows(value, filename):
+    if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+        raise CampaignStorageError(f"{filename} 必须是 JSON 对象列表；原文件已保留")
+    try:
+        validate_finite_numbers(value)
+    except ValueError as exc:
+        raise CampaignStorageError(f"{filename} 包含非有限数值；原文件已保留") from exc
+    return value
 
 
 def _synchronized(func):
@@ -52,16 +68,11 @@ def _read_list(path: Path) -> List[Dict[str, Any]]:
     _ensure_store()
     try:
         text = path.read_text(encoding="utf-8").strip()
-        if not text:
-            return []
         data = json.loads(text)
-        if isinstance(data, list):
-            return data
-        logger.warning(f"Expected list in {path}, got {type(data).__name__}")
-        return []
-    except json.JSONDecodeError as e:
+        return _validate_rows(data, path.name)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.error(f"Invalid JSON in {path}: {e}")
-        raise
+        raise CampaignStorageError(f"{path.name} 不是有效 JSON；原文件已保留") from e
 
 
 @_synchronized
@@ -71,10 +82,11 @@ def _write_list(path: Path, rows: List[Dict[str, Any]]) -> None:
 
 
 def _write_json(path: Path, value) -> None:
+    validate_finite_numbers(value)
     temp_path = path.with_suffix(path.suffix + ".tmp")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(value, f, ensure_ascii=False, indent=2)
+            json.dump(value, f, ensure_ascii=False, indent=2, allow_nan=False)
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
@@ -86,14 +98,24 @@ def _write_json(path: Path, value) -> None:
             pass
 
 
+def _read_recovery(journal, keys):
+    try:
+        previous = json.loads(journal.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise CampaignStorageError(f"{journal.name} 不是有效 JSON；恢复文件已保留") from exc
+    if not isinstance(previous, dict) or any(key not in previous for key in keys):
+        raise CampaignStorageError(f"{journal.name} 恢复结构无效；恢复文件已保留")
+    for key in keys:
+        _validate_rows(previous[key], journal.name)
+    return previous
+
+
 def _recover_recommendation() -> None:
     """Roll back an interrupted pair of writes before exposing store contents."""
     journal = CAMPAIGNS_DIR / "recommendation.pending.json"
     if not journal.exists():
         return
-    previous = json.loads(journal.read_text(encoding="utf-8"))
-    if not isinstance(previous.get("trials"), list) or not isinstance(previous.get("recommendations"), list):
-        raise ValueError("Invalid recommendation recovery journal")
+    previous = _read_recovery(journal, ("trials", "recommendations"))
     _write_json(TRIALS_JSON, previous["trials"])
     _write_json(RECOMMENDATIONS_JSON, previous["recommendations"])
     journal.unlink()
@@ -112,9 +134,7 @@ def _recover_characterization() -> None:
     journal = CAMPAIGNS_DIR / "characterization.pending.json"
     if not journal.exists():
         return
-    previous = json.loads(journal.read_text(encoding="utf-8"))
-    if not isinstance(previous.get("trials"), list) or not isinstance(previous.get("characterizations"), list):
-        raise ValueError("Invalid characterization recovery journal")
+    previous = _read_recovery(journal, ("trials", "characterizations"))
     _write_json(TRIALS_JSON, previous["trials"])
     _write_json(CHARACTERIZATIONS_JSON, previous["characterizations"])
     journal.unlink()
@@ -178,6 +198,7 @@ class CampaignStore:
         recommendation_id: str,
         parameters_batch: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
+        validate_finite_numbers(parameters_batch)
         trials = _read_list(TRIALS_JSON)
         created = _new_trials(campaign_id, recommendation_id, parameters_batch)
         trials.extend(created)
@@ -212,6 +233,7 @@ class CampaignStore:
         parameters_batch: List[Dict[str, Any]],
         notes: str = "",
     ) -> Dict[str, Any]:
+        validate_finite_numbers(parameters_batch)
         recommendation_id = _make_id("rec")
         previous_trials = _read_list(TRIALS_JSON)
         previous_recommendations = _read_list(RECOMMENDATIONS_JSON)
@@ -253,6 +275,7 @@ class CampaignStore:
         notes: str = "",
         measured_at: Optional[str] = None,
     ) -> Dict[str, Any]:
+        validate_finite_numbers(metrics)
         result = CharacterizationResult(
             characterization_id=_make_id("char"),
             campaign_id=campaign_id,

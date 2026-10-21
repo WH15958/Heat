@@ -147,6 +147,7 @@ class MicrowaveDevice(BaseDevice):
         super().__init__(config, info)
         self._microwave_config = config
         self._protocol = protocol
+        self._cleanup_pending = False
         self.last_command_error: Optional[str] = None
         self.last_command_result: Optional[dict] = None
         self._expected_configuration = None
@@ -159,6 +160,8 @@ class MicrowaveDevice(BaseDevice):
     def connect(self) -> bool:
         """Connect the Modbus protocol synchronously."""
         with self._lock:
+            if self._cleanup_pending:
+                return False
             if self.is_connected():
                 self.status = DeviceStatus.CONNECTED
                 return True
@@ -170,7 +173,6 @@ class MicrowaveDevice(BaseDevice):
             self.status = DeviceStatus.CONNECTING
 
         protocol = self._protocol
-        created_protocol = False
         try:
             if protocol is None:
                 protocol = ModbusRTUProtocol(
@@ -187,12 +189,9 @@ class MicrowaveDevice(BaseDevice):
                     ),
                     timeout=self.config.timeout,
                 )
-                created_protocol = True
 
             if not self._connect_protocol(protocol):
-                with self._lock:
-                    self.status = DeviceStatus.ERROR
-                return False
+                raise ConnectionError("Protocol connection failed")
 
             with self._lock:
                 self._protocol = protocol
@@ -200,9 +199,17 @@ class MicrowaveDevice(BaseDevice):
             return True
         except Exception as e:
             self._logger.error(f"Failed to connect microwave: {e}")
-            if created_protocol and protocol is not None:
-                self._disconnect_protocol(protocol)
+            cleanup_failed = False
+            if protocol is not None:
+                try:
+                    cleanup_failed = not self._disconnect_protocol(protocol)
+                except Exception as close_err:
+                    cleanup_failed = True
+                    self._logger.warning(f"Failed to disconnect protocol during error cleanup: {close_err}")
             with self._lock:
+                if cleanup_failed:
+                    self._protocol = protocol
+                    self._cleanup_pending = True
                 self.status = DeviceStatus.ERROR
             return False
 
@@ -212,8 +219,17 @@ class MicrowaveDevice(BaseDevice):
             self._expected_configuration = None
             self._configuration_attempted = False
             if self._protocol is not None:
-                self._disconnect_protocol(self._protocol)
+                try:
+                    released = self._disconnect_protocol(self._protocol)
+                except Exception as e:
+                    self._logger.error(f"Failed to disconnect microwave: {e}")
+                    released = False
+                if not released:
+                    self._cleanup_pending = True
+                    self.status = DeviceStatus.ERROR
+                    return False
                 self._protocol = None
+            self._cleanup_pending = False
             self.status = DeviceStatus.DISCONNECTED
             return True
 
@@ -778,7 +794,8 @@ class MicrowaveDevice(BaseDevice):
         return MicrowaveDevice._protocol_connected(protocol)
 
     @staticmethod
-    def _disconnect_protocol(protocol: Any) -> None:
+    def _disconnect_protocol(protocol: Any) -> bool:
         disconnect = getattr(protocol, "disconnect", None)
         if callable(disconnect):
-            disconnect()
+            return disconnect() is not False
+        return True

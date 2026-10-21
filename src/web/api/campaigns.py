@@ -1,15 +1,26 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.campaigns.models import TrialStatus
-from src.campaigns.store import CampaignStore
+from src.campaigns.models import TrialStatus, validate_finite_numbers
+from src.campaigns.store import CampaignStore, CampaignStorageError
 from src.ml.planner import ManualPlanner
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+
+async def _storage_errors():
+    try:
+        yield
+    except (CampaignStorageError, OSError) as exc:
+        logger.error(f"Campaign storage unavailable: {exc}")
+        detail = str(exc) if isinstance(exc, CampaignStorageError) else "Campaign 存储不可用，请检查存储后重试"
+        raise HTTPException(503, detail) from exc
+
+
+router = APIRouter(prefix="/campaigns", tags=["campaigns"], dependencies=[Depends(_storage_errors)])
 store = CampaignStore()
 
 
@@ -60,7 +71,7 @@ async def create_campaign(body: CreateCampaignRequest):
             parameter_names=body.parameter_names,
             notes=body.notes,
         )
-    except Exception as e:
+    except ValueError as e:
         logger.error(f"Failed to create campaign: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -75,6 +86,10 @@ async def get_campaign(campaign_id: str):
 
 @router.post("/{campaign_id}/recommendations/manual")
 async def create_manual_recommendation(campaign_id: str, body: ManualRecommendationRequest):
+    try:
+        validate_finite_numbers(body.parameters_batch)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     campaign = store.get_campaign(campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -111,6 +126,10 @@ async def update_trial(campaign_id: str, trial_id: str, body: UpdateTrialRequest
 
 @router.post("/{campaign_id}/characterizations")
 async def create_characterization(campaign_id: str, body: CreateCharacterizationRequest):
+    try:
+        validate_finite_numbers(body.metrics)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     campaign = store.get_campaign(campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")

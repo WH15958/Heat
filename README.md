@@ -6,6 +6,7 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 - 如果你是 AI / 自动化协作者：看 [context/PROJECT_CONTEXT.md](context/PROJECT_CONTEXT.md)
 - 如果你是实验使用者：看 [docs/user_guide.md](docs/user_guide.md)
+- 如果你要安装或使用 Windows 桌面版：看 [docs/desktop_app.md](docs/desktop_app.md)
 - 如果你是人类开发者：看 [docs/developer_guide.md](docs/developer_guide.md)
 
 ## 项目简介
@@ -28,6 +29,8 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 ## 快速开始
 
+Windows 桌面版面向 Windows 11 x64，安装包内置 Python 并随附 WebView2 离线安装程序；首次导入现有工作区，关闭窗口收至托盘，明确退出才执行停机与保存。安装、数据位置、构建和待完成的虚拟机/实机验收见 [桌面版说明](docs/desktop_app.md)。以下保留原浏览器运行方式。
+
 后端要求 Python 3.10 或更高版本。
 
 ### 1. 安装 Python 依赖
@@ -49,9 +52,11 @@ pip install -r requirements.txt
 
 ### 2. 安装前端依赖
 
+构建机需要 Node.js `^20.19.0 || >=22.12.0`（与当前锁文件中的 Vite/Rolldown 要求一致）；本轮验证环境为 Node.js 24.21.0。桌面安装目标机不需要 Node.js 或 npm。
+
 ```bash
 cd frontend
-npm install
+npm ci
 ```
 
 ### 3. 构建前端
