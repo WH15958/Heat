@@ -37,6 +37,7 @@ class DeviceType(Enum):
     HPLC = "hplc"
     MICROWAVE = "microwave"
     VALVE = "valve"
+    TURNTABLE = "turntable"
     OTHER = "other"
 
 

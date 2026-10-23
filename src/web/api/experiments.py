@@ -100,6 +100,16 @@ def require_yaml_recovered():
         raise HTTPException(409, '普通实验占用或中断锁定，请在实验页面确认设备停止并解除锁定')
 
 
+def require_turntables_idle(dm):
+    # This is a memory-only guard, called while holding the shared start lock.
+    check = getattr(dm, "require_turntables_idle", None)
+    if callable(check):
+        try:
+            check()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
 class YamlRecoveryConfirmation(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     devices_stopped_confirmed: bool
@@ -232,6 +242,7 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
                    f"Please stop or wait for it to complete before starting another.",
         )
     dm = request.app.state.device_manager
+    require_turntables_idle(dm)
     try:
         _validate_filename(filename)
         source_content = (experiment_parser.EXPERIMENTS_DIR / filename).read_text(encoding="utf-8")

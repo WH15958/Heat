@@ -22,6 +22,7 @@ declare module 'vue' {
     ElDescriptions: typeof import('element-plus/es')['ElDescriptions']
     ElDescriptionsItem: typeof import('element-plus/es')['ElDescriptionsItem']
     ElDialog: typeof import('element-plus/es')['ElDialog']
+    ElDivider: typeof import('element-plus/es')['ElDivider']
     ElEmpty: typeof import('element-plus/es')['ElEmpty']
     ElForm: typeof import('element-plus/es')['ElForm']
     ElFormItem: typeof import('element-plus/es')['ElFormItem']
@@ -50,6 +51,8 @@ declare module 'vue' {
     SyringeHistory: typeof import('./src/components/SyringeHistory.vue')['default']
     SyringePumpControl: typeof import('./src/components/SyringePumpControl.vue')['default']
     SyringePumpGroup: typeof import('./src/components/SyringePumpGroup.vue')['default']
+    TurntableControl: typeof import('./src/components/TurntableControl.vue')['default']
+    TurntableGroup: typeof import('./src/components/TurntableGroup.vue')['default']
     ValveControl: typeof import('./src/components/ValveControl.vue')['default']
     YamlEditor: typeof import('./src/components/experiment/YamlEditor.vue')['default']
   }

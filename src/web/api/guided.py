@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict
 
 from src.experiment import guided
 from src.web.api.experiments import (_engines, _get_active_engine, _source_lock,
-                                     control_generation, check_control_generation)
+                                     control_generation, check_control_generation,
+                                     require_turntables_idle)
 
 router = APIRouter(prefix="/guided", tags=["guided"])
 _batches = {}
@@ -39,6 +40,16 @@ def read_record(batch_id):
 
 def records():
     return [read_record(path.stem) for path in guided.BATCH_DIR.glob("guided_*.json")]
+
+
+def require_guided_recovered():
+    try:
+        pending = any(record.get("recovery_required") or record.get("cleanup_required")
+                      for record in records())
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(503, "引导批次记录不可读，请检查存储，禁止手动运动") from exc
+    if pending:
+        raise HTTPException(409, "存在中断或待清理的引导批次，请先现场确认设备停止并解除锁定")
 
 
 def active_batch(batch_id):
@@ -87,8 +98,14 @@ async def start(spec: guided.GuidedRequest, request: Request):
         if not spec.priming_batch_id:
             return await create_batch(spec, request, prime_only=False)
         batch = active_batch(spec.priming_batch_id)
+        require_turntables_idle(request.app.state.device_manager)
+
+        def before_start():
+            check_control_generation(generation)
+            require_turntables_idle(request.app.state.device_manager)
+
         try:
-            await batch.begin_experiments(spec, before_start=lambda: check_control_generation(generation))
+            await batch.begin_experiments(spec, before_start=before_start)
         except (ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(409, str(exc)) from exc
         return batch.snapshot()
@@ -118,10 +135,12 @@ async def create_batch(spec, request, *, prime_only):
         raise HTTPException(409, "已有实验正在执行或停机尚未确认")
     if any(r.get("recovery_required") for r in records()):
         raise HTTPException(409, "存在服务中断批次，请先现场确认设备停止并解除中断锁定")
+    require_turntables_idle(request.app.state.device_manager)
     try:
         batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
         await guided.preflight(batch.dm, spec, before_initialization=True)
         check_control_generation(generation)
+        require_turntables_idle(request.app.state.device_manager)
         _batches[batch.batch_id] = batch
         _engines[batch.batch_id] = batch
         await batch.start(prime_only=prime_only)

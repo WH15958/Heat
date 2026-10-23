@@ -22,7 +22,8 @@ async def protect_guided_devices(request: Request):
     generation = control_generation(allow_stop=True)
     is_stop = request.url.path.endswith("/stop")
     if request.url.path.endswith("/command"):
-        is_stop = (await request.json()).get("action") == "stop"
+        body = await request.json()
+        is_stop = isinstance(body, dict) and body.get("action") == "stop"
     check_control_generation(generation, allow_stop=is_stop)
     if request.scope.get("endpoint") is stop_microwave:
         # Cancel an in-flight start before waiting for its source lock; no I/O here.
@@ -30,22 +31,47 @@ async def protect_guided_devices(request: Request):
             get_dm(request).request_microwave_stop(request.path_params["device_id"])
         except ValueError as exc:
             raise HTTPException(404, str(exc))
-    async with _source_lock:
-        check_control_generation(generation, allow_stop=is_stop)
-        batches = [b for b in _engines.values()
-                   if b.state.value in ("running", "paused") or b.cleanup_pending]
-        if batches:
-            if is_stop:
-                for batch in batches:
-                    batch.request_stop()
-            else:
-                raise HTTPException(409, "实验、批次或微波托管程序占用装置；请先停止并确认清理完成再手动操作")
-        if not is_stop and not request.url.path.endswith(("/connect", "/disconnect", "/refresh_bindings")):
-            from src.web.api.experiments import require_yaml_recovered
-            require_yaml_recovered()
-            from src.web.api.microwave_program import require_recovered
-            require_recovered()
-        yield
+    turntable_stop = None
+    # Identify the endpoint, not arbitrary user-provided paths/actions.
+    endpoint = request.scope.get("endpoint")
+    if (getattr(endpoint, "__module__", "") == "src.web.api.turntables"
+            and getattr(endpoint, "__name__", "") == "command"):
+        from src.devices.turntable_commands import TurntableCommand
+        from pydantic import ValidationError
+        try:
+            TurntableCommand.model_validate(body)
+            control = get_dm(request).turntable(request.path_params["device_id"])
+        except ValidationError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        with control.gate:
+            request.state.turntable_generation = control.generation
+        if is_stop:
+            control.begin_stop()
+            turntable_stop = control
+    try:
+        async with _source_lock:
+            check_control_generation(generation, allow_stop=is_stop)
+            batches = [b for b in _engines.values()
+                       if b.state.value in ("running", "paused") or b.cleanup_pending]
+            if batches:
+                if is_stop:
+                    for batch in batches:
+                        batch.request_stop()
+                else:
+                    raise HTTPException(409, "实验、批次或微波托管程序占用装置；请先停止并确认清理完成再手动操作")
+            if not is_stop and not request.url.path.endswith(("/connect", "/disconnect", "/refresh_bindings")):
+                from src.web.api.experiments import require_yaml_recovered
+                require_yaml_recovered()
+                from src.web.api.microwave_program import require_recovered
+                require_recovered()
+                from src.web.api.guided import require_guided_recovered
+                require_guided_recovered()
+            yield
+    finally:
+        if turntable_stop is not None:
+            turntable_stop.end_stop()
 
 
 router = APIRouter(tags=["devices"], dependencies=[Depends(protect_guided_devices)])

@@ -155,6 +155,7 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `src/devices/heater.py`：加热器同步控制
 - `src/devices/peristaltic_pump.py`：多通道泵同步控制
 - `src/devices/microwave.py`：MKM-AH1E 微波仪同步 Modbus 控制
+- `src/devices/turntable.py` / `src/protocols/turntable.py`：CL-01A 转盘同步串口访问及厂家二进制协议；手动动作监督在 `src/web/turntable_control.py`
 - `src/protocols/aibus.py`：加热器协议实现
 - `src/protocols/modbus_rtu.py`：泵协议实现
 - `src/protocols/microwave_params.py`：微波仪 Modbus 地址、模式和控制字常量
@@ -625,3 +626,25 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 `GuidedEntryPage.vue` 承接 `/experiment/batch`，默认入口、`?view=history` 批次历史、`?view=history&batch_id=...` 详情；`?new=1` 挂载新建表单，`?resume=1` 挂载当前批次进度与恢复入口。复用只读 `/api/guided/current`、`/batches`、`/{id}`、`/{id}/plan` 与现有日志接口，没有新增设备操作路径。开始成功后转 `resume=1` 保持进度页。
 
 表单以 `heat.guided-draft.v1` 在 localStorage 保存一份版本化草稿，仅包含输入和步骤，不含校验证据、人工确认、运行状态、batch_id 或预充资格。恢复按字段检查，旧终态记录不回填覆盖新草稿，活动/恢复/清理/保存错误优先处理且保留草稿。启动成功清除草稿；新建空白前确认替换。`batchExport` 复用精确 run_id/metadata 关联，在完整日志之外附带批次检查点与原始流程快照，快照不存在或批次身份不一致时拒绝完整导出。物理存储仍使用现有批次、plans 与运行日志目录，不复制或改写历史记录。
+
+### CL-01A 转盘手动接入
+
+`SystemConfig.turntables` 默认空列表，旧配置无需新增字段；已配置转盘由 `DeviceManager` 注册。`TurntableDevice` 只进行同步串口调用，使用原 `SerialPortManager` 和指纹解析；`TurntableController` 在 Web 层串行协调读写、停止代次和完成判断，应用 lifespan 的监督任务仅监督已明确发起的运动，与浏览器连接无关。单次串口调用和监督调度可能延后定时停止，不承诺硬实时。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/devices`、`/ws` | 增加 `turntables` 字典 |
+| `POST /api/turntable/{device_id}/connect` | 唯一绑定后打开串口并读取状态，不运动 |
+| `POST /api/turntable/{device_id}/disconnect` | 确认停止后释放；失败保留连接及未确认状态 |
+| `GET /api/turntable/{device_id}/status` | 只读状态；与 WebSocket 使用相同的读取协调键 |
+| `POST /api/turntable/{device_id}/command` | `move_relative`、`move_absolute`、`run`、`home`、`stop`；返回 `success/result/state`，`success=true` 不表示运动完成 |
+
+手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。本阶段不增加 YAML 动作、瓶位映射或自动接样。
+
+手动写控制的恢复检查包含引导批次持久化的 `recovery_required` 和 `cleanup_required`；未解除返回409，记录不可读返回503，GET和STOP不受该恢复检查阻断。停止已确认后出现坐标变化会撤销 `stop_confirmed/homed` 并设置稳定性阻断，新的两次独立稳定停止读数可解除这一阻断，但不能清除未知运动或失败STOP留下的必须停止标志。
+
+转盘状态快照增加 `state_session`（控制器对象创建时的UTC ISO微秒时间）和 `state_revision`（同会话递增整数），REST、设备列表和WS超时失效快照均携带。前端按会话及版本合并，拒绝迟到旧状态；`read_at` 只用于读数过期，不能作为无读数状态的排序依据。相同版本的本地HTTP失败可将状态降为读取失败，不得反向恢复确认。WS超时生成版本时不等待串口锁。
+
+驱动首次连接失败后，即使句柄关闭失败而仍打开，也不报告已连接；重连先成功释放旧资源，再创建句柄和重新查询。退出清理由控制器区分“从未连通、未发运动”和“连接丢失或运动未知”：前者可直接释放，后者保留停止保护；释放失败继续阻止退出并允许重试。
+
+状态包括 `read_ok/read_at/read_error`、坐标和原始速度/输入值、工作状态、`busy`、`stop_confirmed`、`homed`、`motion_blocked` 及动作结果。`connection_error` 保留连接失败原因，自动资源清理与未连接状态读取不清除，成功连接或明确断开后清除；原始错误进入日志。控制视图按实际读数时间保留 6 秒有效期，监测视图保留 15 秒；状态失效不发送停止。运动结果未知或停止未确认时禁止新动作，已连接的停止入口继续可用。协议字节序、默认禁用项、桌面配置更新和实机验收见 [转盘接入说明](turntable_integration.md)。

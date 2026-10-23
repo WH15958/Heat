@@ -338,6 +338,20 @@ async def build_realtime_payload(
                 "capacity_ml": controller.config.capacity_ml,
                 **controller.device.unknown(str(exc)),
             }
+    payload["turntables"] = {}
+    for did, controller in getattr(dm, "turntables", {}).items():
+        try:
+            payload["turntables"][did] = await read_coordinator.read(
+                ("turntable", did), controller.read, 5.0)
+        except Exception as exc:
+            # A timed-out reader may still own the I/O lock; do not wait on it.
+            payload["turntables"][did] = {
+                "device_id": did, "name": controller.config.name,
+                "connected": controller.device.is_connected(),
+                **controller.device.unknown(str(exc)),
+                "stop_confirmed": False, "homed": False,
+                **controller.snapshot_version(),
+            }
     payload["sampled_at_ms"] = int(time.time() * 1000)
     return payload
 

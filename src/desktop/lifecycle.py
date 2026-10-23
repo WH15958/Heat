@@ -17,7 +17,7 @@ _RECOVERY_PATH = re.compile(
     r"/api/(?:guided|microwave-program)/[^/]+/acknowledge-interrupted"
     r"|/api/experiments/recovery/[^/]+/acknowledge"
 )
-_SYRINGE_COMMAND = re.compile(r"/api/syringe_pump/[^/]+/command")
+_STOP_COMMAND = re.compile(r"/api/(?:syringe_pump|turntable)/[^/]+/command")
 
 
 class DesktopShutdownMiddleware:
@@ -38,7 +38,7 @@ class DesktopShutdownMiddleware:
             path == "/api/emergency_stop" or _STOP_PATH.fullmatch(path)
             or _RECOVERY_PATH.fullmatch(path)
         )
-        if scope["method"] == "POST" and _SYRINGE_COMMAND.fullmatch(path):
+        if scope["method"] == "POST" and _STOP_COMMAND.fullmatch(path):
             messages, body = [], bytearray()
             while True:
                 message = await receive()

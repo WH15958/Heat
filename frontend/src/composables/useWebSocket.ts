@@ -2,6 +2,7 @@ import { computed, reactive, ref, onMounted, onUnmounted } from 'vue'
 import { createMonitorHistory, mergeMonitorFrames, recordMonitorFrame, MONITOR_FRESHNESS_MS } from '../utils/monitorHistory'
 import type { ValveState } from '../api/devices'
 import type { SyringeState } from '../api/syringePumps'
+import type { TurntableState } from '../api/turntables'
 
 export interface HeaterRealtimeData {
   device_id?: string
@@ -79,6 +80,7 @@ export interface RealtimeData {
   snapshot?: boolean
   valves: Record<string, ValveState>
   syringe_pumps: Record<string, SyringeState>
+  turntables: Record<string, TurntableState>
   type: string
   heaters: Record<string, HeaterRealtimeData>
   pumps: Record<string, PumpRealtimeData>
@@ -173,6 +175,7 @@ function connect() {
         pumps: parsed.pumps ?? {},
         microwaves: parsed.microwaves ?? {},
         syringe_pumps: parsed.syringe_pumps ?? {},
+        turntables: parsed.turntables ?? {},
         valves: parsed.valves ?? {},
       }
       recordMonitorFrame(monitorHistory, frame, at)

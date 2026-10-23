@@ -17,7 +17,7 @@ const heaterRegistry = { heaters: { heater1: { connected: true, min_temperature:
 function control(api: any, globals: any = {}) {
   const prompts: ReturnType<typeof deferred>[] = []
   const page = view('views/ControlPanel.vue', {
-    '../api/devices': { ...devices, devicesApi: api }, '../api/syringePumps': { syringeApi: {} },
+    '../api/devices': { ...devices, devicesApi: api }, '../api/syringePumps': { syringeApi: {} }, '../api/turntables': { turntableApi: {} },
     '../utils/microwaveProgram': program, '../utils/pumpCalculations': calculations,
     '../composables/connectionBatch': connection,
     '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), fresh: vue.ref(true) }) },

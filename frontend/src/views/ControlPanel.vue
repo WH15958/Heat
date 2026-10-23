@@ -76,6 +76,9 @@
         <div v-show="selectedDevice === 'syringe'">
           <SyringePumpGroup ref="syringeGroup" @devices="syringeDevices = $event" />
         </div>
+        <div v-show="selectedDevice === 'turntable'">
+          <TurntableGroup ref="turntableGroup" @devices="turntableDevices = $event" />
+        </div>
         <el-empty v-if="!controlDevices.length" description="暂无可控制设备" />
       </div>
     </div>
@@ -95,6 +98,8 @@ import PumpControl from '../components/PumpControl.vue'
 import MicrowaveControl from '../components/MicrowaveControl.vue'
 import SyringePumpGroup from '../components/SyringePumpGroup.vue'
 import { syringeApi, type SyringeState } from '../api/syringePumps'
+import TurntableGroup from '../components/TurntableGroup.vue'
+import { turntableApi, type TurntableState } from '../api/turntables'
 import { createConnectionBatch, connectionBatchKey, type ConnectionTarget } from '../composables/connectionBatch'
 import { normalizeTubeSegmentLengths } from '../utils/pumpCalculations'
 import { confirmationEpochKey, usePendingConfirmation } from '../composables/pendingConfirmation'
@@ -110,6 +115,7 @@ function updateValve(id: string, state: ValveState) { valves[id] = state }
 const connectionBatch = createConnectionBatch()
 provide(connectionBatchKey, connectionBatch)
 const syringeGroup = ref<{ update: (state: SyringeState) => void }>()
+const turntableGroup = ref<{ update: (state: TurntableState) => void }>()
 
 async function connectAll() {
   await connectionBatch.run(async () => {
@@ -122,6 +128,7 @@ async function connectAll() {
       { group: 'pumps', kind: 'pump', label: '蠕动泵', connect: devicesApi.connectPump, read: devicesApi.readPumpStatus },
       { group: 'microwaves', kind: 'microwave', label: '微波仪', connect: devicesApi.connectMicrowave, read: devicesApi.readMicrowaveData },
       { group: 'syringe_pumps', kind: 'syringe', label: '注射泵', connect: syringeApi.connect, read: syringeApi.read },
+      { group: 'turntables', kind: 'turntable', label: '接样转盘', connect: turntableApi.connect, read: turntableApi.read },
       { group: 'valves', kind: 'valve', label: '三通阀', connect: (id: string) => devicesApi.valveOperation(id, 'connect'), read: (id: string) => devicesApi.valveOperation(id, 'status') },
     ]
     for (const spec of groups) for (const id of Object.keys(registry[spec.group] || {}).sort()) {
@@ -131,6 +138,9 @@ async function connectAll() {
           const next = { ...syringeDevices.value[id], ...state, device_id: id }
           syringeDevices.value[id] = next
           syringeGroup.value?.update(next)
+        } else if (spec.kind === 'turntable') {
+          const next = { ...turntableDevices.value[id], ...state, device_id: id }
+          turntableGroup.value?.update(next)
         } else if (spec.kind === 'valve') valves[id] = { ...valves[id], ...state }
         else {
           const device = (devices as any)[spec.group][id]
@@ -144,23 +154,24 @@ async function connectAll() {
       }
       targets.push({
         key: `${spec.kind}:${id}`, name: `${info.name || spec.label} · ${id}`,
-        connected: () => Boolean(info.connected) || (spec.kind === 'syringe' ? Boolean(syringeDevices.value[id]?.connected) : spec.kind === 'valve' ? Boolean(valves[id]?.connected) : Boolean((devices as any)[spec.group][id]?.connected)),
+        connected: () => Boolean(info.connected) || (spec.kind === 'syringe' ? Boolean(syringeDevices.value[id]?.connected) : spec.kind === 'turntable' ? Boolean(turntableDevices.value[id]?.connected) : spec.kind === 'valve' ? Boolean(valves[id]?.connected) : Boolean((devices as any)[spec.group][id]?.connected)),
         blocked: () => info.configured === false ? '未配置，已跳过' : info.binding_resolved === false ? '串口未匹配，已跳过' : '',
         connect: async () => {
           const response = (await spec.connect(id)).data
           if (response.success !== true) return false
-          update({ connected: true, read_ok: false })
+          update(spec.kind === 'turntable' ? response : { connected: true, read_ok: false })
           return true
         },
         read: async () => {
           try {
             const state = (await spec.read(id)).data
+            if (spec.kind === 'turntable') update(state)
             if (state.error || state.read_ok === false || state.success === false || state.connected === false
-              || (['syringe', 'valve'].includes(spec.kind) && state.read_ok !== true)
+              || (['syringe', 'valve', 'turntable'].includes(spec.kind) && state.read_ok !== true)
               || (spec.kind === 'heater' && !Number.isFinite(state.pv))
               || (spec.kind === 'microwave' && !Number.isFinite(state.material_temperature))
               || (spec.kind === 'pump' && [1, 2, 3, 4].some(ch => state.channels?.[ch]?.read_ok !== true))) throw new Error('设备状态读取未确认')
-            update({ ...state, read_ok: true })
+            if (spec.kind !== 'turntable') update({ ...state, read_ok: true })
           } catch (error) { update({ read_ok: false }); throw error }
         },
       })
@@ -286,18 +297,21 @@ watch(() => Object.entries(devices.microwaves).map(([id, device]) =>
 const selectedDevice = ref('')
 let initialSelectionReady = false
 const syringeDevices = ref<Record<string, SyringeState>>({})
+const turntableDevices = ref<Record<string, TurntableState>>({})
 const controlDeviceEntries = computed(() => [
   ...Object.entries(valves).map(([id, device]) => ({ key: `valve:${id}`, name: '三通阀', port: device.connection_port, connected: device.connected, status: !device.connected ? '未连接' : device.read_ok ? '已连接' : '状态未知' })),
   ...Object.entries(devices.heaters).map(([id, device], index) => ({ key: `heater:${id}`, name: `加热器${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.disconnectFailed ? '连接异常' : device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.pumps).map(([id, device], index) => ({ key: `pump:${id}`, name: `蠕动泵${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.microwaves).map(([id, device], index) => ({ key: `microwave:${id}`, name: `微波仪${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
   ...Object.entries(syringeDevices.value).map(([id, device]) => ({ key: `syringe:${id}`, name: device.name, port: device.connection_port, connected: device.connected, status: !device.configured ? '待配置' : !device.connected ? '未连接' : !device.read_ok ? '状态未知' : device.fault_code ? '故障' : device.busy ? '运行中' : '已连接' })),
+  ...Object.entries(turntableDevices.value).map(([id, device]) => ({ key: `turntable:${id}`, name: device.name, port: device.connection_port, connected: device.connected, status: !device.configured ? '待配置' : !device.connected ? '未连接' : !device.read_ok ? '状态未知' : device.busy ? '运行中' : '已连接' })),
 ])
 const controlDevices = computed(() => [
   { key: 'heater', name: '加热器' },
   { key: 'pump', name: '蠕动泵' },
   { key: 'microwave', name: '微波仪' },
   { key: 'syringe', name: '注射泵' },
+  { key: 'turntable', name: '接样转盘' },
   { key: 'valve', name: '三通阀' },
 ].map(group => {
   const members = controlDeviceEntries.value.filter(device => device.key.startsWith(group.key + ':'))
@@ -496,13 +510,14 @@ watch(devices, () => {
 }, { deep: true })
 
 function hasUnresolvedBinding(data: any): boolean {
-  const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}]
+  const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}, data?.turntables || {}]
   return groups.some(group =>
     Object.values(group).some((info: any) => info?.binding_resolved === false),
   )
 }
 
 function applyDeviceData(data: any) {
+  for (const state of Object.values(data.turntables || {})) turntableGroup.value?.update(state as TurntableState)
   for (const id of Object.keys(valves)) if (!data.valves?.[id]) delete valves[id]
   Object.assign(valves, data.valves || {})
   for (const [id, info] of Object.entries(data.heaters || {})) {
@@ -1307,8 +1322,8 @@ function calcFlowRate(ch: ChannelConfig): number {
 .connection-dot.online { background: var(--el-color-success); }
 .choice-meta { display: block; margin-top: 5px; color: var(--el-text-color-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .device-detail { min-width: 0; }
-.device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-.device-detail :deep(.device-card), .device-detail :deep(.syringe-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
+.device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]), .device-detail :deep(section[aria-label="接样转盘设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.device-detail :deep(.device-card), .device-detail :deep(.syringe-panel), .device-detail :deep(.turntable-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
 .device-detail :deep(.el-card__header) { min-height: 88px; box-sizing: border-box; display: flex; align-items: center; }
 .device-detail :deep(.card-header) { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 20px; }
 .device-detail :deep(.device-heading) { grid-column: 1; }

@@ -31,6 +31,7 @@ function page() {
   const imports: Record<string, any> = {
     vue: { ...vue, onMounted: () => {}, onUnmounted: () => {}, provide: () => {} },
     '../api/syringePumps': { syringeApi: {} },
+    '../api/turntables': { turntableApi: {} },
     '../composables/connectionBatch': connection,
     '../composables/pendingConfirmation': confirmations,
     '../api/devices': { devicesApi: api, FLOW_UNITS: [], PUMP_MODES: [], TUBE_MODELS: [] },

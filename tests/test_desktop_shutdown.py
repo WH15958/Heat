@@ -387,6 +387,7 @@ def test_lifespan_skips_hardware_cleanup_already_confirmed_by_desktop(monkeypatc
     monkeypatch.setattr(web, 'setup_logging', Mock())
     monkeypatch.setattr(web, 'data_push_loop', background)
     monkeypatch.setattr(web, 'syringe_supervisor', background)
+    monkeypatch.setattr(web, 'turntable_supervisor', background)
     dm = SimpleNamespace(_begin_global_stop=Mock(), cleanup=Mock(return_value=True))
     monkeypatch.setattr(web, 'create_device_manager', lambda: dm)
 

@@ -563,6 +563,32 @@ class ValveDeviceConfig(BaseConfig):
 
 
 @dataclass
+class TurntableConfig(BaseConfig):
+    device_id: str = "turntable1"
+    name: str = "转盘接样"
+    enabled: bool = True
+    connection: DeviceConnectionConfig = field(default_factory=lambda: DeviceConnectionConfig(
+        port="", baudrate=115200, timeout=1.0))
+    action_timeout: float = 60.0
+    home_enabled: bool = False
+    position_encoding_verified: bool = False
+
+    def validate(self):
+        errors = self.connection.validate()
+        if not self.device_id:
+            errors.append("转盘设备ID不能为空")
+        for name in ("enabled", "home_enabled", "position_encoding_verified"):
+            if not _is_strict_bool(getattr(self, name)):
+                errors.append(f"{name} 必须为布尔值")
+        if (self.connection.baudrate != 115200 or self.connection.parity != "N"
+                or self.connection.bytesize != 8 or self.connection.stopbits != 1):
+            errors.append("转盘通信参数须为115200、8N1")
+        if not _is_finite_number(self.action_timeout) or not 1 <= self.action_timeout <= 3600:
+            errors.append("转盘动作超时须为1–3600秒")
+        return errors
+
+
+@dataclass
 class SystemConfig(BaseConfig):
     """系统主配置"""
     name: str = "自动化控制系统"
@@ -572,6 +598,7 @@ class SystemConfig(BaseConfig):
     microwaves: List[MicrowaveDeviceConfig] = field(default_factory=list)
     syringe_pumps: List[SyringePumpConfig] = field(default_factory=list)
     valves: List[ValveDeviceConfig] = field(default_factory=list)
+    turntables: List[TurntableConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -627,6 +654,11 @@ class SystemConfig(BaseConfig):
             if valve.device_id in seen:
                 errors.append(f"重复设备ID: {valve.device_id}")
             seen.add(valve.device_id)
+        for turntable in self.turntables:
+            errors.extend(f"转盘{turntable.device_id}: {e}" for e in turntable.validate())
+            if turntable.device_id in seen:
+                errors.append(f"重复设备ID: {turntable.device_id}")
+            seen.add(turntable.device_id)
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
         errors.extend(self.logging.validate())
@@ -748,6 +780,11 @@ class ConfigManager:
                 **{k: v for k, v in item.items() if k != "connection"},
                 connection=self._parse_connection_config(item.get("connection", {})),
             ) for item in data.get("valves", [])],
+            turntables=[TurntableConfig(
+                **{k: v for k, v in item.items() if k != "connection"},
+                connection=self._parse_connection_config({"port": "", "baudrate": 115200,
+                                                         **item.get("connection", {})}),
+            ) for item in data.get("turntables", [])],
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),

@@ -164,6 +164,27 @@ valves:
         serial_number: "DU0ER6Y3A"
         fallback_to_port: false
 
+turntables:
+  - device_id: "turntable1"
+    name: "转盘接样"
+    enabled: true
+    action_timeout: 60.0
+    home_enabled: false
+    position_encoding_verified: false
+    connection:
+      port: "COM17"
+      baudrate: 115200
+      parity: "N"
+      bytesize: 8
+      stopbits: 1
+      timeout: 1.0
+      binding:
+        mode: "fingerprint"
+        vid: 6790
+        pid: 29987
+        location: "1-3.2.1"
+        fallback_to_port: false
+
 monitor:
   enabled: true
   log_interval: 1.0
