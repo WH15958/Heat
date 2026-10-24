@@ -1,5 +1,5 @@
-export const stageNames=['初始化、加热与预充','正式进料前稳定到温','吸液与进料','微波升温与保温','降温与收集','清洗与排液']
-export const stageIds=['preparation','stabilizing','feeding','reaction','collection','cleaning']
+export const stageNames=['回零、初始化与预充','正式进料前稳定到温','吸液与进料','微波升温与保温','降温与收集','清洗与排液','换瓶与收尾']
+export const stageIds=['preparation','stabilizing','feeding','reaction','collection','cleaning','bottle_handling']
 export const stagePaths=[
  'M9 3h6v4l3 3v10H6V10l3-3V3M8 14h8M10 17h4',
  'M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0M12 9v8',
@@ -7,8 +7,11 @@ export const stagePaths=[
  'M3 5h18v14H3V5M6 8h10v8H6V8M19 9v2M9 10l-1 2 2 2 1-2 2 2',
  'M7 3h10M9 3v6l-5 9v3h16v-3l-5-9V3M7 16h10',
  'M12 3C9 8 5 12 5 16a7 7 0 0 0 14 0c0-4-4-8-7-13M9 16a3 3 0 0 0 3 3',
+ 'M20 11a8 8 0 1 0-2 7M20 4v7h-7M12 8v4l3 2',
 ]
 export function activeStage(batch:any):number {
+ if(batch.phase==='preparing'||batch.progress?.step_id==='turntable_home_start')return 0
+ if(['indexing','finishing'].includes(batch.phase)||['turntable_next','turntable_settle','turntable_home_finish'].includes(batch.progress?.step_id))return 6
  const activity=batch.progress?.activity
  if(activity?.stage)return stageIds.indexOf(activity.stage)
  if(batch.phase==='priming'||batch.phase==='ready')return 0
@@ -21,10 +24,11 @@ export function activeStage(batch:any):number {
 }
 export function stageState(batch:any,index:number):string {
  const current=activeStage(batch), terminal=['completed','failed','stopped','interrupted'].includes(batch.state)
- if(index===0&&batch.priming?.status==='completed')return 'completed'
- if(batch.state==='completed'&&batch.phase!=='priming')return 'completed'
+ if(index===0&&batch.priming?.status==='completed'&&batch.phase!=='preparing')return 'completed'
+ if(batchCompletionConfirmed(batch)&&batch.phase!=='priming')return 'completed'
  if(index<current)return 'completed'
  if(index!==current)return 'pending'
+ if(index===6&&batch.finalization?.status==='failed')return 'failed'
  if(batch.cleanup_in_progress)return 'cleanup'
  if(terminal)return batch.state==='failed'?'failed':batch.state==='completed'?'completed':'stopped'
  if(batch.stop_requested)return 'stopping'
@@ -32,8 +36,21 @@ export function stageState(batch:any,index:number):string {
  return batch.state==='running'?'running':'pending'
 }
 export function staleStatus(last:number,now:number,error:string){return !!error||!last||now-last>6000}
+export function batchElapsedLabel(batch:any):string {
+ const elapsed=batch.elapsed_seconds
+ if(typeof elapsed!=='number'||!Number.isFinite(elapsed)||elapsed<0)return '未记录'
+ const seconds=Math.floor(elapsed)
+ return `${Math.floor(seconds/3600)}:${String(Math.floor(seconds/60)%60).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`
+}
 export function batchCompletionConfirmed(batch:any):boolean {
- return batch.state==='completed'&&!batch.cleanup_in_progress&&!batch.cleanup_pending&&!batch.cleanup_required&&!batch.recovery_required
+ return batch.state==='completed'&&!batch.cleanup_in_progress&&!batch.cleanup_pending&&!batch.cleanup_required&&!batch.recovery_required&&
+  (batch.finalization==null?batch.request?.turntable_drip_seconds==null:batch.finalization.status==='completed')
+}
+export function collectionStatusLabel(status:unknown):string {
+ return ({pending:'未收取',collecting:'收取中',collected:'已收取',possibly_partial:'可能部分收取'} as Record<string,string>)[String(status)]||'未记录'
+}
+export function turntableBottleLabel(value:unknown):string {
+ return typeof value==='number'&&Number.isInteger(value)&&value>=1?`${value} 号瓶`:'未确认'
 }
 export function batchRunIds(batch:any,runs:any[]):string[]{
  return [...new Set<string>([batch.priming?.run_id,...(batch.groups||[]).map((g:any)=>g.run_id),

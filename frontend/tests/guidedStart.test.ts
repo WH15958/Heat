@@ -46,10 +46,11 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
   } })
   const scope = vue.effectScope()
   const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
-  state.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} } }
+  state.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} }, turntables: { turntable1: {configured:true,enabled:true,bottle_count:12,pulses_per_bottle:12000,home_enabled:true,position_encoding_verified:true} } }
   if(fill) {
     state.experimentName.value='测试实验'
     state.primeHeatMinutes.value=0
+    state.turntableDripSeconds.value=5
     state.axes.value.forEach((a:any,i:number)=>{a.start=[30,30,0.1,0.1,30,1][i]})
     state.speedA.value=state.speedB.value=100
     state.repeats.value=1
@@ -59,7 +60,7 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
   function ready() {
     state.stage.value = 6
     state.validatedKey.value = state.requestKey.value
-    state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = true
+    state.plumbingConfirmed.value = state.primingConfirmed.value = state.initializationConfirmed.value = state.bottlesConfirmed.value = true
   }
   return { state, calls, dialogs, ready, route, postWith:(fn:(url:string)=>Promise<any>)=>{postOverride=fn}, readWith: (fn:()=>Promise<any>)=>{getOverride=fn}, confirmation: (fn: () => Promise<void>) => { confirm = fn },
     response: (value: any) => { postResponse = value },
@@ -100,6 +101,7 @@ test('new experiment clears parameters but preserves the terminal record and sen
     assert.ok(p.state.fixed.value.every((f:any)=>f.value===null))
     assert.ok(p.state.priming.value.every((f:any)=>f.value===null))
     assert.equal(p.state.primeHeatMinutes.value, null)
+    assert.equal(p.state.turntableDripSeconds.value, null)
     assert.equal(p.state.repeats.value, null)
     assert.equal(p.state.speedA.value, null)
     assert.equal(p.state.newDraft.value, true)
@@ -109,6 +111,7 @@ test('new experiment clears parameters but preserves the terminal record and sen
     assert.equal(p.state.initializationConfirmed.value, false)
     assert.equal(p.state.plumbingConfirmed.value, false)
     assert.equal(p.state.primingConfirmed.value, false)
+    assert.equal(p.state.bottlesConfirmed.value, false)
     await p.state.refreshBatch()
     assert.equal(p.state.showProgress.value, false)
     assert.ok(p.calls.every(c => c.length === 1))
@@ -166,8 +169,11 @@ test('preparation page advances without priming; one click sends a complete batc
     assert.equal(p.calls[0][0], '/api/guided/start')
     assert.equal(p.calls[0][1].priming_batch_id, undefined)
     assert.equal(p.calls[0][1].initialization_confirmed, true)
+    assert.equal(p.calls[0][1].bottles_confirmed, true)
+    assert.equal(p.calls[0][1].turntable_drip_seconds, 5)
     assert.equal(p.state.showProgress.value, true)
     assert.match(p.dialogs[0], /预充并排废液/)
+    assert.match(p.dialogs[0], /机械回零至 1 号瓶/)
     await p.state.refreshBatch()
     assert.equal(p.calls.filter(c => c[0] === '/api/guided/start').length, 1)
   } finally { p.dispose() }
@@ -195,9 +201,9 @@ test('refresh restores one progress screen and reports completed, active and pen
     const request = JSON.parse(p.state.requestKey.value)
     request.axes[0] = [30, 40]
     request.repeats = 2
-    const snapshot = { batch_id: 'restored', state: 'paused', phase: 'experiments', current_group: 2, total_groups: 4, request,
+    const snapshot = { batch_id: 'restored', state: 'paused', phase: 'experiments', current_group: 2, total_groups: 4, elapsed_seconds: 243, request,
       groups: [{ index: 1, state: 'completed' }, { index: 2, state: 'running', sample_id: 'S002' }],
-      progress: { current_step: 9, total_steps: 24, step_id: 'hold', step_label: '反应保温', elapsed: 243 } }
+      progress: { current_step: 9, total_steps: 24, step_id: 'hold', step_label: '反应保温', elapsed: 12 } }
     p.snapshot(snapshot)
     await p.state.refreshBatch()
     assert.equal(p.state.showProgress.value, true)
@@ -267,6 +273,7 @@ test('blank defaults permit stepwise entry without coercing empty fields to zero
     assert.equal(s.repeats.value,null)
     assert.equal(s.speedA.value,null)
     assert.equal(s.speedB.value,null)
+    assert.equal(s.turntableDripSeconds.value,null)
     assert.equal(s.initialization.value[0].direction,'Z')
     assert.equal(s.initialization.value[0].initialization_code,0)
     assert.ok(Number.isNaN(s.primeTotal.value))
@@ -284,6 +291,8 @@ test('blank defaults permit stepwise entry without coercing empty fields to zero
     s.nextStage();assert.equal(s.stage.value,4)
     s.fixed.value.slice(2).forEach((f:any)=>{f.value=1})
     s.fixed.value.find((f:any)=>f.key==='wait').value=0
+    assert.match(s.stepError(4),/滴液等待时间/)
+    s.turntableDripSeconds.value=0
     assert.equal(s.stepError(4),'')
     s.fixed.value.find((f:any)=>f.key==='wait').value=''
     assert.ok(s.stepError(4))
@@ -334,7 +343,7 @@ test('missing capacity or repeat count blocks preview and start even with stale 
 })
 
 
-test('final-page confirmation reasons identify missing checks and parameter edits clear all three', async () => {
+test('final-page confirmation reasons identify missing checks and parameter edits clear all confirmations', async () => {
  const p=page(),s=p.state
  try {
   await vue.nextTick()
@@ -349,14 +358,18 @@ test('final-page confirmation reasons identify missing checks and parameter edit
   assert.match(s.startBlockReason.value,/设备.*初始化/)
   await s.startBatch();assert.equal(p.calls.length,0)
   s.primingConfirmed.value=true
-  assert.equal(s.startBlockReason.value,'待确认：初始化与预充耗液')
+   assert.equal(s.startBlockReason.value,'待确认：初始化与预充耗液；本批产物瓶已清空并就位')
   s.initializationConfirmed.value=true
+   assert.equal(s.startBlockReason.value,'待确认：本批产物瓶已清空并就位')
+   await s.startBatch();assert.equal(p.calls.length,0)
+   s.bottlesConfirmed.value=true
   assert.equal(s.startBlockReason.value,'')
   s.repeats.value=2;await vue.nextTick()
   assert.equal(s.stage.value,6)
   assert.equal(s.plumbingConfirmed.value,false)
   assert.equal(s.primingConfirmed.value,false)
   assert.equal(s.initializationConfirmed.value,false)
+   assert.equal(s.bottlesConfirmed.value,false)
   assert.match(s.startBlockReason.value,/校验/)
   p.ready();assert.equal(s.startBlockReason.value,'')
  }finally{p.dispose()}
@@ -600,4 +613,87 @@ test('successful explicit start clears draft and keeps progress route selected',
  await vue.nextTick();p.state.saveDraft();assert.ok(storage.has('heat.guided-draft.v1'))
  p.ready();await p.state.startBatch();await vue.nextTick()
  assert.equal(storage.has('heat.guided-draft.v1'),false);assert.equal(p.route.query.resume,'1');assert.equal(p.state.showProgress.value,true);p.dispose()
+})
+
+test('configured bottle count limits all combinations and repeats without sending control',async()=>{
+ const p=page(),s=p.state
+ try{
+  s.axes.value[0].mode='list';s.axes.value[0].list='30,35,40'
+  s.repeats.value=4
+  assert.equal(s.plan.value.rows.length,12)
+  s.repeats.value=5
+  assert.match(s.plan.value.error,/最多 12 组.*不循环复用/)
+  await vue.nextTick();p.ready();await s.validate();await s.startBatch()
+  assert.equal(p.calls.length,0)
+  s.repeats.value=1;s.registry.value.turntables.turntable1.bottle_count=2
+  assert.match(s.plan.value.error,/最多 2 组/)
+  for(const change of [{enabled:false},{configured:false},{bottle_count:0},{home_enabled:false},{position_encoding_verified:false},{pulses_per_bottle:0}]){
+   s.registry.value.turntables.turntable1={configured:true,enabled:true,bottle_count:12,pulses_per_bottle:12000,home_enabled:true,position_encoding_verified:true,...change}
+   assert.ok(s.turntableConfigError.value)
+   await s.validate();assert.equal(p.calls.length,0)
+  }
+  delete s.registry.value.turntables.turntable1
+  assert.match(s.stepError(0),/装置配置缺失/)
+ }finally{p.dispose()}
+})
+
+test('drip wait requires an explicit calibrated value, invalidates confirmations and restores no legacy default',async()=>{
+ const p=page(),s=p.state
+ try{
+  for(const value of [null,'',-1,3600.1,NaN,Infinity]){
+   s.turntableDripSeconds.value=value
+   assert.ok(s.fieldIssues(4).some((i:any)=>i.key==='turntableDripSeconds'&&i.stage===4))
+   await s.validate();assert.equal(p.calls.length,0)
+  }
+  for(const value of [0,0.5,3600]){s.turntableDripSeconds.value=value;assert.equal(s.stepError(4),'')}
+  await vue.nextTick();p.ready()
+  s.turntableDripSeconds.value=7.5;await vue.nextTick()
+  assert.equal(s.validatedKey.value,'');assert.equal(s.bottlesConfirmed.value,false)
+  assert.equal(s.requestBody.value.turntable_drip_seconds,7.5)
+  const request=JSON.parse(s.requestKey.value)
+  delete request.turntable_drip_seconds
+  p.snapshot({batch_id:'old-ready',state:'paused',phase:'ready',request,priming:{status:'completed'}})
+  await s.refreshBatch()
+  assert.equal(s.turntableDripSeconds.value,null);assert.equal(s.primeReady.value,false)
+  s.showError({response:{data:{detail:[{loc:['body','turntable_drip_seconds'],msg:'请填写滴液等待时间'}]}}})
+  assert.equal(s.stage.value,4);assert.match(s.fieldErrors.value.turntableDripSeconds,/滴液/)
+ }finally{p.dispose()}
+})
+
+test('bottle confirmation is never copied or restored with drafts and old drafts leave drip wait blank',async()=>{
+ const storage=new Map<string,string>(),p=page(true,true,storage),s=p.state
+ try{
+  await vue.nextTick();p.ready();s.turntableDripSeconds.value=12.5
+  await vue.nextTick();s.saveDraft()
+  const draft=JSON.parse(storage.get('heat.guided-draft.v1')!)
+  assert.equal(draft.turntableDripSeconds,12.5)
+  assert.equal(draft.bottlesConfirmed,undefined)
+  const q=page(false,true,storage)
+  try{q.state.restoreDraft();assert.equal(q.state.turntableDripSeconds.value,12.5);assert.equal(q.state.bottlesConfirmed.value,false)}finally{q.dispose()}
+  delete draft.turntableDripSeconds;storage.set('heat.guided-draft.v1',JSON.stringify(draft))
+  const old=page(false,true,storage)
+  try{old.state.restoreDraft();assert.equal(old.state.turntableDripSeconds.value,null)}finally{old.dispose()}
+  s.batch.value={state:'completed',request:JSON.parse(s.requestKey.value)};s.returnToSetup(true)
+  assert.equal(s.turntableDripSeconds.value,12.5);assert.equal(s.bottlesConfirmed.value,false)
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
+})
+
+test('turntable phases and persisted collection results remain distinct from finalization failure',()=>{
+ const p=page(),s=p.state
+ try{
+  for(const [phase,step,stage,label] of [['preparing','turntable_home_start',0,'启动准备与机械回零'],['indexing','turntable_next',6,'清洗后换瓶'],['finishing','turntable_home_finish',6,'批次收尾与机械回零']] as const){
+   s.batch.value={state:'running',phase,progress:{step_id:step},turntable:{current_bottle:null,target_bottle:1,operation:'homing'}}
+   assert.equal(s.executionStage.value,stage);assert.equal(s.phaseLabel.value,label);assert.equal(s.currentDevice.value,'产物收集转盘');assert.equal(s.batchCompleted.value,false)
+  }
+  s.batch.value={state:'failed',phase:'finishing',total_groups:1,groups:[{index:1,state:'completed',bottle_number:1,sample_id:'B_S001',collection_status:'collected'}],finalization:{status:'failed',error:'回零超时'},turntable:{current_bottle:null,target_bottle:1,operation:'failed'}}
+  assert.equal(s.finalizationFailed.value,true);assert.equal(s.operationTitle.value,'实验组已完成，收尾回零失败');assert.equal(s.completedGroups.value,1);assert.equal(s.batchCompleted.value,false)
+  assert.equal(s.progressGroups.value[0].bottle_number,1);assert.equal(s.progressGroups.value[0].collection_status,'collected')
+  s.batch.value={state:'stopped',phase:'experiments',current_group:1,total_groups:2,groups:[{index:1,state:'stopped',bottle_number:1,sample_id:'B_S001',collection_status:'possibly_partial',collection_error:'收取中停止'}]}
+  assert.equal(s.progressGroups.value[0].collection_status,'possibly_partial');assert.equal(s.progressGroups.value[0].collection_error,'收取中停止')
+  assert.equal(s.progressGroups.value[1].bottle_number,undefined)
+  assert.equal(s.turntablePausePending({pause_pending:true,phase:'indexing'}),true)
+  assert.equal(s.turntablePausePending({pause_pending:true,phase:'experiments'}),false)
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
 })

@@ -164,13 +164,13 @@ class DeviceManager:
             raise ValueError(f"Turntable not found: {device_id}")
         return self.turntables[device_id]
 
-    def turntable_command(self, device_id, command, expected_generation=None):
+    def turntable_command(self, device_id, command, expected_generation=None, owner=None):
         with self._lock:
             if self._global_stop_depth and command.get("action") != "stop":
                 raise RuntimeError("全局停止中")
             control = self.turntable(device_id)
             generation = control.generation if expected_generation is None else expected_generation
-        return control.command(command, generation)
+        return control.command(command, generation, owner=owner)
 
     def require_turntables_idle(self):
         for controller in self.turntables.values():
@@ -1973,7 +1973,13 @@ class DeviceManager:
                 if disconnect:
                     # The controller distinguishes an unopened connection from
                     # a lost connection or motion whose outcome is unknown.
-                    controller.disconnect()
+                    if controller.owner is not None:
+                        # A global shutdown may stop an owned device, but must
+                        # retain its connection until the batch releases it.
+                        controller.stop()
+                        success = False
+                    else:
+                        controller.disconnect()
                 elif controller.device.is_connected():
                     if not controller.stop():
                         success = False

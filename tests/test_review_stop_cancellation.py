@@ -193,6 +193,7 @@ def test_orchestration_stop_owns_finalization_after_waiter_cancellation(kind, tm
             # A short synthetic recipe still uses the real batch/engine/executor
             # and persistence; no laboratory recipe or device is executed.
             run.priming["steps"] = [
+                {"id": "route", "type": "valve.switch", "params": {"device_id": "valve1", "position": "NC"}},
                 {"id": "heater", "type": "heater.start", "params": {"device_id": "heater1"}},
                 {"id": "wait", "type": "wait", "wait": {"type": "duration", "seconds": 600}},
             ]

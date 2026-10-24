@@ -34,6 +34,11 @@ def read_record(batch_id):
         record["state"] = "interrupted"
         record["recovery_required"] = True
         record["pause_pending"] = False
+        if record.get("turntable"):
+            record["turntable"].update(current_bottle=None, operation="failed", status=None)
+        for group in record.get("groups", []):
+            if group.get("collection_status") == "collecting":
+                group.update(collection_status="possibly_partial", collection_error="服务中断，可能已部分收取；不得视为空瓶")
     record.setdefault("pause_pending", False)
     return record
 
@@ -67,6 +72,9 @@ async def preview(spec: guided.GuidedRequest):
         raise HTTPException(422, str(exc)) from exc
     return dict(total_groups=len(recipes), rows=spec.rows(), recipes=recipes,
                 priming=guided.priming_recipe(spec, "preview"),
+                collection=dict(device_id="turntable1", bottle_numbers=list(range(1, len(recipes)+1)),
+                                drip_seconds=spec.turntable_drip_seconds,
+                                home_before_priming=True, home_after_normal_completion=True),
                 yaml=[yaml.safe_dump(r, allow_unicode=True, sort_keys=False) for r in recipes])
 
 
@@ -118,7 +126,7 @@ async def prime(spec: guided.GuidedRequest, request: Request):
         check_control_generation(generation)
         if spec.priming_batch_id:
             existing = active_batch(spec.priming_batch_id)
-            if (not existing.stopping and existing.record["phase"] in ("priming", "ready")
+            if (not existing.stopping and existing.record["phase"] in ("preparing", "priming", "ready")
                     and not existing.record["recovery_required"]
                     and guided.priming_signature(spec) == existing.record["priming"]["signature"]):
                 return existing.snapshot()
@@ -146,8 +154,9 @@ async def create_batch(spec, request, *, prime_only):
         await batch.start(prime_only=prime_only)
     except (ValueError, OSError, RuntimeError) as exc:
         if "batch" in locals():
-            _engines.pop(batch.batch_id, None)
-            _batches.pop(batch.batch_id, None)
+            if not batch.cleanup_pending:
+                _engines.pop(batch.batch_id, None)
+                _batches.pop(batch.batch_id, None)
         raise HTTPException(409, str(exc)) from exc
     return batch.snapshot()
 

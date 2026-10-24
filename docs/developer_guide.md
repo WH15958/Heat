@@ -523,11 +523,11 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 
 ### 引导式完整后端
 
-`src/experiment/guided.py` 定义严格请求模型、后端条件组合、固定液路完整 recipe 和 GuidedBatch。调用原 parser、StepExecutor、ExperimentEngine 和 ExperimentLogger，每组一个真实运行及 sample_id；不用另建驱动或后台串口线程。最多 200 组、每组最多 10 次清洗；加热温度及剂量以当前设备配置范围校验。
+`src/experiment/guided.py` 定义严格请求模型、后端条件组合、固定液路完整 recipe 和 GuidedBatch。调用原 parser、StepExecutor、ExperimentEngine 和 ExperimentLogger，每组一个真实运行及 sample_id；不用另建驱动或后台串口线程。总组数（含重复）不超过固定 turntable1 配置的 bottle_count，本机 12；每组最多 10 次清洗；加热温度及剂量以当前设备配置范围校验。
 
 `/api/guided/preview` POST 只生成校验完整流程，返回 rows、recipes、yaml 和 total_groups，无硬件访问。请求 axes 是六个非空且不含重复数值的数值列表，依次为 A/B 温度、A/B 剂量、反应温度和保温分钟。repeats、speed_a/b、drain_flow、clean_volume、clean_flow、clean_dwell、clean_cycles 配置组合及固定操作。product_port 仅接受 NO（默认 NO），废液固定 NC；product_drain_seconds 与 clean_drain_seconds 均必填，0.1–9999 秒，分别用于正式收产物及每次清洗排液；clean_direction、drain_direction 指定现场泵向，plumbing_confirmed 在开始时必须为 true。默认 heating_timeout=600、syringe_timeout=120、cooling_timeout=3600，均可在模型范围内调整。
 
-`/api/guided/start` POST 不携带 priming_batch_id 时，读设备就绪状态、预留注射泵和阀、原子保存计划，启动包含初始化、预充及正式组的后台任务。预充成功后核对设备配置签名并严格重查可信零位等就绪状态，再自动开始正式组。`/prime` 保留单独预充能力；`/start` 携带同批 priming_batch_id 时沿用该预充结果，核对签名、重查就绪状态后只启动正式组。注册到原 experiments._engines 并使用 _source_lock，整批占用期间阻止其他实验启动。设备 REST 写入与批次注册串行；引导批次占用时拒绝手动配置/启动/断开，手动停止会同时请求停止整批。注射泵及阀保持既有所有权，跨组保留直到最终清理，普通实验默认清理行为不变。
+`/api/guided/start` POST 不携带 priming_batch_id 时，读设备就绪状态、预留注射泵、阀和转盘、原子保存计划，启动包含机械回零、初始化、预充及正式组的后台任务。预充成功后核对设备配置签名并严格重查可信零位等就绪状态，再自动开始正式组。`/prime` 保留单独预充能力；`/start` 携带同批 priming_batch_id 时沿用该预充结果，核对签名、重查就绪状态后只启动正式组。注册到原 experiments._engines 并使用 _source_lock，整批占用期间阻止其他实验启动。设备 REST 写入与批次注册串行；引导批次占用时拒绝手动配置/启动/断开，手动停止会同时请求停止整批。注射泵及阀保持既有所有权，跨组保留直到最终清理，普通实验默认清理行为不变。
 
 GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返回状态、当前组、进度和单组 run_id/sample_id。POST `/{batch_id}/pause|resume|stop` 控制整批；stop 的 success=false 代表清理或保存未确认成功。逐组收取自动执行，没有换瓶确认接口或等待步骤。
 
@@ -537,8 +537,20 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
 
-前端仅在显式按钮操作时发控制请求；定时读取状态及页面/WebSocket生命周期不启动或停止硬件。Campaign/planner 无自动连接。软件验证不替代设备验收。 BatchExperimentPage 启动成功或首次恢复批次时切换到集中进度视图，复用每 2 秒 GET /current；完成组数取 groups 的 completed 状态，当前动作由可选 progress.activity 展示；旧记录沿用 step_label。各组待执行条件取批次 request 快照，执行结果取 groups；累计用时沿用 progress.elapsed（含暂停），不推算剩余时间。读取失败保留最后状态并提示过期，不触发控制请求。
+前端仅在显式按钮操作时发控制请求；定时读取状态及页面/WebSocket生命周期不启动或停止硬件。Campaign/planner 无自动连接。软件验证不替代设备验收。 BatchExperimentPage 启动成功或首次恢复批次时切换到集中进度视图，复用每 2 秒 GET /current；完成组数取 groups 的 completed 状态，当前动作由可选 progress.activity 展示；旧记录沿用 step_label。各组待执行条件取批次 request 快照，执行结果取 groups；整批用时取顶层 `elapsed_seconds`，由批次单调时钟从启动计至最终清理结束，包含暂停，终态冻结并随检查点保存。`progress.elapsed` 仍为各引擎运行用时，转盘编排不会影响整批计时；缺少 `elapsed_seconds` 的旧记录显示“未记录”，不以墙上时钟或当前组用时推算。读取失败保留最后状态并提示过期，不触发控制请求。
 
+
+### 引导式转盘编排
+
+`GuidedRequest.turntable_drip_seconds` 为必填数值，范围 0–3600 秒，允许显式 0，不提供默认标定值；`bottles_confirmed` 默认为 false，preview 可为 false，start/prime 必须为 true。preview、预充启动及正式启动均检查固定 turntable1 已配置且启用、瓶位与回零/定位功能有效，并核对总组数不超过 bottle_count；缺字段的旧计划仅只读展示，不自动补值或复用预充资格。滴液时间进入参数签名及本机草稿，现场确认不进入草稿且修改参数后清除。
+
+`src/experiment/guided_turntable.py` 的 `GuidedTurntable` 在批次上层复用同步控制器及原设备锁，执行准备、组间换瓶与收尾；不新增公开 YAML 动作，不在驱动中增加轮询。准备阶段先确认泵停止并切 NC，再机械回零、确认 1 号瓶，随后才初始化和预充；组间在本组产物收取、NC 清洗及停泵确认后执行单调时钟滴液等待，再以最新后端瓶位证据换下一瓶。机械原点已对齐 1 号，不另加 270°。最后一组不调用会循环复用的下一瓶动作，而在清洗、滴液等待和全停机后回零。暂停保留步骤与瓶位，不重放动作；停止/故障停止在当前位置，不自动回零或续跑，保留既有恢复锁。批次持有转盘占用，手动运动、回零、断开被拒绝；停止入口仍可请求停止整批。
+
+状态新增 `phase=preparing|indexing|finishing`，原 priming/ready/experiments 保留。`preparation` 与 `finalization` 均含 `status=pending|running|completed|failed` 和可空 `error`；`turntable` 包含 `device_id/current_bottle/target_bottle/operation/status`，其中 current_bottle、target_bottle 和最新控制器摘要 status 可空。operation 为 pending、homing、settling、indexing、ready、stopped 或 failed。瓶位只显示后端确认值，不从当前组或坐标推算。步骤标识包含 `turntable_home_start/turntable_next/turntable_settle/turntable_home_finish`，前端将换瓶与收尾显示为第七阶段。
+
+每个 groups 条目保存 `bottle_number`、`collection_status=pending|collecting|collected|possibly_partial` 及可选 collection_error；正式运行 metadata 保存 `bottle_number/collection_device_id/collection_status`。收取故障或中断不能标为完整收取。准备/收尾不增加科学样品或单独运行日志，事件保存在批次 `turntable_events`，完整 plan 的 `collection` 保存策略。完整导出保留批次事件、计划及预充和正式组日志。所有组 completed 而 finalization failed 时保持组和样品结果，界面单独提示收尾回零失败；新批次只有最终回零 completed 且无清理/恢复阻断才显示完整成功，旧历史无新增字段仍可查看。
+
+软件检查使用假设备，不确认实际滴液、瓶口对齐、整批换瓶及回零联锁；需按转盘验收文档做现场确认。本次生产构建仅输出到 `output/turntable-review-build`，不覆盖在用静态资源、不构建或安装桌面包。
 
 ### 引导批次预充接口与状态
 
@@ -548,9 +560,9 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 `POST /api/guided/start` 无 `priming_batch_id` 时创建完整批次，初始化与预充成功后自动执行正式流程，任何准备失败或停止均不进入正式组。`POST /api/guided/prime` 保留为单独执行前置预充的接口；`/start` 携带 `priming_batch_id` 时只启动该批次签名匹配且预充成功的正式流程。创建整批和单独预充共用锁内的就绪、占用及服务中断检查；执行中重复启动返回 409，不创建第二个运动任务。`/preview` 增加 `priming` 流程，仍只校验、不控制硬件。`/prime` 携带已有批次 ID 且签名一致时返回现状，不重发运动。
 
-GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵容量）、`prime_cycles`（默认 2，1–10）、`prime_drain_seconds`（必填，0.1–9999 秒）、`prime_drain_flow`（必填，0.01–9999 mL/min），以及必填正数 `reactor_available_ml`、`source_available_a_ml`、`source_available_b_ml`、`waste_available_ml`。请求新增必填 `initialization_a/b` 对象，各含 `direction`（Z/Y）和 `initialization_code`，复用 SyringeCommand 校验并在编译时检查容量适用性；新增 `initialization_confirmed`（默认 false）。启动预充和正式运行均要求三项现场确认 `initialization_confirmed`、`priming_confirmed`、`plumbing_confirmed` 为 true。初始化参数纳入预充签名，三项确认标志不纳入签名；缺少初始化参数的旧请求被拒绝，旧记录仅供查看。容量校验涵盖预充总量、正式单组量、整批耗液和清洗废液。
+GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵容量）、`prime_cycles`（默认 2，1–10）、`prime_drain_seconds`（必填，0.1–9999 秒）、`prime_drain_flow`（必填，0.01–9999 mL/min），以及必填正数 `reactor_available_ml`、`source_available_a_ml`、`source_available_b_ml`、`waste_available_ml`。请求新增必填 `initialization_a/b` 对象，各含 `direction`（Z/Y）和 `initialization_code`，复用 SyringeCommand 校验并在编译时检查容量适用性；新增 `initialization_confirmed`（默认 false）。启动预充和正式运行均要求四项现场确认 `initialization_confirmed`、`priming_confirmed`、`plumbing_confirmed`、`bottles_confirmed` 为 true。初始化及滴液时间参数纳入预充签名，确认标志不纳入签名；缺少初始化参数的旧请求被拒绝，旧记录仅供查看。容量校验涵盖预充总量、正式单组量、整批耗液和清洗废液。
 
-批次 checkpoint 新增 `phase`（priming / ready / experiments）和 `priming`（状态、SHA256 签名、已完成循环、步骤设备结果、run_id、持久化状态、失败停机确认）。计划快照包含独立 priming recipe。签名覆盖完整实验参数及固定设备配置，排除确认标志和批次 ID；正式启动前再次只读检查连接、故障、零位及输出停机状态。签名不符拒绝启动；设备状态异常会失效结果并设置恢复锁。
+批次 checkpoint 新增 `phase`（preparing / priming / ready / experiments / indexing / finishing）和 `priming`（状态、SHA256 签名、已完成循环、步骤设备结果、run_id、持久化状态、失败停机确认）。计划快照包含独立 priming recipe。签名覆盖完整实验参数及固定设备配置，排除确认标志和批次 ID；正式启动前再次只读检查连接、故障、零位及输出停机状态。签名不符拒绝启动；设备状态异常会失效结果并设置恢复锁。
 
 预充复用同步设备驱动、现有 StepExecutor、ExperimentEngine、资源预留和日志；不新增设备动作或 YAML 动作类型。一键启动的预充成功后自动进入 experiments，保留所有权；只有单独调用 /prime 的批次进入 paused/ready，其普通 resume 被拒绝，必须调用 start。失败会停止两台注射泵（含未启动那台）及排液通道；任何 False 或停机异常保留未确认状态，并可再次停止重试。恢复锁必须人工确认后通过现有 acknowledge-interrupted 接口解除，此接口也处理本服务中的预充失败。服务重启后 ready 不可自动复用或恢复。
 
@@ -580,9 +592,9 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=precursor_timeout（默认3600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
 
-加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=reached_then_dwell_flow_drain_v5` 及 heater1/2 配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
+加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名使用 `priming_protocol=turntable_collection_v6` 并包含 heater1/2、config.turntables 等固定设备配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
 
-引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_reached`；通过后 `prime_heat_duration` 使用既有 duration 等待，温度波动不改变计时，实际暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 reached_then_dwell_flow_drain_v5。
+引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_reached`；通过后 `prime_heat_duration` 使用既有 duration 等待，温度波动不改变计时，实际暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名包含本轮转盘配置与收集策略；旧预充结果不能直接获得新流程资格。
 
 
 引导式 `GuidedRequest.experiment_name` 必填：严格字符串，去除首尾空格后1–80个Unicode字符，拒绝控制字符、格式控制及行/段分隔符，允许重名。名称纳入请求签名，保存到批次/计划顶层及流程metadata；运行name分别为“名称 · 预充”和“名称 · 第 N 组”，沿用现有历史接口及导出。旧记录只读兼容，不自动补名称，不复用旧预充资格；新请求缺少名称返回422。ID生成规则不变。
@@ -617,7 +629,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor._run_timed_flow` 从 START 确认后按单调时钟计时，在 Web/编排层约每秒复用 read_pump_status 监督当前通道；读取失败或提前停止立即失败并清理。每次短睡眠最多 50ms，停止请求可中断；已发出的流量动作在暂停中仍计时、监督和到时停泵，步骤边界由引擎等待继续。所有退出路径尝试停止，停止未确认保留活动设备供原清理/恢复机制处理；不自动重启泵。串口调用耗时可能推迟停泵确认，不保证硬实时精度。进度 wait_type=flow_duration 是只读动作标记，不是新增 YAML wait 类型。
 
-预充签名协议为 reached_then_dwell_flow_drain_v5，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
+预充签名协议为 turntable_collection_v6，覆盖转盘配置与滴液参数，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
 
@@ -649,7 +661,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 瓶位状态由后端负责，包含 `bottle_count`、`pulses_per_bottle`、`current_bottle`、`next_bottle`、`bottle_token`、`bottle_ready` 和 `bottle_error`，动作可包含 `from_bottle`、`target_bottle`。只有 `home_bottle` 观察到回零过程、目标0和稳定停止后建立瓶位信任；换瓶准确到达目标并停止后才更新瓶号。启动、重连、复位、读取异常、意外坐标变化、高级运动或显式停止撤销信任，瓶号返回null，不能仅从坐标取模恢复。前端在状态过期或无效时隐藏瓶号，不自行计算，也不持久化瓶位以便重启续跑。
 
-手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。本阶段只增加手动瓶位映射，不增加 YAML 动作或自动接样。
+手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。引导式自动接样在批次上层编排中复用这些控制器能力，不增加公开 YAML 转盘动作。
 
 手动写控制的恢复检查包含引导批次持久化的 `recovery_required` 和 `cleanup_required`；未解除返回409，记录不可读返回503，GET和STOP不受该恢复检查阻断。停止已确认后出现坐标变化会撤销 `stop_confirmed/homed` 并设置稳定性阻断，新的两次独立稳定停止读数可解除这一阻断，但不能清除未知运动或失败STOP留下的必须停止标志。
 

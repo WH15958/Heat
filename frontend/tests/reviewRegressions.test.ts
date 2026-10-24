@@ -147,15 +147,15 @@ test('guided confirmation after leaving sends no hardware start or stop', async 
   }, { document: { querySelector: () => null } })
   try {
     const s = p.state
-    s.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} } }
-    s.experimentName.value = 'isolated'; s.primeHeatMinutes.value = 0
+    s.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} }, turntables:{turntable1:{bottle_count:12,pulses_per_bottle:12000,home_enabled:true,position_encoding_verified:true}} }
+    s.experimentName.value = 'isolated'; s.primeHeatMinutes.value = 0; s.turntableDripSeconds.value = 5
     s.axes.value.forEach((a: any, i: number) => { a.start = [30, 30, 0.1, 0.1, 30, 1][i] })
     s.speedA.value = s.speedB.value = 100; s.repeats.value = 1
     s.fixed.value.forEach((f: any) => { f.value = ['productTime', 'cleanTime'].includes(f.key) ? 60 : 1 })
     s.priming.value.forEach((f: any) => { f.value = f.key === 'prime_cycles' ? 2 : f.key === 'prime_drain_seconds' ? 480 : 10 })
     await vue.nextTick()
     s.stage.value = 6; s.validatedKey.value = s.requestKey.value
-    s.plumbingConfirmed.value = s.primingConfirmed.value = s.initializationConfirmed.value = true
+    s.plumbingConfirmed.value = s.primingConfirmed.value = s.initializationConfirmed.value = s.bottlesConfirmed.value = true
     assert.equal(s.startBlockReason.value, '')
     const start = s.startBatch(); p.unmount(); prompt.resolve(); await start
     assert.deepEqual(writes, [])

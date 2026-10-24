@@ -171,6 +171,10 @@ python -m pytest tests\test_campaigns.py -q
 
 引导式完整批次执行（/experiment/batch）复用现有实验引擎和单组 run_id/sample_id，记录 batch_id、condition_id、sample_index 及本组参数。它不创建 Campaign Trial，不注入 recommendation，也不授权 planner 启动设备。模板参数设计入口仍为独立的另存工具。
 
+引导式自动转盘接样为每个正式组保存 bottle_number，并在运行 metadata 中保存 collection_device_id 与 collection_status；批次 groups 同时保留瓶号、收取状态及可选失败原因。瓶号只在本批次内关联，必须结合 batch_id、run_id、sample_id 识别样品；新批次从 1 号重新开始不代表旧产物已经移除，启动前需现场确认空瓶。
+
+collection_status 的 pending、collecting、collected、possibly_partial 分别表示尚未收取、收取中、软件流程已确认收取完成及可能部分收取；collected 不能证明真实排空、无残留或样品科学有效。停止/故障中断收取时保留可能部分收取标记。所有正式组完成但最终回零失败时，保留已完成组、样品与表征关联，单独记录收尾错误，不自动重做或改号。准备/换瓶/收尾事件写在批次 turntable_events，不创建新的正式样品。旧日志、samples.csv 及既有 Trial/表征关联不重编号或迁移，人工决定是否可用于优化反馈。
+
 
 引导批次预充有独立维护 run_id，日志 metadata 使用 `run_kind=priming`、`condition_id=PRIMING`，notes 明确标注“非正式样品”。沿用现有实验追踪机制，维护运行也会产生 samples.csv 记录，但不进入批次 groups，不创建 Trial，不得作为正式样品表征或 planner 反馈。正式样品仍从第 1 组开始计数。查看预充历史时应根据维护标记和 notes 区分。
 

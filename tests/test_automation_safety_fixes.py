@@ -97,8 +97,8 @@ def test_formal_drains_reach_real_executor_with_entered_times():
         assert [(ch, args[3], args[4]) for ch, args in dm.motions] == [
             (4, None, None), (4, None, None), (3, 60, 1), (4, None, None)]
         assert [c for c in dm.calls if c[0] in ('valve', 'pump_start')] == [
-            ('valve', True), ('pump_start', 4), ('valve', False), ('pump_start', 4),
-            ('valve', True), ('pump_start', 3), ('pump_start', 4)]
+            ('valve', True), ('valve', True), ('pump_start', 4), ('valve', False), ('pump_start', 4),
+            ('valve', True), ('pump_start', 3), ('pump_start', 4), ('valve', True)]
     asyncio.run(scenario())
 
 
@@ -122,7 +122,11 @@ def test_heaters_remain_on_through_reaction_cleaning_and_next_group():
         assert dm.heating == {'heater1': 35, 'heater2': 30}
         assert sum(c == ('heater_stop', 'heater1') for c in dm.calls) == 1
         assert sum(c == ('heater_stop', 'heater2') for c in dm.calls) == 1
-        assert all(c[0] == 'heater_stop' for c in dm.calls[-2:])
+        # Heating spans both collections; shutdown precedes the final return home.
+        final_home = len(dm.calls)-1-dm.calls[::-1].index(('turntable_home', 1))
+        last_pump = max(i for i, call in enumerate(dm.calls) if call[0] == 'pump_start')
+        for did in ('heater1', 'heater2'):
+            assert last_pump < dm.calls.index(('heater_stop', did)) < final_home
         assert not batch.executor._active_heaters
         assert not batch.record['cleanup_required']
     asyncio.run(scenario())
@@ -161,8 +165,12 @@ def test_final_heater_stop_failure_persists_restart_interlock():
         dm.stop_heater.return_value = True
         assert await batch.stop()
         assert not batch.executor._active_heaters
-        assert not batch.cleanup_pending
         assert not batch.record['cleanup_required']
+        assert batch.record['recovery_required'] and batch.cleanup_pending
+        api._batches[batch.batch_id] = batch
+        await api.acknowledge_interrupted(batch.batch_id,
+            api.RecoveryConfirmation(devices_stopped_confirmed=True))
+        assert not batch.cleanup_pending
     asyncio.run(scenario())
 
 

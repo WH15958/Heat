@@ -16,11 +16,13 @@
         <section v-if="detail" class="batch-detail" :aria-busy="detailLoading">
           <h3>{{ detail.experiment_name || detail.request?.experiment_name || '未命名实验' }}</h3><p>{{ label(detail.state) }} · {{ detail.total_groups || 0 }} 组 · {{ date(detail.created_at) }}</p><small>{{ detail.batch_id }}</small>
           <el-alert v-if="detail.error" :title="detail.error" type="error" :closable="false" />
+          <el-alert v-if="finalizationFailed" title="实验组已完成，收尾回零失败；已完成样品记录保留，请检查恢复事项。" type="warning" :closable="false" />
           <el-alert v-if="detail.persistence_status==='error'" title="批次保存失败，请检查记录恢复，不能视为完整归档。" type="error" :closable="false" />
           <el-alert v-if="detailError" :title="detailError" type="warning" :closable="false" />
           <div class="detail-actions"><el-button :loading="exporting" :disabled="detailLoading" @click="exportAll">导出整批记录</el-button><el-button @click="router.push({path:'/history',query:{batch_id:detail.batch_id}})">查看记录详情与曲线</el-button></div>
           <h4>本批预充</h4><p>{{ label(detail.priming?.status || 'pending') }} · A {{ detail.priming?.completed_cycles?.[0] || 0 }} 次 / B {{ detail.priming?.completed_cycles?.[1] || 0 }} 次</p><p>记录编号：{{ detail.priming?.run_id || '未生成（可查看下方已关联记录）' }}</p>
-          <h4>各组实验</h4><div class="table-scroll"><table><thead><tr><th>组号</th><th>状态</th><th>样品编号</th><th>记录编号</th></tr></thead><tbody><tr v-for="g in groups" :key="g.index"><td>{{ g.index }}</td><td>{{ label(g.state) }}</td><td>{{ g.sample_id || '—' }}</td><td>{{ g.run_id || '尚未生成' }}</td></tr></tbody></table></div>
+          <h4>各组实验</h4><div class="table-scroll"><table><thead><tr><th>组号</th><th>状态</th><th>产物瓶</th><th>收取状态</th><th>样品编号</th><th>记录编号</th></tr></thead><tbody><tr v-for="g in groups" :key="g.index"><td>{{ g.index }}</td><td>{{ label(g.state) }}</td><td>{{ g.bottle_number==null ? '未记录' : turntableBottleLabel(g.bottle_number) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<p v-if="g.collection_error">{{ g.collection_error }}</p></td><td>{{ g.sample_id || '—' }}</td><td>{{ g.run_id || '尚未生成' }}</td></tr></tbody></table></div>
+          <details v-if="detail.turntable"><summary>转盘与收尾记录</summary><p>最后确认瓶位：{{ turntableBottleLabel(detail.turntable.current_bottle) }} · 目标：{{ turntableBottleLabel(detail.turntable.target_bottle) }}</p><p>收尾：{{ label(detail.finalization?.status || 'pending') }} {{ detail.finalization?.error || '' }}</p><pre>{{ JSON.stringify(detail.turntable_events || [],null,2) }}</pre></details>
           <h4>已关联执行记录（含预充）</h4><p v-if="!related.length">尚未找到执行日志；批次参数与检查点仍保留。</p><ul><li v-for="run in related" :key="run.run_id">{{ run.experiment_name || run.run_id }} · {{ label(run.status) }} · {{ run.run_id }}</li></ul>
           <details><summary>完整批次参数</summary><pre>{{ JSON.stringify(detail.request, null, 2) }}</pre></details>
           <details><summary>预充及各组完整流程快照</summary><pre>{{ savedPlan ? JSON.stringify(savedPlan,null,2) : '流程快照未读取成功，请检查记录。' }}</pre></details>
@@ -36,7 +38,7 @@ import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { ElMessageBox } from 'element-plus'
 import BatchExperimentPage from './BatchExperimentPage.vue'
-import { batchExport, batchRunIds } from '../experiment/guidedProgress'
+import { batchExport, batchRunIds, collectionStatusLabel, turntableBottleLabel } from '../experiment/guidedProgress'
 const route=useRoute(),router=useRouter()
 const setup=computed(()=>route.query.new==='1'||route.query.resume==='1')
 const history=computed(()=>route.query.view==='history')
@@ -44,6 +46,7 @@ const records=ref<any[]>([]),current=ref<any>({}),detail=ref<any>(null),savedPla
 const loading=ref(false),detailLoading=ref(false),exporting=ref(false),error=ref(''),detailError=ref(''),hasDraft=ref(false)
 const attention=computed(()=>['running','paused'].includes(current.value.state)||!!(current.value.recovery_required||current.value.cleanup_pending||current.value.cleanup_required||current.value.persistence_status==='error'))
 const groups=computed(()=>Array.from({length:detail.value?.total_groups||0},(_,i)=>detail.value.groups?.find((g:any)=>g.index===i+1)||{index:i+1,state:'pending'}))
+const finalizationFailed=computed(()=>detail.value?.finalization?.status==='failed'&&groups.value.length>0&&groups.value.every((g:any)=>g.state==='completed'))
 const labels:Record<string,string>={idle:'未开始',pending:'未执行',running:'运行中',paused:'暂停',completed:'已完成',failed:'失败',stopped:'已停止',interrupted:'中断待确认',ready:'准备就绪'}
 const label=(state:string)=>labels[state]||state||'未知'
 const date=(value:string)=>value?new Date(value).toLocaleString('zh-CN'):'时间未记录'

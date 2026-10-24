@@ -911,6 +911,10 @@ interval_time: 0
 
 引导式生成流程使用填写的实验名称：预充 `name` 为“名称 · 预充”，正式组为“名称 · 第 N 组”，`metadata.experiment_name` 保存整批名称。该字段属于追踪信息，不替代 `batch_id`、`sample_id` 或运行ID；普通 YAML 无需提供此字段，历史文件不迁移。
 
+引导式正式组 metadata 增加 `bottle_number`（组号对应的瓶位）、`collection_device_id: turntable1` 和 `collection_status`（pending、collecting、collected 或 possibly_partial）。运行时更新收取状态；停止或故障可能留下部分产物，不得仅凭组号或瓶号判为完整收取。旧日志及旧样品关联不回填。
+
+转盘准备回零、清洗后滴液等待与换瓶、整批结束停机回零均由外层 `GuidedBatch/GuidedTurntable` 编排，完整批次 plan 的 `collection` 保存该策略；本轮没有新增公开转盘 YAML 动作或等待类型。导出的单组 YAML 只包含组内液路与反应步骤，瓶号 metadata 是追踪信息，不会驱动转盘，也不保证批次换瓶联锁。需要自动接样时必须通过引导式完整批次运行，不能把单组 YAML 当作完整批次执行。
+
 
 ### 流量模式的编排定时排液
 
