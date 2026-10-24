@@ -50,12 +50,13 @@
         <el-card class="device-card" shadow="hover">
           <template #header><div class="card-header"><div class="device-heading"><img :src="turntableArtwork" alt="" /><div><h2>接样转盘</h2><span>{{ turntable.name }} · CL-01A</span></div></div><el-tag :type="turntable.read_ok ? 'success' : 'info'">{{ deviceInfo('turntables', id)?.status }}</el-tag></div></template>
           <div class="valve-status-grid">
-            <div class="valve-status-item"><div><small>控制器坐标</small><strong>{{ turntable.read_ok ? turntable.position ?? '未知' : '未知' }}<template v-if="turntable.read_ok && turntable.position != null"> 脉冲</template></strong></div></div>
+            <div class="valve-status-item"><div><small>当前瓶位</small><strong>{{ turntableBottle(turntable) }}</strong></div></div>
             <div class="valve-status-item"><div><small>运行状态</small><strong>{{ turntable.read_ok ? turntableWorkState[turntable.state_name || ''] || '未知' : '未知' }}</strong></div></div>
             <div class="valve-status-item"><div><small>停止确认</small><strong>{{ turntable.read_ok ? turntable.stop_confirmed ? '已确认' : '未确认' : '未知' }}</strong></div></div>
             <div class="valve-status-item"><div><small>当前动作</small><strong>{{ turntable.read_ok ? turntableResult[turntable.action?.result || ''] || '无' : '未知' }}</strong></div></div>
           </div>
-          <div class="valve-meta"><span>串口 {{ turntable.connection_port || '--' }}</span><span>正限位 {{ turntableInput(turntable, 'positive_limit') }} · 原点 {{ turntableInput(turntable, 'home') }} · 负限位 {{ turntableInput(turntable, 'negative_limit') }} · 输入4 {{ turntableInput(turntable, 'input4') }}</span></div>
+          <details class="turntable-details"><summary>设备详情</summary><p>控制器坐标 {{ turntable.read_ok ? turntable.position ?? '未知' : '未知' }} 脉冲</p>
+          <div class="valve-meta"><span>串口 {{ turntable.connection_port || '--' }}</span><span>正限位 {{ turntableInput(turntable, 'positive_limit') }} · 原点 {{ turntableInput(turntable, 'home') }} · 负限位 {{ turntableInput(turntable, 'negative_limit') }} · 输入4 {{ turntableInput(turntable, 'input4') }}</span></div></details>
           <p v-if="turntable.action?.error" class="valve-note">{{ turntable.action.error }}</p>
         </el-card>
       </div>
@@ -403,6 +404,10 @@ const dashboardTurntables = computed<Record<string, Partial<TurntableState>>>(()
     return [id, { ...state, connection_port: item.port, read_ok: item.hasData }]
   })
 ))
+function turntableBottle(state: Partial<TurntableState>) {
+  const bottle = state.current_bottle
+  return state.connected && state.read_ok && state.bottle_ready && state.stop_confirmed && state.busy === false && !state.motion_blocked && !['accepted', 'running', 'unknown', 'stop_requested', 'stop_unconfirmed'].includes(state.action?.result || '') && Number.isInteger(bottle) && bottle != null && bottle >= 1 && bottle <= (state.bottle_count ?? 0) ? `${bottle}号瓶` : '未确认'
+}
 function turntableInput(state: Partial<TurntableState>, key: keyof NonNullable<TurntableState['inputs']>) {
   return !state.read_ok || state.inputs?.[key] == null ? '未知' : state.inputs[key] ? '有效' : '无效'
 }
@@ -687,6 +692,8 @@ watch([() => monitorHistory.revision, selectedDevice, wsConnected], renderCharts
 </script>
 
 <style scoped>
+.turntable-details { margin-top: 14px; font-size: 12px; color: var(--el-text-color-secondary); }
+.turntable-details summary { cursor: pointer; }
 .dashboard { padding: 0; }
 .device-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
 .device-selector { position: sticky; top: 88px; padding-right: 14px; border-right: 1px solid var(--el-border-color-light); min-width: 0; }

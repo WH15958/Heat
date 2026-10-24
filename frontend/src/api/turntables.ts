@@ -30,12 +30,21 @@ export interface TurntableState {
   homed: boolean
   home_enabled: boolean
   position_encoding_verified: boolean
-  action?: { action: string; result: string; target?: number; error?: string; duration_seconds?: number; requested_speed?: number } | null
+  bottle_count?: number
+  pulses_per_bottle?: number
+  current_bottle?: number | null
+  next_bottle?: number | null
+  bottle_ready?: boolean
+  bottle_error?: string | null
+  bottle_token?: string | null
+  action?: { action: string; result: string; target?: number; error?: string; duration_seconds?: number; requested_speed?: number; target_bottle?: number; from_bottle?: number } | null
 }
 
 export type TurntableDirection = 'positive' | 'negative'
 export type TurntableCommand =
   | { action: 'stop' }
+  | { action: 'home_bottle' }
+  | { action: 'next_bottle'; expected_position: number; expected_bottle_token: string }
   | { action: 'move_relative'; steps: number; speed: number }
   | { action: 'move_absolute'; position: number; speed: number }
   | { action: 'run'; direction: TurntableDirection; duration_seconds: number; speed: number }

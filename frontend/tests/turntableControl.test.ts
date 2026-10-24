@@ -94,6 +94,96 @@ test('unverified positioning and home never dispatch; bounded directional run us
   } finally { p.unmount() }
 })
 
+function readyBottles(p: ReturnType<typeof card>, bottle = 1, position = 0) {
+  Object.assign(p.device, { bottle_count: 12, pulses_per_bottle: 12000, current_bottle: bottle,
+    next_bottle: bottle === 12 ? 1 : bottle + 1, bottle_ready: true, bottle_error: null, bottle_token: 'reference-1',
+    home_enabled: true, position_encoding_verified: true, position })
+}
+
+test('bottle controls require server-established reference and do not infer bottle 1 from zero', async () => {
+  const p = card()
+  try {
+    assert.equal(p.state.currentBottle.value, null)
+    assert.equal(p.state.canNextBottle.value, false)
+    assert.equal(p.state.canHomeBottle.value, false)
+    await p.state.nextBottle()
+    Object.assign(p.device, { bottle_count: 12, pulses_per_bottle: 12000, home_enabled: true,
+      position_encoding_verified: false, current_bottle: null, bottle_ready: false })
+    assert.equal(p.state.canHomeBottle.value, false)
+    await p.state.send({ action: 'home_bottle' })
+    assert.equal(p.calls.length, 0)
+    p.device.position_encoding_verified = true
+    assert.equal(p.state.canHomeBottle.value, true)
+    assert.equal(p.state.currentBottle.value, null)
+    await p.state.nextBottle()
+    p.state.speed.value = NaN // An advanced setting cannot prevent the calibrated home command.
+    await p.state.send({ action: 'home_bottle' })
+    assert.deepEqual(p.calls, [{ action: 'home_bottle' }])
+    assert.equal(p.state.currentBottle.value, null) // Submission does not claim completion.
+  } finally { p.unmount() }
+})
+
+test('next bottle uses server coordinate precondition with no browser pulse arithmetic, including 12 to 1', async () => {
+  const p = card()
+  try {
+    readyBottles(p, 12, 132000)
+    p.state.speed.value = NaN // Simple controls use backend calibration speed.
+    assert.equal(p.state.currentBottle.value, 12)
+    await p.state.send({ action: 'next_bottle', expected_position: 120000, expected_bottle_token: 'reference-1' })
+    await p.state.send({ action: 'next_bottle', expected_position: 132000, expected_bottle_token: 'previous-home' })
+    assert.equal(p.calls.length, 0)
+    await p.state.nextBottle()
+    assert.deepEqual(p.calls, [{ action: 'next_bottle', expected_position: 132000, expected_bottle_token: 'reference-1' }])
+    assert.equal(p.device.current_bottle, 12)
+    p.device.bottle_token = null
+    assert.equal(p.state.canNextBottle.value, false)
+  } finally { p.unmount() }
+})
+
+test('bottle change rejects repeated clicks, stale reads and uncertain reference while stop stays usable', async () => {
+  const p = card(), response = deferred<any>()
+  try {
+    readyBottles(p)
+    p.api.command = async (_id, body) => {
+      p.calls.push(plain(body))
+      return body.action === 'next_bottle' ? response.promise : { data: { result: { result: 'stopped' } } }
+    }
+    const first = p.state.nextBottle()
+    assert.equal(p.state.currentBottle.value, null) // Pending motion cannot display the old bottle as settled.
+    await p.state.nextBottle()
+    assert.deepEqual(p.calls, [{ action: 'next_bottle', expected_position: 0, expected_bottle_token: 'reference-1' }])
+    p.device.read_ok = false
+    assert.equal(p.state.currentBottle.value, null)
+    await p.state.send({ action: 'home_bottle' })
+    await p.state.send({ action: 'stop' })
+    response.resolve({ data: { result: { result: 'accepted' } } })
+    await first
+    p.device.read_ok = true
+    p.device.bottle_ready = false
+    assert.equal(p.state.currentBottle.value, null)
+    await p.state.nextBottle()
+    assert.deepEqual(p.calls.map(c => c.action), ['next_bottle', 'stop'])
+  } finally { p.unmount() }
+})
+
+test('simple bottle card keeps stop and bottle controls outside collapsed advanced operations', async () => {
+  const state = { ...device(), bottle_count: 12, pulses_per_bottle: 12000, bottle_ready: true,
+    current_bottle: 12, next_bottle: 1, home_enabled: true, position_encoding_verified: true }
+  const html = await renderCard(state)
+  const advanced = html.indexOf('<details class="advanced-controls"')
+  assert.ok(advanced > 0)
+  assert.ok(html.indexOf('回原点') < advanced)
+  assert.ok(html.indexOf('下一瓶') < advanced)
+  assert.ok(html.indexOf('>停止<') < advanced)
+  assert.ok(html.indexOf('绝对定位') > advanced)
+  assert.ok(html.indexOf('控制器坐标') > advanced)
+  assert.match(html, /<details class="advanced-controls"><summary>高级操作<\/summary>/)
+  assert.match(html.slice(0, advanced), /12号瓶/)
+  assert.match(html.slice(0, advanced), /title="下一瓶：1号瓶"/)
+  assert.doesNotMatch(await renderCard({ ...state, read_ok: false }), /<strong>12号瓶<\/strong>/)
+  assert.doesNotMatch(await renderCard({ ...state, bottle_ready: false }), /<strong>12号瓶<\/strong>/)
+})
+
 test('stale and busy states block new movement while connected stop remains available during pending requests', async () => {
   const p = card(), pendingRun = deferred<any>()
   try {

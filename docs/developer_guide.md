@@ -629,6 +629,10 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 ### CL-01A 转盘手动接入
 
+2026-10-24 本机仓库配置经厂家报文和实机定位核验，已启用 `home_enabled` 与 `position_encoding_verified`；模型默认值仍为false，不推广到其它设备或桌面独立配置。证据与标定边界见 [实机核验记录](turntable_integration.md#2026-10-24-原点与有限定位核验)。
+
+停止确认在 Web 协调层发送一次 STOP 后设定3秒单调时钟期限。读回的 OSError（含超时、短帧和未定义状态）记录到日志并清空连续稳定证据，在剩余期限内仅重试查询；写失败不重发，期限后的读回不接受为成功。仍要求连续两次 `0x20` 且坐标一致；单次同步读取可能使返回越过期限。到时运行的停止确认失败不会再误报“未确认连续运行”。
+
 `SystemConfig.turntables` 默认空列表，旧配置无需新增字段；已配置转盘由 `DeviceManager` 注册。`TurntableDevice` 只进行同步串口调用，使用原 `SerialPortManager` 和指纹解析；`TurntableController` 在 Web 层串行协调读写、停止代次和完成判断，应用 lifespan 的监督任务仅监督已明确发起的运动，与浏览器连接无关。单次串口调用和监督调度可能延后定时停止，不承诺硬实时。
 
 | 接口 | 行为 |
@@ -637,9 +641,15 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 | `POST /api/turntable/{device_id}/connect` | 唯一绑定后打开串口并读取状态，不运动 |
 | `POST /api/turntable/{device_id}/disconnect` | 确认停止后释放；失败保留连接及未确认状态 |
 | `GET /api/turntable/{device_id}/status` | 只读状态；与 WebSocket 使用相同的读取协调键 |
-| `POST /api/turntable/{device_id}/command` | `move_relative`、`move_absolute`、`run`、`home`、`stop`；返回 `success/result/state`，`success=true` 不表示运动完成 |
+| `POST /api/turntable/{device_id}/command` | 常用 `home_bottle`、`next_bottle`；高级 `move_relative`、`move_absolute`、`run`、`home`、`stop`；返回 `success/result/state`，`success=true` 不表示运动完成 |
 
-手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。本阶段不增加 YAML 动作、瓶位映射或自动接样。
+瓶位模式由 `bottle_count` 控制，默认0保持旧配置的高级手动操作兼容；本机为12，`pulses_per_bottle=12000`、`bottle_speed=4000`、`bottle_home_speed=1000`、`bottle_home_timeout=180`。`home_bottle` 不接收其它字段，在 Web 协调层使用负向机械回零；`next_bottle` 必填 `expected_position`（最新有效坐标）及 `expected_bottle_token`，后端在设备锁内再次读取并比较，拒绝陈旧坐标或令牌，再向原协议发送目标为当前坐标加一个瓶位脉冲数的有限定位。每次成功回1号或换瓶生成新令牌，失效或运动中撤销，避免旧请求在再次回零到相同坐标后重放。瓶位命令只存在于Web请求模型，底层命令和协议保持原有动作。速度由配置确定；12到1继续同方向累计，不清零、不自动续跑。
+
+启用瓶位模式时，配置校验要求 `bottle_home_timeout >= bottle_count * pulses_per_bottle / bottle_home_speed + 5`，并要求 `action_timeout >= pulses_per_bottle / bottle_speed + 5`，分别覆盖一圈回零和一格换瓶并保留至少5秒余量；降低速度时须相应延长超时。
+
+瓶位状态由后端负责，包含 `bottle_count`、`pulses_per_bottle`、`current_bottle`、`next_bottle`、`bottle_token`、`bottle_ready` 和 `bottle_error`，动作可包含 `from_bottle`、`target_bottle`。只有 `home_bottle` 观察到回零过程、目标0和稳定停止后建立瓶位信任；换瓶准确到达目标并停止后才更新瓶号。启动、重连、复位、读取异常、意外坐标变化、高级运动或显式停止撤销信任，瓶号返回null，不能仅从坐标取模恢复。前端在状态过期或无效时隐藏瓶号，不自行计算，也不持久化瓶位以便重启续跑。
+
+手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。本阶段只增加手动瓶位映射，不增加 YAML 动作或自动接样。
 
 手动写控制的恢复检查包含引导批次持久化的 `recovery_required` 和 `cleanup_required`；未解除返回409，记录不可读返回503，GET和STOP不受该恢复检查阻断。停止已确认后出现坐标变化会撤销 `stop_confirmed/homed` 并设置稳定性阻断，新的两次独立稳定停止读数可解除这一阻断，但不能清除未知运动或失败STOP留下的必须停止标志。
 

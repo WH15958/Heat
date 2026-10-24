@@ -363,8 +363,9 @@ def test_stability_recovery_does_not_clear_a_failed_explicit_stop(controller, cl
     controller.device.position += 1
     clock.advance(.1)
     assert controller.read()['motion_blocked']
-    controller.device.reads.append(OSError('stop response lost'))
+    controller.device.reads.extend(OSError('stop response lost') for _ in range(40))
     assert not controller.stop()
+    controller.device.reads.clear()
     stable_read(controller, clock, controller.device.position)
     assert not controller.stop_confirmed and controller.summary()['motion_blocked']
     with pytest.raises(RuntimeError):
@@ -437,6 +438,77 @@ def test_failed_stop_retains_connection_blocks_motion_and_allows_retry(controlle
     controller.require_idle()
     assert controller.disconnect()['connected'] is False
     assert controller.device.disconnect_calls == 1
+
+
+@pytest.mark.parametrize('error', [OSError('Undefined CL-01A work state: 0x10'),
+                                  TimeoutError('short status frame')])
+def test_stop_rechecks_after_bad_read_without_resending(controller, error):
+    device = controller.device
+    device.reads.extend([(17, 0x20), error, (17, 0x20), (17, 0x20)])
+    before = device.read_count
+    assert controller.stop()
+    assert device.read_count - before == 4
+    assert [r['action'] for r in device.commands] == ['stop']
+    assert controller.stop_confirmed
+
+
+def test_stop_persistent_read_errors_remain_blocked_at_deadline(controller, clock, monkeypatch):
+    def unreadable():
+        raise OSError('Undefined CL-01A work state: 0x10')
+    monkeypatch.setattr(controller.device, 'read_status', unreadable)
+    started = clock.now
+    assert not controller.stop()
+    assert 3 <= clock.now - started < 3.2
+    assert not controller.stop_confirmed
+    assert controller.device.is_connected()
+    with pytest.raises(RuntimeError):
+        controller.require_idle()
+    assert [r['action'] for r in controller.device.commands] == ['stop']
+
+
+def test_stop_does_not_accept_a_read_finishing_after_deadline(controller, clock, monkeypatch):
+    read = controller.device.read_status
+    def delayed_read():
+        clock.advance(1.6)
+        return read()
+    monkeypatch.setattr(controller.device, 'read_status', delayed_read)
+    assert not controller.stop()
+    assert not controller.stop_confirmed
+
+
+def test_stop_write_failure_is_not_retried(controller):
+    controller.device.write_error = OSError('stop write failed')
+    before = controller.device.read_count
+    assert not controller.stop()
+    assert controller.device.read_count == before
+    assert [r['action'] for r in controller.device.commands] == ['stop']
+    assert not controller.stop_confirmed
+
+
+def test_run_stop_transient_unknown_state_can_complete(controller, clock):
+    controller.command(dict(action='run', direction='negative', speed=400, duration_seconds=1))
+    controller.read()
+    clock.advance(1)
+    controller.device.reads.extend([
+        OSError('Undefined CL-01A work state: 0x10'), (17, 0x20), (17, 0x20)])
+    controller.enforce_timeout()
+    assert controller.action['result'] == 'completed'
+    assert controller.stop_confirmed
+    assert [r['action'] for r in controller.device.commands] == ['run', 'stop']
+
+
+def test_observed_run_stop_failure_does_not_claim_running_was_unobserved(controller, clock, monkeypatch):
+    controller.command(dict(action='run', direction='positive', speed=400, duration_seconds=1))
+    controller.read()
+    clock.advance(1)
+    def unreadable():
+        raise OSError('Undefined CL-01A work state: 0x10')
+    monkeypatch.setattr(controller.device, 'read_status', unreadable)
+    controller.enforce_timeout()
+    assert controller.action['result'] == 'failed'
+    assert '未确认连续运行' not in controller.action['error']
+    assert '停止未确认' in controller.action['error']
+    assert not controller.stop_confirmed
 
 
 def test_run_stops_at_backend_deadline_and_is_not_replayed(controller, clock):

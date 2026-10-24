@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.devices.turntable_commands import TurntableCommand
+from src.web.turntable_commands import BottleCommand
 from src.web.api.devices import protect_guided_devices
 
 router = APIRouter(prefix="/turntable", tags=["turntable"], dependencies=[Depends(protect_guided_devices)])
@@ -64,7 +65,7 @@ async def status(device_id: str, request: Request):
 
 
 @router.post("/{device_id}/command")
-async def command(device_id: str, body: TurntableCommand, request: Request):
+async def command(device_id: str, body: TurntableCommand | BottleCommand, request: Request):
     c = controller(request, device_id)
     result = await call(request.app.state.device_manager.turntable_command,
                         device_id, body.model_dump(exclude_unset=True),

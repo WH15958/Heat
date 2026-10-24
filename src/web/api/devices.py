@@ -36,10 +36,10 @@ async def protect_guided_devices(request: Request):
     endpoint = request.scope.get("endpoint")
     if (getattr(endpoint, "__module__", "") == "src.web.api.turntables"
             and getattr(endpoint, "__name__", "") == "command"):
-        from src.devices.turntable_commands import TurntableCommand
+        from src.web.turntable_commands import parse_turntable_command
         from pydantic import ValidationError
         try:
-            TurntableCommand.model_validate(body)
+            parse_turntable_command(body)
             control = get_dm(request).turntable(request.path_params["device_id"])
         except ValidationError as exc:
             raise HTTPException(422, str(exc)) from exc

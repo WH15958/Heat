@@ -572,6 +572,11 @@ class TurntableConfig(BaseConfig):
     action_timeout: float = 60.0
     home_enabled: bool = False
     position_encoding_verified: bool = False
+    bottle_count: int = 0
+    pulses_per_bottle: int = 12000
+    bottle_speed: int = 1000
+    bottle_home_speed: int = 1000
+    bottle_home_timeout: float = 180.0
 
     def validate(self):
         errors = self.connection.validate()
@@ -585,6 +590,23 @@ class TurntableConfig(BaseConfig):
             errors.append("转盘通信参数须为115200、8N1")
         if not _is_finite_number(self.action_timeout) or not 1 <= self.action_timeout <= 3600:
             errors.append("转盘动作超时须为1–3600秒")
+        if not _is_strict_int(self.bottle_count) or self.bottle_count < 0 or self.bottle_count == 1:
+            errors.append("瓶位数量须为0（未启用）或至少2的整数")
+        if not _is_strict_int(self.pulses_per_bottle) or not 1 <= self.pulses_per_bottle <= 99_999_999:
+            errors.append("每瓶脉冲数须为1–99999999的整数")
+        if not _is_strict_int(self.bottle_speed) or not 400 <= self.bottle_speed <= 40000:
+            errors.append("换瓶速度须为400–40000脉冲/秒的整数")
+        if not _is_strict_int(self.bottle_home_speed) or not 400 <= self.bottle_home_speed <= 40000:
+            errors.append("瓶位回零速度须为400–40000脉冲/秒的整数")
+        if not _is_finite_number(self.bottle_home_timeout) or not 1 <= self.bottle_home_timeout <= 3600:
+            errors.append("瓶位回零超时须为1–3600秒")
+        if not errors and self.bottle_count:
+            if self.bottle_count * self.pulses_per_bottle > 99_999_999:
+                errors.append("整圈脉冲数超出控制器坐标范围")
+            if self.bottle_home_timeout < self.bottle_count * self.pulses_per_bottle / self.bottle_home_speed + 5:
+                errors.append("瓶位回零超时须覆盖整圈运动及至少5秒余量")
+            if self.action_timeout < self.pulses_per_bottle / self.bottle_speed + 5:
+                errors.append("转盘动作超时须覆盖一次换瓶及至少5秒余量")
         return errors
 
 
