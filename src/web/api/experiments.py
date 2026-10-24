@@ -21,16 +21,17 @@ _engines: dict = {}
 _source_lock = asyncio.Lock()
 _stop_generation = 0
 _stopping = 0
+_desktop_exiting = False
 
 
-def control_generation():
-    if _stopping:
+def control_generation(*, allow_stop=False):
+    if _stopping or (_desktop_exiting and not allow_stop):
         raise HTTPException(409, "全局停止或服务关闭处理中")
     return _stop_generation
 
 
-def check_control_generation(generation):
-    if _stopping or generation != _stop_generation:
+def check_control_generation(generation, *, allow_stop=False):
+    if _stopping or (_desktop_exiting and not allow_stop) or generation != _stop_generation:
         raise HTTPException(409, "停止请求已取消待执行操作，请重新确认")
 
 
@@ -47,7 +48,7 @@ def end_stop():
     _stopping -= 1
 
 
-async def shutdown():
+async def shutdown() -> bool:
     begin_stop()
     try:
         async with _source_lock:
@@ -57,6 +58,7 @@ async def shutdown():
             results = await asyncio.gather(*(e.stop() for e in engines), return_exceptions=True)
             if any(result is not True for result in results):
                 logger.error("One or more experiments failed to stop during shutdown")
+            return all(result is True for result in results)
     finally:
         end_stop()
 
@@ -96,6 +98,16 @@ def recovery_records():
 def require_yaml_recovered():
     if any(r['recovery_required'] or r['cleanup_required'] for r in recovery_records()):
         raise HTTPException(409, '普通实验占用或中断锁定，请在实验页面确认设备停止并解除锁定')
+
+
+def require_turntables_idle(dm):
+    # This is a memory-only guard, called while holding the shared start lock.
+    check = getattr(dm, "require_turntables_idle", None)
+    if callable(check):
+        try:
+            check()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
 
 class YamlRecoveryConfirmation(BaseModel):
@@ -230,6 +242,7 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
                    f"Please stop or wait for it to complete before starting another.",
         )
     dm = request.app.state.device_manager
+    require_turntables_idle(dm)
     try:
         _validate_filename(filename)
         source_content = (experiment_parser.EXPERIMENTS_DIR / filename).read_text(encoding="utf-8")

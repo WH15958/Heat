@@ -8,6 +8,8 @@ import * as vue from 'vue'
 import * as connection from '../src/composables/connectionBatch'
 import * as program from '../src/utils/microwaveProgram'
 import * as calculations from '../src/utils/pumpCalculations'
+import * as confirmations from '../src/composables/pendingConfirmation'
+import { view } from './helpers/sfc'
 
 const source = readFileSync(new URL('../src/views/ControlPanel.vue', import.meta.url), 'utf8')
 const script = compileScript(parse(source).descriptor, { id: 'connection-test' }).content
@@ -42,7 +44,9 @@ function page() {
     vue: { ...vue, provide: () => {}, onMounted: () => {}, onUnmounted: (fn: () => void) => unmount.push(fn) },
     '../api/devices': { devicesApi: api, FLOW_UNITS: [], PUMP_MODES: [], TUBE_MODELS: [] },
     '../api/syringePumps': { syringeApi: { connect: (id: string) => request('connect', id), read: (id: string) => request('read', id) } },
+    '../api/turntables': { turntableApi: { connect: (id: string) => request('connect', id), read: (id: string) => request('read', id) } },
     '../composables/connectionBatch': connection,
+    '../composables/pendingConfirmation': confirmations,
     '../utils/microwaveProgram': program,
     '../utils/pumpCalculations': calculations,
     '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), connected: vue.ref(false), fresh: vue.ref(false) }) },
@@ -72,6 +76,85 @@ test('connects all five device types serially in stable order using only connect
     assert.equal(p.state.syringeDevices.value.syringe_pump1.connected, true)
     assert.equal(p.state.valves.valve1.connected, true)
   } finally { p.dispose() }
+})
+
+test('registered turntable joins batch connect with status read and no movement', async () => {
+  const p = page()
+  try {
+    p.registry.turntables = { turntable1: { device_id: 'turntable1', name: '接样转盘', configured: true, connected: false, binding_resolved: true } }
+    p.state.turntableGroup.value = { update: (item: any) => { p.state.turntableDevices.value[item.device_id] = item } }
+    await p.state.connectAll()
+    assert.deepEqual(p.calls.filter(call => call.includes('turntable')), ['connect:turntable1', 'read:turntable1'])
+    assert.equal(p.state.turntableDevices.value.turntable1.connected, true)
+    assert.equal(p.state.connectionBatch.results.value.find((item: any) => item.key === 'turntable:turntable1').status, 'success')
+    assert.equal(p.starts.length, 0)
+  } finally { p.dispose() }
+})
+
+test('batch connection readback cannot bypass the turntable group ordering through its shared device map', async () => {
+  const p = page()
+  const old = { device_id: 'turntable1', name: '接样转盘', configured: true, connected: false,
+    binding_resolved: true, read_ok: false, read_at: null, busy: null, stop_confirmed: false,
+    state_session: '2026-10-23T08:00:00.123455+00:00', state_revision: 1 }
+  for (const key of Object.keys(p.registry)) delete p.registry[key]
+  p.registry.turntables = { turntable1: old }
+  const group = view('components/TurntableGroup.vue', {
+    '../api/turntables': { turntableApi: { list: async () => ({ data: { turntables: { turntable1: old } } }) } },
+    '../composables/useWebSocket': { useWebSocket: () => ({ data: vue.ref(null), fresh: vue.ref(true) }) },
+  })
+  try {
+    await group.mounted[0]!()
+    p.state.turntableDevices.value = group.state.states.value // The real @devices binding shares this map.
+    p.state.turntableGroup.value = { update: group.state.update }
+    p.behavior['read:turntable1'] = async () => {
+      group.state.update({ ...old, state_revision: 3, connected: true, read_ok: true,
+        read_at: new Date().toISOString(), busy: true, action: { action: 'run', result: 'running' } })
+      return { ...old, state_revision: 2, connected: true, read_ok: true,
+        read_at: new Date().toISOString(), busy: false, stop_confirmed: true, action: null }
+    }
+    await p.state.connectAll()
+    assert.equal(group.state.states.value.turntable1.state_revision, 3)
+    assert.equal(p.state.turntableDevices.value.turntable1.state_revision, 3)
+    assert.equal(p.state.turntableDevices.value.turntable1.action.result, 'running')
+    assert.equal(p.state.turntableDevices.value.turntable1.stop_confirmed, false)
+    assert.deepEqual(p.calls, ['list', 'connect:turntable1', 'read:turntable1'])
+  } finally { group.unmount(); p.dispose() }
+})
+
+test('batch connection preserves full connect and failed readback revisions against late healthy telemetry', async () => {
+  const p = page()
+  const old = { device_id: 'turntable1', name: '接样转盘', configured: true, connected: false,
+    binding_resolved: true, read_ok: false, read_at: null, busy: null, stop_confirmed: false,
+    state_session: '2026-10-23T08:00:00.123455+00:00', state_revision: 1 }
+  for (const key of Object.keys(p.registry)) delete p.registry[key]
+  p.registry.turntables = { turntable1: old }
+  const data = vue.ref<any>(null)
+  const group = view('components/TurntableGroup.vue', {
+    '../api/turntables': { turntableApi: { list: async () => ({ data: { turntables: { turntable1: old } } }) } },
+    '../composables/useWebSocket': { useWebSocket: () => ({ data, fresh: vue.ref(true) }) },
+  })
+  try {
+    await group.mounted[0]!()
+    p.state.turntableDevices.value = group.state.states.value
+    p.state.turntableGroup.value = { update: group.state.update }
+    p.behavior['connect:turntable1'] = async () => ({ ...old, success: true, connected: true,
+      state_revision: 3, read_ok: true, read_at: new Date().toISOString(), busy: false })
+    let revisionBeforeRead = 0
+    p.behavior['read:turntable1'] = async () => {
+      revisionBeforeRead = group.state.states.value.turntable1.state_revision
+      return { ...old, connected: true, state_revision: 5, read_error: '最新状态读取超时', motion_blocked: true }
+    }
+    await p.state.connectAll()
+    data.value = { turntables: { turntable1: { ...old, state_revision: 4, connected: true,
+      read_ok: true, read_at: new Date().toISOString(), busy: false, stop_confirmed: true } } }
+    await vue.nextTick()
+    assert.equal(group.state.states.value.turntable1.state_revision, 5)
+    assert.equal(revisionBeforeRead, 3)
+    assert.equal(group.state.states.value.turntable1.read_ok, false)
+    assert.equal(group.state.states.value.turntable1.stop_confirmed, false)
+    assert.equal(group.state.states.value.turntable1.read_error, '最新状态读取超时')
+    assert.equal(p.state.connectionBatch.results.value[0].status, 'unknown')
+  } finally { group.unmount(); p.dispose() }
 })
 
 test('skips connected, unconfigured and unmatched devices; false and network failures remain failures', async () => {

@@ -225,6 +225,9 @@ def _match_ports(binding, ports: List[SerialPortInfo]) -> List[SerialPortInfo]:
     if location:
         return [item for item in ports if _normalize(item.location) == location]
 
+    if vid is not None and pid is not None:
+        return [item for item in ports if item.vid == vid and item.pid == pid]
+
     return []
 
 

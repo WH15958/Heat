@@ -124,6 +124,7 @@ class ModbusRTUProtocol:
         self._serial: Optional[serial.Serial] = None
         self._connected = False
         self._port_acquired = False
+        self._serial_registered = False
     
     @property
     def is_connected(self) -> bool:
@@ -142,8 +143,8 @@ class ModbusRTUProtocol:
 
         serial_manager = get_serial_manager()
         if self._port_acquired:
-            serial_manager.release_port(self.port)
-            self._port_acquired = False
+            if not self.disconnect():
+                return False
 
         if not serial_manager.acquire_port(self.port):
             logger.error(f"Serial port already in use: {self.port}")
@@ -161,36 +162,38 @@ class ModbusRTUProtocol:
                 timeout=self.timeout,
             )
             serial_manager.register_handle(self.port, serial_handle)
+            self._serial_registered = True
             self._serial = serial_handle
             self._connected = True
             logger.info(f"MODBUS RTU connected to {self.port} at {self.baudrate}bps")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to {self.port}: {e}")
-            if serial_handle is not None:
-                try:
-                    serial_handle.close()
-                except Exception:
-                    pass
-            serial_manager.release_port(self.port)
-            self._port_acquired = False
-            self._serial = None
+            self._serial = serial_handle
             self._connected = False
+            self.disconnect()
             return False
     
-    def disconnect(self):
+    def disconnect(self) -> bool:
         """断开串口连接"""
-        if self._port_acquired:
-            get_serial_manager().release_port(self.port)
-        elif self._serial is not None:
-            try:
-                self._serial.close()
-            except Exception:
-                pass
+        try:
+            if self._serial is not None and (not self._port_acquired or not self._serial_registered):
+                if self._serial.is_open:
+                    self._serial.close()
+                if self._serial.is_open:
+                    return False
+            if self._port_acquired:
+                if not get_serial_manager().release_port(self.port):
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to disconnect {self.port}: {e}")
+            return False
         self._port_acquired = False
+        self._serial_registered = False
         self._serial = None
         self._connected = False
         logger.info("MODBUS RTU disconnected")
+        return True
     
     @staticmethod
     def calculate_crc(data: bytes) -> int:
@@ -271,9 +274,9 @@ class ModbusRTUProtocol:
 
         try:
             response = bytearray()
-            deadline = time.time() + self.timeout
+            deadline = time.monotonic() + self.timeout
 
-            while time.time() < deadline:
+            while time.monotonic() < deadline:
                 chunk = self._serial.read(min(64, max_length - len(response)))
                 if not chunk:
                     if len(response) >= min_length:

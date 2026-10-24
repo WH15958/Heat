@@ -6,7 +6,7 @@ import { createMonitorHistory, mergeMonitorFrames, recordMonitorFrame, MONITOR_F
 function frame(): RealtimeData {
   return {
     type: 'realtime', heaters: { heater1: { pv: 28, sv: 50, mv: 100, run_status: 'RUN', alarms: [] } },
-    microwaves: { microwave1: { material_temperature: 60 } }, valves: {}, syringe_pumps: {},
+    microwaves: { microwave1: { material_temperature: 60 } }, valves: {}, syringe_pumps: {}, turntables: {},
     pumps: { pump1: { device_id: 'pump1', channels: { '1': { read_ok: true, running: true, flow_rate: 15000, flow_unit: 'UL_MIN', volume: 0, direction: 'CLOCKWISE' } } } },
   }
 }

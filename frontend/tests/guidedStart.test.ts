@@ -9,6 +9,7 @@ import * as batch from '../src/experiment/batch'
 import * as drain from '../src/experiment/drainEstimate'
 import * as priming from '../src/experiment/priming'
 import * as progress from '../src/experiment/guidedProgress'
+import * as confirmations from '../src/composables/pendingConfirmation'
 
 // Exercise the real page handlers and reactivity without hardware or a server.
 const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', import.meta.url), 'utf8')
@@ -35,6 +36,7 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
     '../experiment/drainEstimate': drain,
     '../experiment/priming': priming,
     '../experiment/guidedProgress': progress,
+    '../composables/pendingConfirmation': confirmations,
   }
   const exports = {} as any
   runInNewContext(compiled, { exports, window:{localStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value),removeItem:(key:string)=>storage.delete(key)}}, document:{querySelector:()=>null}, require: (name: string) => {

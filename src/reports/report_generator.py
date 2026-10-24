@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 import logging
 import statistics
 
+from src.utils.runtime_paths import data_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -429,14 +431,14 @@ class ReportGenerator:
 </html>
 """
     
-    def __init__(self, output_dir: str = "reports"):
+    def __init__(self, output_dir: Optional[str] = None):
         """
         初始化报告生成器
         
         Args:
             output_dir: 报告输出目录
         """
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir) if output_dir is not None else data_path("reports")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._logger = logging.getLogger(__name__)
     

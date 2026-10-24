@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {activeStage,stageState,staleStatus,batchRunIds,batchExport,formatTemperature,batchCompletionConfirmed} from '../src/experiment/guidedProgress'
+import {activeStage,stageState,staleStatus,batchRunIds,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed} from '../src/experiment/guidedProgress'
 
 test('stages reset per group while preparation remains completed; terminal is never running',()=>{
  const batch:any={state:'running',phase:'experiments',priming:{status:'completed'},current_group:2,progress:{step_id:'heat_both_stable'}}
@@ -52,4 +52,17 @@ test('temperature display rounds without changing measurements',()=>{
  assert.equal(formatTemperature(44.42578125),'44.4 ℃')
  for(const value of [null,undefined,NaN,Infinity,'50'])assert.equal(formatTemperature(value),'温度未知')
  assert.equal(formatTemperature(0),'0.0 ℃')
+})
+
+test('initial precursor reach accepts overshoot while formal stability and cooling keep their rules',()=>{
+ const reading={read_ok:true,target:50,tolerance:null,value:50.8}
+ for(const value of [50,50.8,56.1])assert.equal(temperatureReadingStatus({...reading,value},'heater_pair_reached'),'已达标')
+ assert.equal(temperatureReadingStatus({...reading,value:49.99},'heater_pair_reached'),'等待达标')
+ assert.equal(temperatureReadingStatus({...reading,target:60,value:56.1},'heater_pair_reached'),'等待达标')
+ assert.equal(temperatureReadingStatus({...reading,read_ok:false,value:56.1},'heater_pair_reached'),'读取未确认')
+ assert.equal(temperatureReadingStatus({...reading,target:null},'heater_pair_reached'),'最新读数')
+ assert.equal(temperatureReadingStatus({...reading,tolerance:3,value:56.1},'heater_pair_stable'),'等待达标')
+ assert.equal(temperatureReadingStatus({...reading,tolerance:3,value:47},'heater_pair_stable'),'已达标')
+ assert.equal(temperatureReadingStatus({...reading,target:45,value:44.9},'microwave_temperature_below'),'已达标')
+ assert.equal(temperatureReadingStatus({...reading,target:45,value:45.1},'microwave_temperature_below'),'等待达标')
 })

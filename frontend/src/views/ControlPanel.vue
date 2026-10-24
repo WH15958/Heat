@@ -1,5 +1,6 @@
 <template>
   <div class="control-panel">
+    <el-alert v-if="paramsStorageError" :title="paramsStorageError" type="warning" :closable="false" show-icon />
     <section class="connection-bar" aria-label="设备连接">
       <div class="connection-bar-heading"><div><strong>设备连接</strong><span>已连接 {{ controlDeviceEntries.filter(d => d.connected).length }} / {{ controlDeviceEntries.length }} 台</span></div>
         <el-button type="primary" :loading="connectionBatch.running.value" :disabled="connectionBatch.pending.size > 0" @click="connectAll">一键连接全部设备</el-button>
@@ -75,6 +76,9 @@
         <div v-show="selectedDevice === 'syringe'">
           <SyringePumpGroup ref="syringeGroup" @devices="syringeDevices = $event" />
         </div>
+        <div v-show="selectedDevice === 'turntable'">
+          <TurntableGroup ref="turntableGroup" @devices="turntableDevices = $event" />
+        </div>
         <el-empty v-if="!controlDevices.length" description="暂无可控制设备" />
       </div>
     </div>
@@ -94,14 +98,24 @@ import PumpControl from '../components/PumpControl.vue'
 import MicrowaveControl from '../components/MicrowaveControl.vue'
 import SyringePumpGroup from '../components/SyringePumpGroup.vue'
 import { syringeApi, type SyringeState } from '../api/syringePumps'
+import TurntableGroup from '../components/TurntableGroup.vue'
+import { turntableApi, type TurntableState } from '../api/turntables'
 import { createConnectionBatch, connectionBatchKey, type ConnectionTarget } from '../composables/connectionBatch'
 import { normalizeTubeSegmentLengths } from '../utils/pumpCalculations'
+import { confirmationEpochKey, usePendingConfirmation } from '../composables/pendingConfirmation'
+
+const confirmationEpoch = ref(0)
+provide(confirmationEpochKey, confirmationEpoch)
+const confirmations = usePendingConfirmation(confirmationEpoch)
+function cancelConfirmations() { confirmations.cancel(); confirmationEpoch.value++ }
+const paramsStorageError = ref('')
 
 const valves = reactive<Record<string, ValveState>>({})
 function updateValve(id: string, state: ValveState) { valves[id] = state }
 const connectionBatch = createConnectionBatch()
 provide(connectionBatchKey, connectionBatch)
 const syringeGroup = ref<{ update: (state: SyringeState) => void }>()
+const turntableGroup = ref<{ update: (state: TurntableState) => void }>()
 
 async function connectAll() {
   await connectionBatch.run(async () => {
@@ -114,6 +128,7 @@ async function connectAll() {
       { group: 'pumps', kind: 'pump', label: '蠕动泵', connect: devicesApi.connectPump, read: devicesApi.readPumpStatus },
       { group: 'microwaves', kind: 'microwave', label: '微波仪', connect: devicesApi.connectMicrowave, read: devicesApi.readMicrowaveData },
       { group: 'syringe_pumps', kind: 'syringe', label: '注射泵', connect: syringeApi.connect, read: syringeApi.read },
+      { group: 'turntables', kind: 'turntable', label: '接样转盘', connect: turntableApi.connect, read: turntableApi.read },
       { group: 'valves', kind: 'valve', label: '三通阀', connect: (id: string) => devicesApi.valveOperation(id, 'connect'), read: (id: string) => devicesApi.valveOperation(id, 'status') },
     ]
     for (const spec of groups) for (const id of Object.keys(registry[spec.group] || {}).sort()) {
@@ -123,6 +138,9 @@ async function connectAll() {
           const next = { ...syringeDevices.value[id], ...state, device_id: id }
           syringeDevices.value[id] = next
           syringeGroup.value?.update(next)
+        } else if (spec.kind === 'turntable') {
+          const next = { ...turntableDevices.value[id], ...state, device_id: id }
+          turntableGroup.value?.update(next)
         } else if (spec.kind === 'valve') valves[id] = { ...valves[id], ...state }
         else {
           const device = (devices as any)[spec.group][id]
@@ -136,23 +154,24 @@ async function connectAll() {
       }
       targets.push({
         key: `${spec.kind}:${id}`, name: `${info.name || spec.label} · ${id}`,
-        connected: () => Boolean(info.connected) || (spec.kind === 'syringe' ? Boolean(syringeDevices.value[id]?.connected) : spec.kind === 'valve' ? Boolean(valves[id]?.connected) : Boolean((devices as any)[spec.group][id]?.connected)),
+        connected: () => Boolean(info.connected) || (spec.kind === 'syringe' ? Boolean(syringeDevices.value[id]?.connected) : spec.kind === 'turntable' ? Boolean(turntableDevices.value[id]?.connected) : spec.kind === 'valve' ? Boolean(valves[id]?.connected) : Boolean((devices as any)[spec.group][id]?.connected)),
         blocked: () => info.configured === false ? '未配置，已跳过' : info.binding_resolved === false ? '串口未匹配，已跳过' : '',
         connect: async () => {
           const response = (await spec.connect(id)).data
           if (response.success !== true) return false
-          update({ connected: true, read_ok: false })
+          update(spec.kind === 'turntable' ? response : { connected: true, read_ok: false })
           return true
         },
         read: async () => {
           try {
             const state = (await spec.read(id)).data
+            if (spec.kind === 'turntable') update(state)
             if (state.error || state.read_ok === false || state.success === false || state.connected === false
-              || (['syringe', 'valve'].includes(spec.kind) && state.read_ok !== true)
+              || (['syringe', 'valve', 'turntable'].includes(spec.kind) && state.read_ok !== true)
               || (spec.kind === 'heater' && !Number.isFinite(state.pv))
               || (spec.kind === 'microwave' && !Number.isFinite(state.material_temperature))
               || (spec.kind === 'pump' && [1, 2, 3, 4].some(ch => state.channels?.[ch]?.read_ok !== true))) throw new Error('设备状态读取未确认')
-            update({ ...state, read_ok: true })
+            if (spec.kind !== 'turntable') update({ ...state, read_ok: true })
           } catch (error) { update({ read_ok: false }); throw error }
         },
       })
@@ -170,11 +189,12 @@ watch(realtimeData, payload => {
   }
 })
 watch(wsConnected, online => {
+  if (!online) cancelConfirmations()
   if (!online) for (const state of Object.values(valves)) {
     state.read_ok = false
     state.relay_energized = null
   }
-})
+}, { flush: 'sync' })
 
 interface ChannelConfig {
   flowRate: number
@@ -256,6 +276,9 @@ const devices = reactive<{
   pumps: {},
   microwaves: {},
 })
+watch(() => JSON.stringify([devices.heaters, devices.microwaves].map(group =>
+  Object.entries(group).map(([id, device]) => [id, device.connected, device.connectionPort]))),
+  () => confirmations.cancel(), { flush: 'sync' })
 
 const microwaveSnapshots = reactive<Record<string, MicrowaveRealtimeData>>({})
 const microwavePrograms = reactive<Record<string, any>>({})
@@ -274,18 +297,21 @@ watch(() => Object.entries(devices.microwaves).map(([id, device]) =>
 const selectedDevice = ref('')
 let initialSelectionReady = false
 const syringeDevices = ref<Record<string, SyringeState>>({})
+const turntableDevices = ref<Record<string, TurntableState>>({})
 const controlDeviceEntries = computed(() => [
   ...Object.entries(valves).map(([id, device]) => ({ key: `valve:${id}`, name: '三通阀', port: device.connection_port, connected: device.connected, status: !device.connected ? '未连接' : device.read_ok ? '已连接' : '状态未知' })),
   ...Object.entries(devices.heaters).map(([id, device], index) => ({ key: `heater:${id}`, name: `加热器${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.disconnectFailed ? '连接异常' : device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.pumps).map(([id, device], index) => ({ key: `pump:${id}`, name: `蠕动泵${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
   ...Object.entries(devices.microwaves).map(([id, device], index) => ({ key: `microwave:${id}`, name: `微波仪${index + 1}`, port: device.connectionPort, connected: device.connected, status: device.connected ? '已连接' : '未连接' })),
   ...Object.entries(syringeDevices.value).map(([id, device]) => ({ key: `syringe:${id}`, name: device.name, port: device.connection_port, connected: device.connected, status: !device.configured ? '待配置' : !device.connected ? '未连接' : !device.read_ok ? '状态未知' : device.fault_code ? '故障' : device.busy ? '运行中' : '已连接' })),
+  ...Object.entries(turntableDevices.value).map(([id, device]) => ({ key: `turntable:${id}`, name: device.name, port: device.connection_port, connected: device.connected, status: !device.configured ? '待配置' : !device.connected ? '未连接' : !device.read_ok ? '状态未知' : device.busy ? '运行中' : '已连接' })),
 ])
 const controlDevices = computed(() => [
   { key: 'heater', name: '加热器' },
   { key: 'pump', name: '蠕动泵' },
   { key: 'microwave', name: '微波仪' },
   { key: 'syringe', name: '注射泵' },
+  { key: 'turntable', name: '接样转盘' },
   { key: 'valve', name: '三通阀' },
 ].map(group => {
   const members = controlDeviceEntries.value.filter(device => device.key.startsWith(group.key + ':'))
@@ -414,7 +440,12 @@ function saveParams() {
       segments: microwave.segments,
     }
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
+    paramsStorageError.value = ''
+  } catch {
+    paramsStorageError.value = '控制参数未保存到本机；当前输入仍保留，离开前请记录参数。'
+  }
 }
 
 function restoreParams() {
@@ -479,13 +510,14 @@ watch(devices, () => {
 }, { deep: true })
 
 function hasUnresolvedBinding(data: any): boolean {
-  const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}]
+  const groups = [data?.heaters || {}, data?.pumps || {}, data?.microwaves || {}, data?.turntables || {}]
   return groups.some(group =>
     Object.values(group).some((info: any) => info?.binding_resolved === false),
   )
 }
 
 function applyDeviceData(data: any) {
+  for (const state of Object.values(data.turntables || {})) turntableGroup.value?.update(state as TurntableState)
   for (const id of Object.keys(valves)) if (!data.valves?.[id]) delete valves[id]
   Object.assign(valves, data.valves || {})
   for (const [id, info] of Object.entries(data.heaters || {})) {
@@ -631,8 +663,9 @@ function ensureBindingResolved(resolved: boolean | undefined, label: string, bin
 }
 
 async function confirmHeaterOperation(id: string, action: string, detail: string): Promise<boolean> {
-  try {
-    await ElMessageBox.confirm(
+  const heater = devices.heaters[id]
+  const snapshot = JSON.stringify([heater.targetTemp, heater.minTemperature, heater.maxTemperature])
+  return confirmations.confirm(`heater:${id}`, () => ElMessageBox.confirm(
       '即将' + action + '加热器 ' + id + '（串口 ' + heaterConnectionPort(id) + '）。\n' +
       detail + '\n' +
       '请确认温度探头、加热对象、接线和现场看护都已检查完毕。',
@@ -642,11 +675,7 @@ async function confirmHeaterOperation(id: string, action: string, detail: string
         cancelButtonText: '取消',
         type: 'warning',
       },
-    )
-    return true
-  } catch {
-    return false
-  }
+    ), () => heater.connected && snapshot === JSON.stringify([heater.targetTemp, heater.minTemperature, heater.maxTemperature]))
 }
 
 function pumpModeLabel(mode: PumpMode): string {
@@ -710,6 +739,7 @@ async function connectHeater(id: string) {
 }
 
 async function disconnectHeater(id: string) {
+  confirmations.cancel()
   devices.heaters[id].loading = true
   const progressMessage = ElMessage({
     message: `正在安全停止并断开加热器 ${id}...`,
@@ -761,6 +791,7 @@ async function setTemp(id: string, temp: number) {
 
 async function startHeater(id: string) {
   const heater = devices.heaters[id]
+  if (heater.starting || heater.stopping) return
   if (!ensureConnected(heater.connected, '加热器 ' + id, heaterConnectionPort(id))) return
   if (!await confirmHeaterOperation(id, '启动', '目标温度：' + heater.targetTemp + '°C。')) return
   heater.starting = true
@@ -779,6 +810,7 @@ async function startHeater(id: string) {
 }
 
 async function stopHeater(id: string) {
+  confirmations.cancel()
   const heater = devices.heaters[id]
   if (!ensureConnected(heater.connected, '加热器 ' + id, heaterConnectionPort(id))) return
   heater.stopping = true
@@ -1029,6 +1061,7 @@ async function connectMicrowave(id: string) {
 }
 
 async function disconnectMicrowave(id: string) {
+  confirmations.cancel()
   devices.microwaves[id].configuredProgramKey = ''
   devices.microwaves[id].loading = true
   try {
@@ -1122,7 +1155,7 @@ async function startMicrowave(id: string) {
   }
   microwave.starting = true
   try {
-    await ElMessageBox.confirm(
+    const confirmed = await confirmations.confirm(`microwave:${id}`, () => ElMessageBox.confirm(
       '启动电脑托管程序，共 ' + microwave.usedSegments + ' 个逻辑段。后端将逐段配置温度、启动、等待到温、计时保温并确认停止，再进入下一段；段间会短暂停机。设备方案与执行范围须现场核对。\n本流程会覆盖设备五个硬件段的参数，运行期间须保持后端服务运行并有人看护。\n请确认炉门关闭、反应瓶非空载、探头没入物料，当前串口 ' + microwaveConnectionPort(id) + ' 对应目标设备。',
       '微波仪启动确认',
       {
@@ -1130,7 +1163,8 @@ async function startMicrowave(id: string) {
         cancelButtonText: '取消',
         type: 'warning',
       },
-    )
+    ))
+    if (!confirmed) return
     if (configuredKey !== microwave.configuredProgramKey || !microwaveProgramConfigured(microwave) || !microwave.connected) {
       throw new Error('参数或连接已变化，请重新检查程序')
     }
@@ -1152,7 +1186,9 @@ async function startMicrowave(id: string) {
 }
 
 async function stopMicrowave(id: string) {
+  confirmations.cancel()
   if (!ensureConnected(devices.microwaves[id].connected, '微波仪 ' + id, microwaveConnectionPort(id))) return
+  const port = microwaveConnectionPort(id)
   try {
     await ElMessageBox.confirm(
       '即将向微波仪 ' + id + '（串口 ' + microwaveConnectionPort(id) + '）发送停止控制字。\n' +
@@ -1164,6 +1200,7 @@ async function stopMicrowave(id: string) {
         type: 'warning',
       },
     )
+    if (!confirmations.isActive() || !devices.microwaves[id].connected || port !== microwaveConnectionPort(id)) return
     devices.microwaves[id].stopping = true
     devices.microwaves[id].configuredProgramKey = ''
     devices.microwaves[id].programRevision++
@@ -1188,7 +1225,7 @@ async function stopMicrowave(id: string) {
 
 async function recoverMicrowaveProgram(id: string) {
   try {
-    await ElMessageBox.confirm('请现场确认微波设备已经停止且功率、电流归零。解除锁定不会恢复或重放程序。', '人工恢复确认', { type: 'warning', confirmButtonText: '设备已停止，解除锁定' })
+    if (!await confirmations.confirm(`recover-microwave:${id}`, () => ElMessageBox.confirm('请现场确认微波设备已经停止且功率、电流归零。解除锁定不会恢复或重放程序。', '人工恢复确认', { type: 'warning', confirmButtonText: '设备已停止，解除锁定' }))) return
     await devicesApi.acknowledgeMicrowaveProgram(id)
     await refreshMicrowavePrograms()
   } catch (e: any) {
@@ -1198,6 +1235,7 @@ async function recoverMicrowaveProgram(id: string) {
 }
 
 async function emergencyStop() {
+  cancelConfirmations()
   connectionBatch.cancel()
   cancelPumpStarts()
   try {
@@ -1206,6 +1244,7 @@ async function emergencyStop() {
       cancelButtonText: '取消',
       type: 'error',
     })
+    if (!confirmations.isActive()) return
     for (const microwave of Object.values(devices.microwaves)) {
       microwave.configuredProgramKey = ''
       microwave.programRevision++
@@ -1283,8 +1322,8 @@ function calcFlowRate(ch: ChannelConfig): number {
 .connection-dot.online { background: var(--el-color-success); }
 .choice-meta { display: block; margin-top: 5px; color: var(--el-text-color-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .device-detail { min-width: 0; }
-.device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-.device-detail :deep(.device-card), .device-detail :deep(.syringe-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
+.device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]), .device-detail :deep(section[aria-label="接样转盘设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.device-detail :deep(.device-card), .device-detail :deep(.syringe-panel), .device-detail :deep(.turntable-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
 .device-detail :deep(.el-card__header) { min-height: 88px; box-sizing: border-box; display: flex; align-items: center; }
 .device-detail :deep(.card-header) { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 20px; }
 .device-detail :deep(.device-heading) { grid-column: 1; }

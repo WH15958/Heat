@@ -8,6 +8,7 @@
 ## 你现在应该看什么
 
 - 想理解系统结构：看“架构总览”
+- 想选择网页热更新、源码桌面测试或安装版运行：看 [日常开发与运行选择](daily_development.md)
 - 想扩展实验能力：看“新增实验动作 / 等待条件标准流程”
 - 想接入新设备：看“新增设备驱动标准流程”
 - 想确认 merge 前要做什么：看 [testing_and_merge_flow.md](testing_and_merge_flow.md)
@@ -54,6 +55,10 @@ Vue 前端
 全局导航位于 `frontend/src/App.vue`，页面切换时会卸载旧页面，以便清理轮询和 WebSocket，并在再次进入设备控制页时刷新设备状态。蓝白主题与响应式断点集中在 `frontend/src/styles/theme.css`。主题覆盖 Element Plus 展示样式，设备控制页通过 `device-columns` 组织两列独立内容；小于 1200px 使用单列，小于 768px 展开式导航。其他页面沿用原有业务布局。
 
 本地装饰资源位于 `frontend/src/assets/theme/`，由用户提供的图片裁切并压缩为 WebP。插画使用空 `alt` 和非交互样式；状态、故障和参数必须继续使用真实文本及现有数据源。修改主题时同时检查 Element Plus 懒加载样式的优先级和弹窗，不将设备事件处理迁入展示层。
+
+前端异步结果须匹配当前操作对象：普通实验详情与文件名仅在本次读取成功后一起提交选择，加载/失败时禁止启动，待确认时切换实验撤销旧启动；文件名路径段统一 URL 编码，保留 `#` 与字面 `%20`。Campaign 切换清空旧列表及 Trial 选择，过期读取不能回填；`run_id`/`sample_id` 分别 PATCH。控制确认在离页、设备断连、相关停止或 WebSocket 失联时撤销未提交动作，已发送动作仍由明确停止处理；失联不阻止用户明确确认急停。
+
+控制参数的本机存储写入失败时保留输入并持续显示警告，下一次成功写入才清除。编辑器保存响应必须仍属于原文档；新导入/读取的文档不能被旧响应覆盖，同一文档提交保存后继续编辑也须保留为未保存修改。
 
 ## 2. 核心开发约束
 
@@ -125,6 +130,16 @@ FastAPI 是异步的，但设备是同步的。
 
 Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH Python；`scripts/launch_heat.py` 负责前置检查、日志和启动互斥，并在主线程执行原有 `run_server.py`，保留 Uvicorn 的 Ctrl+C/lifespan 退出流程。`output/heat-launcher.lock` 为进程持有的 Windows 文件锁，退出时自动释放，空闲锁文件无需删除。就绪检测线程仅在启动阶段读取 `/openapi.json` 和首页，不触发设备操作；其回归测试为 `python -m unittest discover -s tests -p test_launcher.py`。
 
+#### Windows 桌面入口
+
+`python -m src.desktop.main` 启动窗口和托盘，`src.desktop.backend` 为独立的本机单 worker 后台；二者通过认证的 Windows 命名管道交换 JSON。窗口生命周期不控制设备，明确退出经独立协调器完成停止、持久化及清理，失败保留后台。桌面后台在业务导入前设置 `HEAT_DATA_DIR`，可写数据位于 `%LOCALAPPDATA%\Heat\workspace`；静态页面仍属于安装资源，原 Web 启动的路径与入口保留。
+
+退出协调器在执行器停止或保存失败时调用 `DeviceManager.cleanup(disconnect=False)`，继续停止其它设备并保留连接，供停止、急停和明确重试使用；全部确认后再正常清理断开。已结束运行的存储失败通过 `ExperimentLogger.retry_persistence()` 重试，仅修复样品和日志保存标志，不修改运行结果、结束时间或步骤，不再次发送结束事件；已保存的样品跳过写入。引导批次同步同一 `run_id` 的预充／组记录持久化字段，保留失败状态和恢复锁。
+
+托盘原生菜单回调仅启动 `HeatShowWindow`／`HeatExit` 工作线程，避免确认、IPC 等待及 WinForms 同步 Invoke 占用托盘消息循环；`Desktop.operation` 仍负责启动／退出互斥。退出阶段和启动版本写入带时间戳的 `desktop/desktop.log`；排查时结合后台日志，不能仅凭确认框消失推定已结束。线程行为回归位于 `tests/test_desktop_tray_dispatch.py`。
+
+首次迁移、WebView 资料目录、构建隔离环境、离线运行时、发布产物及 Windows 11 x64/真实设备待验收清单统一见 [desktop_app.md](desktop_app.md)。不得将开发机实际配置或历史目录作为发行默认资源。
+
 ### 3.2 实验引擎
 
 - `src/experiment/parser.py`：解析 YAML、校验实验文件名
@@ -133,16 +148,23 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `src/experiment/engine.py`：状态机与 run 生命周期
 - `src/experiment/experiment_logger.py`：run / step 日志与持久化
 
+普通实验、引导批次和微波托管的停止由各自持有的停止任务负责；调用方通过 `asyncio.shield` 等待，外部取消等待不会连带取消设备清理与最终持久化。停止或保存失败仍保留显式重试和恢复锁，不把调用方请求结束解释为停机成功；同步驱动及原有暂停语义不变。
+
 ### 3.3 设备与协议
 
 - `src/devices/heater.py`：加热器同步控制
 - `src/devices/peristaltic_pump.py`：多通道泵同步控制
 - `src/devices/microwave.py`：MKM-AH1E 微波仪同步 Modbus 控制
+- `src/devices/turntable.py` / `src/protocols/turntable.py`：CL-01A 转盘同步串口访问及厂家二进制协议；手动动作监督在 `src/web/turntable_control.py`
 - `src/protocols/aibus.py`：加热器协议实现
 - `src/protocols/modbus_rtu.py`：泵协议实现
 - `src/protocols/microwave_params.py`：微波仪 Modbus 地址、模式和控制字常量
 
 说明：蠕动泵在 Heat 中按 Modbus RTU 驱动，但现场物理接线不在软件层写死为 RS485。若实验室当前使用 RS232 线缆，以现场接线事实为准；不要把“协议是 Modbus RTU”和“物理层一定是 RS485”混为一谈。
+
+串口跨进程所有权在系统临时目录 `heat_serial_locks` 中按端口管理：占用期间持有非阻塞 OS 文件锁（Windows `msvcrt`、POSIX `flock`），释放时才关闭句柄。1 字节 `.guard` 文件永久保留，不能通过删除它或换 inode 绕过锁；文件存在本身不代表端口仍被占用。`.lock` 另记 `owner_token`，非所有者不能删除，陈旧清理不能删除仍持有 OS 锁的记录；无 token 的旧版记录仅在确认原进程已死且取得 OS 锁后允许接管。维护时不要手工删除 guard 来“解锁”。
+
+协议断开返回 `False` 时保留句柄和占用，未登记的本次自有句柄也须在释放占用前确认关闭。加热器、蠕动泵、微波和阀的连接清理／断开失败后，先显式断开成功再重新连接；蠕动泵原有重连路径清理失败后停止重试。注射泵后续显式连接会先重试旧资源清理，失败不得覆盖旧对象；协议未建立不算已连接，读状态失败但协议已建立时仍保留 STOP 通路。Modbus 响应 deadline 使用单调时钟，但不据此承诺整个串行 I/O 的严格总时限。
 
 泵控制的防错边界：
 
@@ -165,6 +187,8 @@ Web 静态 fallback 只服务前端路由；未知 `/api/*`、`/ws/*` 保持 `40
 - `src/science/sample_record.py`：`samples.csv` 写入与去重
 - `ExperimentRun.persistence_status` 独立记录追踪持久化结果；`log_saved`、`sample_record_saved` 和 `persistence_errors` 用于区分“设备流程完成”和“记录完整落盘”
 - 实验日志、`samples.csv` 和 campaign JSON 采用同目录临时文件加 `os.replace()` 的原子替换；进程内写入使用锁保护读改写序列
+
+Campaign 参数与表征指标递归检查数值是否有限，含嵌套结构；NaN、Infinity 或 `1e309` 形成的溢出值返回 HTTP `400`，不写入数据，合法字符串、布尔值和 null 不因数值检查被转换。已有 Campaign JSON 或恢复日志若空白、损坏、结构非法或含非有限数值，按存储不可用返回 `503` 并保留原文件，不将坏文件当作空库覆盖，也不自动修复历史。
 
 ---
 
@@ -391,12 +415,12 @@ fake 测试只能证明地址换算、参数校验、失败传播、API/WS paylo
 
 ## 9. 合并前检查清单
 
-合并前至少确认：
+合并前按 [AGENTS.md 的验证矩阵](../AGENTS.md#6-validation-matrix) 与 [测试指南 10.1 节](testing_and_merge_flow.md#101-按变更类型选择验证) 确认：
 
 - 代码改动与文档改动一致
-- `tests/test_metadata.py` 通过
-- Web 关键模块可导入
-- 前端 `npm run build` 通过
+- 仅文档、规则或 Skill 改动完成 diff 和内容一致性检查
+- 后端改动完成 metadata、相关导入及受影响的行为检查；前端源码改动完成生产构建
+- 硬件控制语义改动另由用户／实验室确认实机 smoke test
 - 临时产物未误入版本控制
 
 更详细的流程见：
@@ -556,9 +580,9 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=precursor_timeout（默认3600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
 
-加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_stable` 和 `prime_heat_duration`（第一组目标、±3℃、30秒、precursor_timeout），然后才吸排液；`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=stable_then_dwell_flow_drain_v4` 及 heater1/2 配置，旧预充签名不再匹配；复用现有 YAML 动作和等待类型。
+加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名加入 `priming_protocol=reached_then_dwell_flow_drain_v5` 及 heater1/2 配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
 
-引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_stable`；通过后 `prime_heat_duration` 使用既有 duration 等待，暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 stable_then_dwell_flow_drain_v4。
+引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_reached`；通过后 `prime_heat_duration` 使用既有 duration 等待，温度波动不改变计时，实际暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名版本为 reached_then_dwell_flow_drain_v5。
 
 
 引导式 `GuidedRequest.experiment_name` 必填：严格字符串，去除首尾空格后1–80个Unicode字符，拒绝控制字符、格式控制及行/段分隔符，允许重名。名称纳入请求签名，保存到批次/计划顶层及流程metadata；运行name分别为“名称 · 预充”和“名称 · 第 N 组”，沿用现有历史接口及导出。旧记录只读兼容，不自动补名称，不复用旧预充资格；新请求缺少名称返回422。ID生成规则不变。
@@ -578,6 +602,8 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor.activity_snapshot` 只复制执行时已有的观测；`ActivityProgress` 不访问设备。双路稳定循环记录实际稳定窗口，暂停清零；duration/monitored_hold 使用原暂停扣时单调时钟。泵在原 START 确认后记录单调时钟，reference=true 的剩余时长不因编排暂停冻结，也不参与完成判断。并行进料聚合子执行器已缓存的状态。切换步骤、装载新组时清除观测，步骤退出冻结快照，展示不改变驱动调用顺序或数量。引导层再按编译步骤生成动作说明，通用执行器不解释引导阶段。
 
+预充前到温快照的 `wait_type=heater_pair_reached` 表示两路温度按“≥各自目标”判断，不显示连续稳定倒计时；旧记录的 `heater_pair_stable` 继续按原容差和稳定时长展示。
+
 状态顶层新增 `stop_requested` 和 `cleanup_in_progress`；后者观察执行器清理及预充失败清理的在途调用。原 `cleanup_pending` 仍保留其资源/恢复含义，不能把它当作“正在清理”。已结束批次可能保留 stop_requested=true，客户端须优先判断终态。
 
 前端保持 2 秒轮询，不自行递减动作剩余时间；独立检查距成功响应是否超过 6 秒。控制命令使用响应序号，停止可以覆盖待确认的暂停/继续；较早响应不得覆盖停止反馈。网络失败只通过读取核对，不自动重发。字段定位由本地校验及 422 loc 映射，设备/跨字段错误仍为页面提示。
@@ -591,7 +617,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor._run_timed_flow` 从 START 确认后按单调时钟计时，在 Web/编排层约每秒复用 read_pump_status 监督当前通道；读取失败或提前停止立即失败并清理。每次短睡眠最多 50ms，停止请求可中断；已发出的流量动作在暂停中仍计时、监督和到时停泵，步骤边界由引擎等待继续。所有退出路径尝试停止，停止未确认保留活动设备供原清理/恢复机制处理；不自动重启泵。串口调用耗时可能推迟停泵确认，不保证硬实时精度。进度 wait_type=flow_duration 是只读动作标记，不是新增 YAML wait 类型。
 
-预充签名协议升级为 stable_then_dwell_flow_drain_v4，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
+预充签名协议为 reached_then_dwell_flow_drain_v5，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
 
@@ -600,3 +626,35 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 `GuidedEntryPage.vue` 承接 `/experiment/batch`，默认入口、`?view=history` 批次历史、`?view=history&batch_id=...` 详情；`?new=1` 挂载新建表单，`?resume=1` 挂载当前批次进度与恢复入口。复用只读 `/api/guided/current`、`/batches`、`/{id}`、`/{id}/plan` 与现有日志接口，没有新增设备操作路径。开始成功后转 `resume=1` 保持进度页。
 
 表单以 `heat.guided-draft.v1` 在 localStorage 保存一份版本化草稿，仅包含输入和步骤，不含校验证据、人工确认、运行状态、batch_id 或预充资格。恢复按字段检查，旧终态记录不回填覆盖新草稿，活动/恢复/清理/保存错误优先处理且保留草稿。启动成功清除草稿；新建空白前确认替换。`batchExport` 复用精确 run_id/metadata 关联，在完整日志之外附带批次检查点与原始流程快照，快照不存在或批次身份不一致时拒绝完整导出。物理存储仍使用现有批次、plans 与运行日志目录，不复制或改写历史记录。
+
+### CL-01A 转盘手动接入
+
+2026-10-24 本机仓库配置经厂家报文和实机定位核验，已启用 `home_enabled` 与 `position_encoding_verified`；模型默认值仍为false，不推广到其它设备或桌面独立配置。证据与标定边界见 [实机核验记录](turntable_integration.md#2026-10-24-原点与有限定位核验)。
+
+停止确认在 Web 协调层发送一次 STOP 后设定3秒单调时钟期限。读回的 OSError（含超时、短帧和未定义状态）记录到日志并清空连续稳定证据，在剩余期限内仅重试查询；写失败不重发，期限后的读回不接受为成功。仍要求连续两次 `0x20` 且坐标一致；单次同步读取可能使返回越过期限。到时运行的停止确认失败不会再误报“未确认连续运行”。
+
+`SystemConfig.turntables` 默认空列表，旧配置无需新增字段；已配置转盘由 `DeviceManager` 注册。`TurntableDevice` 只进行同步串口调用，使用原 `SerialPortManager` 和指纹解析；`TurntableController` 在 Web 层串行协调读写、停止代次和完成判断，应用 lifespan 的监督任务仅监督已明确发起的运动，与浏览器连接无关。单次串口调用和监督调度可能延后定时停止，不承诺硬实时。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/devices`、`/ws` | 增加 `turntables` 字典 |
+| `POST /api/turntable/{device_id}/connect` | 唯一绑定后打开串口并读取状态，不运动 |
+| `POST /api/turntable/{device_id}/disconnect` | 确认停止后释放；失败保留连接及未确认状态 |
+| `GET /api/turntable/{device_id}/status` | 只读状态；与 WebSocket 使用相同的读取协调键 |
+| `POST /api/turntable/{device_id}/command` | 常用 `home_bottle`、`next_bottle`；高级 `move_relative`、`move_absolute`、`run`、`home`、`stop`；返回 `success/result/state`，`success=true` 不表示运动完成 |
+
+瓶位模式由 `bottle_count` 控制，默认0保持旧配置的高级手动操作兼容；本机为12，`pulses_per_bottle=12000`、`bottle_speed=4000`、`bottle_home_speed=1000`、`bottle_home_timeout=180`。`home_bottle` 不接收其它字段，在 Web 协调层使用负向机械回零；`next_bottle` 必填 `expected_position`（最新有效坐标）及 `expected_bottle_token`，后端在设备锁内再次读取并比较，拒绝陈旧坐标或令牌，再向原协议发送目标为当前坐标加一个瓶位脉冲数的有限定位。每次成功回1号或换瓶生成新令牌，失效或运动中撤销，避免旧请求在再次回零到相同坐标后重放。瓶位命令只存在于Web请求模型，底层命令和协议保持原有动作。速度由配置确定；12到1继续同方向累计，不清零、不自动续跑。
+
+启用瓶位模式时，配置校验要求 `bottle_home_timeout >= bottle_count * pulses_per_bottle / bottle_home_speed + 5`，并要求 `action_timeout >= pulses_per_bottle / bottle_speed + 5`，分别覆盖一圈回零和一格换瓶并保留至少5秒余量；降低速度时须相应延长超时。
+
+瓶位状态由后端负责，包含 `bottle_count`、`pulses_per_bottle`、`current_bottle`、`next_bottle`、`bottle_token`、`bottle_ready` 和 `bottle_error`，动作可包含 `from_bottle`、`target_bottle`。只有 `home_bottle` 观察到回零过程、目标0和稳定停止后建立瓶位信任；换瓶准确到达目标并停止后才更新瓶号。启动、重连、复位、读取异常、意外坐标变化、高级运动或显式停止撤销信任，瓶号返回null，不能仅从坐标取模恢复。前端在状态过期或无效时隐藏瓶号，不自行计算，也不持久化瓶位以便重启续跑。
+
+手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。本阶段只增加手动瓶位映射，不增加 YAML 动作或自动接样。
+
+手动写控制的恢复检查包含引导批次持久化的 `recovery_required` 和 `cleanup_required`；未解除返回409，记录不可读返回503，GET和STOP不受该恢复检查阻断。停止已确认后出现坐标变化会撤销 `stop_confirmed/homed` 并设置稳定性阻断，新的两次独立稳定停止读数可解除这一阻断，但不能清除未知运动或失败STOP留下的必须停止标志。
+
+转盘状态快照增加 `state_session`（控制器对象创建时的UTC ISO微秒时间）和 `state_revision`（同会话递增整数），REST、设备列表和WS超时失效快照均携带。前端按会话及版本合并，拒绝迟到旧状态；`read_at` 只用于读数过期，不能作为无读数状态的排序依据。相同版本的本地HTTP失败可将状态降为读取失败，不得反向恢复确认。WS超时生成版本时不等待串口锁。
+
+驱动首次连接失败后，即使句柄关闭失败而仍打开，也不报告已连接；重连先成功释放旧资源，再创建句柄和重新查询。退出清理由控制器区分“从未连通、未发运动”和“连接丢失或运动未知”：前者可直接释放，后者保留停止保护；释放失败继续阻止退出并允许重试。
+
+状态包括 `read_ok/read_at/read_error`、坐标和原始速度/输入值、工作状态、`busy`、`stop_confirmed`、`homed`、`motion_blocked` 及动作结果。`connection_error` 保留连接失败原因，自动资源清理与未连接状态读取不清除，成功连接或明确断开后清除；原始错误进入日志。控制视图按实际读数时间保留 6 秒有效期，监测视图保留 15 秒；状态失效不发送停止。运动结果未知或停止未确认时禁止新动作，已连接的停止入口继续可用。协议字节序、默认禁用项、桌面配置更新和实机验收见 [转盘接入说明](turntable_integration.md)。

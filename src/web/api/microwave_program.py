@@ -5,7 +5,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from src.experiment import microwave_program as program
 from src.web.api.experiments import (_engines, _get_active_engine, _source_lock,
-                                     control_generation, check_control_generation)
+                                     control_generation, check_control_generation,
+                                     require_turntables_idle)
 from src.web.api.guided import RecoveryConfirmation
 
 router = APIRouter(prefix="/microwave-program", tags=["microwave-program"])
@@ -70,10 +71,12 @@ async def start(device_id: str, spec: program.ProgramRequest, request: Request):
             raise HTTPException(409, "已有实验占用或中断锁定，不能启动托管程序")
         if not spec.hardware_confirmed:
             raise HTTPException(409, "请确认负载、探头、炉门和现场看护条件")
+        require_turntables_idle(request.app.state.device_manager)
         try:
             run = program.MicrowaveProgramRun(request.app.state.device_manager, device_id, spec)
             await program.preflight(request.app.state.device_manager, device_id)
             check_control_generation(generation)
+            require_turntables_idle(request.app.state.device_manager)
         except (ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(409, str(exc)) from exc
         _runs[program_id] = run

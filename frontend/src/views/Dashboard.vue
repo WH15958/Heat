@@ -46,6 +46,20 @@
           <p>地址 {{ pump.address }} · {{ pump.connection_port || '串口待配置' }} · {{ pump.orientation || '方向未确认' }}</p>
         </el-card>
       </div>
+      <div v-for="(turntable, id) in dashboardTurntables" v-show="selectedDevice === 'turntables'" :key="'t-'+id">
+        <el-card class="device-card" shadow="hover">
+          <template #header><div class="card-header"><div class="device-heading"><img :src="turntableArtwork" alt="" /><div><h2>接样转盘</h2><span>{{ turntable.name }} · CL-01A</span></div></div><el-tag :type="turntable.read_ok ? 'success' : 'info'">{{ deviceInfo('turntables', id)?.status }}</el-tag></div></template>
+          <div class="valve-status-grid">
+            <div class="valve-status-item"><div><small>当前瓶位</small><strong>{{ turntableBottle(turntable) }}</strong></div></div>
+            <div class="valve-status-item"><div><small>运行状态</small><strong>{{ turntable.read_ok ? turntableWorkState[turntable.state_name || ''] || '未知' : '未知' }}</strong></div></div>
+            <div class="valve-status-item"><div><small>停止确认</small><strong>{{ turntable.read_ok ? turntable.stop_confirmed ? '已确认' : '未确认' : '未知' }}</strong></div></div>
+            <div class="valve-status-item"><div><small>当前动作</small><strong>{{ turntable.read_ok ? turntableResult[turntable.action?.result || ''] || '无' : '未知' }}</strong></div></div>
+          </div>
+          <details class="turntable-details"><summary>设备详情</summary><p>控制器坐标 {{ turntable.read_ok ? turntable.position ?? '未知' : '未知' }} 脉冲</p>
+          <div class="valve-meta"><span>串口 {{ turntable.connection_port || '--' }}</span><span>正限位 {{ turntableInput(turntable, 'positive_limit') }} · 原点 {{ turntableInput(turntable, 'home') }} · 负限位 {{ turntableInput(turntable, 'negative_limit') }} · 输入4 {{ turntableInput(turntable, 'input4') }}</span></div></details>
+          <p v-if="turntable.action?.error" class="valve-note">{{ turntable.action.error }}</p>
+        </el-card>
+      </div>
       <div v-for="(heater, id) in dashboardHeaters" v-show="selectedDevice === 'heaters'" :key="'h-'+id">
         <el-card shadow="hover" class="device-card">
           <template #header>
@@ -237,11 +251,14 @@ import { useDashboardDemo } from '../composables/useDashboardDemo'
 import { devicesApi } from '../api/devices'
 import { useWebSocket, type HeaterRealtimeData, type PumpRealtimeData, type PumpChannelData, type MicrowaveRealtimeData } from '../composables/useWebSocket'
 import type { SyringeState } from '../api/syringePumps'
+import { turntableResult, turntableWorkState, type TurntableState } from '../api/turntables'
+import { MONITOR_FRESHNESS_MS } from '../utils/monitorHistory'
 import heaterArtwork from '../assets/theme/heater.webp'
 import pumpArtwork from '../assets/theme/pump.webp'
 import syringePumpArtwork from '../assets/theme/syringe-pump.webp'
 import valveArtwork from '../assets/theme/valve.webp'
 import microwaveArtwork from '../assets/theme/microwave.webp'
+import turntableArtwork from '../assets/theme/turntable.svg'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 
@@ -301,24 +318,27 @@ const selectedDevice = ref('')
 let initialSelectionReady = false
 const registeredDevices = ref<Record<string, Record<string, { connected: boolean; connection_port?: string; name?: string; configured?: boolean; channels?: Record<string, unknown> }>>>({})
 const registeredSyringes = ref<Record<string, SyringeState>>({})
+const registeredTurntables = ref<Record<string, TurntableState>>({})
 const dashboardDevices = computed(() => {
-  const groups = [ ['heaters', '加热器'], ['pumps', '蠕动泵'], ['microwaves', '微波仪'], ['syringe_pumps', '注射泵'], ['valves', '三通阀'] ] as const
+  const groups = [ ['heaters', '加热器'], ['pumps', '蠕动泵'], ['microwaves', '微波仪'], ['syringe_pumps', '注射泵'], ['valves', '三通阀'], ['turntables', '接样转盘'] ] as const
   return groups.flatMap(([kind, label]) => {
     const liveDevices = realtimeData.value?.[kind] || {}
     const registered = registeredDevices.value[kind] || {}
     return [...new Set([...Object.keys(registered), ...Object.keys(liveDevices)])].map((id, index) => {
       const live = liveDevices[id]
       const config = registered[id]
-      const configured = kind !== 'syringe_pumps' || config?.configured !== false
+      const configured = (kind !== 'syringe_pumps' && kind !== 'turntables') || config?.configured !== false
       const online = configured && (wsConnected.value ? Boolean(live && (!('connected' in live) || live.connected)) : Boolean(config?.connected))
       const readFailed = live && (('read_ok' in live && live.read_ok === false) || ('error' in live && live.error))
+      const turntableReadAt = live && 'read_at' in live ? Date.parse(live.read_at || '') : NaN
+      const turntableStale = kind === 'turntables' && (!Number.isFinite(turntableReadAt) || clock.value - turntableReadAt >= MONITOR_FRESHNESS_MS)
       const fault = live && 'fault_code' in live && live.fault_code
       return {
         key: `${kind}:${id}`, name: config?.name || `${label}${index + 1}`,
         port: live?.connection_port || config?.connection_port,
         online,
-        status: !configured ? '待配置' : !online ? '未连接' : !wsConnected.value || !live ? '状态未知' : readFailed ? '读取失败' : fault ? '故障' : '在线',
-        hasData: Boolean(live && online && wsConnected.value && !readFailed),
+        status: !configured ? '待配置' : !online ? '未连接' : !wsConnected.value || !live || turntableStale ? '状态未知' : readFailed ? '读取失败' : fault ? '故障' : '在线',
+        hasData: Boolean(live && online && wsConnected.value && !readFailed && !turntableStale),
       }
     })
   })
@@ -328,6 +348,7 @@ const deviceGroups = computed(() => [
   { key: 'pumps', name: '蠕动泵' },
   { key: 'microwaves', name: '微波仪' },
   { key: 'syringe_pumps', name: '注射泵' },
+  { key: 'turntables', name: '接样转盘' },
   { key: 'valves', name: '三通阀' },
 ].map(group => {
   const members = dashboardDevices.value.filter(device => device.key.startsWith(group.key + ':'))
@@ -376,6 +397,20 @@ const dashboardSyringes = computed(() => Object.fromEntries(
     return [id, { ...state, read_ok: item.hasData, position_trusted: item.hasData && state?.position_trusted }]
   })
 ))
+const dashboardTurntables = computed<Record<string, Partial<TurntableState>>>(() => Object.fromEntries(
+  dashboardDevices.value.filter(item => item.key.startsWith('turntables:')).map(item => {
+    const id = item.key.slice(11)
+    const state = realtimeData.value?.turntables[id] || registeredTurntables.value[id]
+    return [id, { ...state, connection_port: item.port, read_ok: item.hasData }]
+  })
+))
+function turntableBottle(state: Partial<TurntableState>) {
+  const bottle = state.current_bottle
+  return state.connected && state.read_ok && state.bottle_ready && state.stop_confirmed && state.busy === false && !state.motion_blocked && !['accepted', 'running', 'unknown', 'stop_requested', 'stop_unconfirmed'].includes(state.action?.result || '') && Number.isInteger(bottle) && bottle != null && bottle >= 1 && bottle <= (state.bottle_count ?? 0) ? `${bottle}号瓶` : '未确认'
+}
+function turntableInput(state: Partial<TurntableState>, key: keyof NonNullable<TurntableState['inputs']>) {
+  return !state.read_ok || state.inputs?.[key] == null ? '未知' : state.inputs[key] ? '有效' : '无效'
+}
 watch(deviceGroups, items => {
   if (!initialSelectionReady) return
   if (!items.some(item => item.key === selectedDevice.value)) selectedDevice.value = items[0]?.key || ''
@@ -476,6 +511,7 @@ async function refreshRegisteredDevices() {
     const res = demoSource ? { data: demoSource.devices } : await devicesApi.list()
     registeredDevices.value = res.data
     registeredSyringes.value = res.data.syringe_pumps || {}
+    registeredTurntables.value = res.data.turntables || {}
     registeredMicrowaves.value = res.data.microwaves || {}
     if (!initialSelectionReady) {
       selectedDevice.value = deviceGroups.value[0]?.key || ''
@@ -656,6 +692,8 @@ watch([() => monitorHistory.revision, selectedDevice, wsConnected], renderCharts
 </script>
 
 <style scoped>
+.turntable-details { margin-top: 14px; font-size: 12px; color: var(--el-text-color-secondary); }
+.turntable-details summary { cursor: pointer; }
 .dashboard { padding: 0; }
 .device-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
 .device-selector { position: sticky; top: 88px; padding-right: 14px; border-right: 1px solid var(--el-border-color-light); min-width: 0; }

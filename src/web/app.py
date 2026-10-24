@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,11 +14,13 @@ from src.web.api.campaigns import router as campaigns_router
 from src.web.api.devices import router as devices_router
 from src.web.api.syringe_pumps import router as syringe_router
 from src.web.api.valves import router as valves_router
+from src.web.api.turntables import router as turntables_router
 from src.web.api.experiments import router as experiments_router, shutdown as stop_experiments
 from src.web.api.guided import router as guided_router
 from src.web.api.microwave_program import router as microwave_program_router
 from src.web.api.ws import DeviceReadCoordinator, router as ws_router, data_push_loop
 from src.web.device_manager import DeviceManager
+from src.desktop.lifecycle import DesktopShutdown, DesktopShutdownMiddleware
 
 logger = get_logger(__name__)
 
@@ -151,6 +154,9 @@ def create_device_manager() -> DeviceManager:
     for cfg in config.syringe_pumps:
         if cfg.enabled:
             dm.add_syringe_pump(cfg)
+    for cfg in config.turntables:
+        if cfg.enabled:
+            dm.add_turntable(cfg)
     return dm
 
 
@@ -165,13 +171,23 @@ async def lifespan(app: FastAPI):
     setup_logging(level="INFO", console_output=True, file_output=True)
     app.state.device_manager = create_device_manager()
     app.state.device_read_coordinator = DeviceReadCoordinator()
+    app.state.desktop_shutdown = DesktopShutdown(app) if os.environ.get("HEAT_DESKTOP_MODE") == "1" else None
     push_task = asyncio.create_task(data_push_loop(app))
     syringe_task = asyncio.create_task(syringe_supervisor(app.state.device_manager))
+    turntable_task = asyncio.create_task(turntable_supervisor(app.state.device_manager))
     yield
     logger.info("Shutting down...")
-    await stop_experiments()
+    desktop_shutdown = app.state.desktop_shutdown
+    already_cleaned = desktop_shutdown is not None and desktop_shutdown.succeeded
+    if not already_cleaned:
+        await stop_experiments()
     push_task.cancel()
     syringe_task.cancel()
+    turntable_task.cancel()
+    try:
+        await turntable_task
+    except asyncio.CancelledError:
+        pass
     try:
         await syringe_task
     except asyncio.CancelledError:
@@ -180,7 +196,7 @@ async def lifespan(app: FastAPI):
         await push_task
     except asyncio.CancelledError:
         pass
-    if not await asyncio.to_thread(app.state.device_manager.cleanup):
+    if not already_cleaned and not await asyncio.to_thread(app.state.device_manager.cleanup):
         logger.error("One or more devices failed to stop or disconnect during shutdown")
 
 
@@ -195,12 +211,24 @@ async def syringe_supervisor(dm):
         await asyncio.sleep(0.2)
 
 
+async def turntable_supervisor(dm):
+    """Supervise explicitly requested motion independently of browsers."""
+    while True:
+        for controller in dm.turntables.values():
+            try:
+                await asyncio.to_thread(controller.enforce_timeout)
+            except Exception:
+                logger.exception("Turntable action supervisor failed")
+        await asyncio.sleep(0.2)
+
+
 app = FastAPI(
     title="Heat - 温控与流体输送控制系统",
     description="Web远程控制 + 实时数据可视化",
     version="2.2",
     lifespan=lifespan,
 )
+app.add_middleware(DesktopShutdownMiddleware)
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -220,6 +248,7 @@ app.add_middleware(
 app.include_router(devices_router, prefix="/api")
 app.include_router(syringe_router, prefix="/api")
 app.include_router(valves_router, prefix="/api")
+app.include_router(turntables_router, prefix="/api")
 app.include_router(experiments_router, prefix="/api")
 app.include_router(guided_router, prefix="/api")
 app.include_router(microwave_program_router, prefix="/api")

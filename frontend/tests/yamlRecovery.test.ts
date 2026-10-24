@@ -32,6 +32,8 @@ function page() {
   const exports: any = {}
   runInNewContext(compiled, { exports, require: (name: string) => imports[name] })
   const state = exports.default.setup({}, { expose() {} })
+  state.selectedFilename.value = 'test.yaml'
+  state.selectedExp.value = { name: 'Test', steps: [] }
   return { state, pending, behavior, posts, errors, unmount: () => unmounts.forEach(fn => fn()) }
 }
 

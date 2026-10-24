@@ -2,7 +2,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from fastapi import HTTPException
@@ -120,6 +120,7 @@ def test_lifespan_finishes_runs_before_device_cleanup(monkeypatch):
     monkeypatch.setattr(web, 'setup_logging', Mock())
     monkeypatch.setattr(web, 'data_push_loop', background)
     monkeypatch.setattr(web, 'syringe_supervisor', background)
+    monkeypatch.setattr(web, 'turntable_supervisor', background)
 
     async def scenario():
         engine = ExperimentEngine(StepExecutor(SimpleNamespace()), Mock())
@@ -163,7 +164,7 @@ def test_invalid_later_step_is_rejected_before_registration(tmp_path, monkeypatc
         asyncio.run(experiments.start_experiment('invalid.yaml', experiments.StartExperimentRequest(), request))
     assert error.value.status_code == 400
     assert experiments._engines == {}
-    assert dm.mock_calls == []
+    assert dm.mock_calls == [call.require_turntables_idle()]  # Memory guard only; no hardware actions.
 
 
 @pytest.mark.parametrize('interruption', [OSError, KeyboardInterrupt])

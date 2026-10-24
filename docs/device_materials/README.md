@@ -39,3 +39,10 @@
 - 对应 `src/protocols/syringe_pump.py`、`src/devices/syringe_pump.py`；印刷27–44页用于串口命令、程序、参数及查询，PDF页码与印刷页码不同。
 - 当前配置：两台2.5mL、三口Y型阀；泵1指纹ASDNB2A7N12、COM12、拨盘0；泵2指纹A9BSB2A7N11、COM13、拨盘1；两台9600/8N1、RS232（2026-10-01用户确认）。RS232与RS485必须匹配实际线束/拨码，不能依据DB9外形推断。
 - 日期来自文件名，实际固件/铭牌与手册对应仍需现场核验。[功能覆盖表](../syringe_pump_integration.md) 与 [实机验收清单](../syringe_pump_acceptance.md) 区分软件实现和实物结论；软件验证不替代现场验收。
+
+## CL-01A 新增原始资料
+
+- 文件：[CL-01A运动控制器说明书.pdf](CL-01A运动控制器说明书.pdf)，保留用户提供的原件；SHA-256：`2355866BCFA51D4D02117604C3DD93F831B4A01F8AA185DD76EE7C8A8B05D1FB`。
+- 对应 `src/protocols/turntable.py`、`src/devices/turntable.py`；印刷12–14页用于串口命令和状态响应。手册版本、实际固件和铭牌对应关系尚未现场核验。
+- 当前 `turntable1` 为115200/8N1、1秒通信超时，USB CH340 `1A86:7523` 加位置 `1-3.2.1` 唯一绑定，记录 COM17（2026-10-23 用户换口，原COM16）；禁止指纹失配后回退其他 CH340。
+- 配套串口工具帮助与手册的速度反馈解释不同；位移请求字节序和 `0x02` 暂停/停止效果仍待实机核验。EXE 工具不作为运行依赖。软件边界及现场记录见 [转盘接入与验收](../turntable_integration.md)。

@@ -1,6 +1,6 @@
 <template>
   <div class="guided">
-    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化 → 稳定到温与预充 → 到温复查与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button @click="router.push('/experiment/batch')">返回实验入口</el-button><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ newDraft ? (showProgress ? '返回新实验设置' : '查看上次实验') : (showProgress ? '查看参数' : '查看实验进度') }}</el-button></div></header>
+    <header><div><h2>{{ showProgress ? '实验进度' : '引导式实验' }}</h2><p>{{ showProgress ? '初始化 → 到温保温与预充 → 到温复查与进料 → 微波反应 → 降温与收集 → 清洗 → 下一组' : '前驱体加热 → 进料 → 微波反应 → 降温与收集 → 清洗 → 预充与排气 → 批次确认' }}</p></div><div class="header-actions"><el-button @click="router.push('/experiment/batch')">返回实验入口</el-button><el-button v-if="batch.batch_id" @click="showProgress=!showProgress">{{ newDraft ? (showProgress ? '返回新实验设置' : '查看上次实验') : (showProgress ? '查看参数' : '查看实验进度') }}</el-button></div></header>
     <p v-if="draftNotice" role="status">{{ draftNotice }}</p>
     <nav v-if="!showProgress"><button v-for="(name,i) in stages" :key="name" :class="{active:stage===i}"  :disabled="i>stage" @click="goBack(i)"><b>{{ i+1 }}</b>{{ name }}</button></nav>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
@@ -26,8 +26,8 @@
         <div class="activity-heading"><div><small>{{ terminalRun ? '最后动作快照' : '当前动作' }}</small><h3>{{ operationTitle }}</h3><p>{{ operationDescription }}</p></div><span class="activity-status">{{ stale?'状态过期':batch.cleanup_in_progress?'正在清理':batch.stop_requested&&!terminalRun?'正在停止':stateLabel }}</span></div>
         <p v-if="controlFeedback" class="control-feedback" role="status">{{ controlFeedback }} <el-button v-if="controlUncertain" size="small" @click="refreshBatch(true)">核对最新状态</el-button></p>
         <div class="activity-readings">
-          <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? formatTemperature(reading.value) : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ !reading.read_ok?'读取未确认':reading.target==null?'最新读数':(reading.tolerance!=null?Math.abs(reading.value-reading.target)<=reading.tolerance:reading.value<=reading.target)?'已达标':'等待达标' }}</b></div>
-          <div v-if="activity?.stable_required_seconds!=null && activity.wait_type!=='microwave_temperature_reached'" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
+          <div v-for="reading in activity?.readings||[]" :key="reading.device_id" class="reading"><small>{{ deviceLabel(reading.device_id) }}</small><strong>{{ reading.read_ok ? formatTemperature(reading.value) : '温度未知' }}</strong><span v-if="reading.target!=null">目标 {{ activity?.wait_type==='heater_pair_reached'?'≥':activity?.wait_type==='microwave_temperature_below'?'≤':'' }}{{ reading.target }} ℃{{ reading.tolerance!=null?' ±'+reading.tolerance+'℃':'' }}</span><b>{{ temperatureReadingStatus(reading,activity?.wait_type) }}</b></div>
+          <div v-if="activity?.stable_required_seconds!=null && !['microwave_temperature_reached','heater_pair_reached'].includes(activity.wait_type)" class="reading"><small>双路连续稳定</small><strong>{{ seconds(activity.stable_seconds) }} / {{ seconds(activity.stable_required_seconds) }}</strong><span>任一路越界或暂停后重新计时</span></div>
           <MicrowaveHoldProgress :activity="activity" />
           <div v-if="activity?.duration_seconds!=null && activity.qualified_seconds==null && activity.hold_mode!=='timed'" class="reading"><small>{{ activity.wait_type==='flow_duration'?'流量排液剩余':activity.reference?'设定时长参考剩余':'有效计时剩余' }}</small><strong>{{ seconds(activity.remaining_seconds) }}</strong><span>{{ activity.reference?(activity.remaining_seconds===0&&activity.state!=='completed'?'等待设备完成确认':activity.wait_type==='flow_duration'?'软件到时主动停泵；暂停不延长排液':'从设备启动确认后计时，不表示动作完成'):'暂停期间不计时' }}</span><span>设定 {{ seconds(activity.duration_seconds) }}</span></div>
           <div v-for="(device,id) in activity?.devices||{}" :key="id" class="reading"><small>{{ deviceLabel(String(id)) }}</small><strong>{{ device.read_ok!==true?'状态未知':device.relay_energized!=null?'已确认 '+(device.relay_energized?'NC':'NO'):device.busy===true||device.running===true||device.control_active===true?'设备运行中':device.result==='completed'?'动作已完成':device.running===false?'设备已停止':'等待设备确认' }}</strong><span v-for="feed in (activity?.feeds||[]).filter((f:any)=>f.device_id===id)" :key="feed.device_id">设定进样量 {{ feed.volume }} {{ feed.unit }}</span><span v-if="device.fault_code">故障码 {{ device.fault_code }}</span></div>
@@ -69,11 +69,11 @@
       </section>
       <section v-if="stage===5">
         <h3>批次准备</h3>
-        <p>先初始化 A/B，再按第一组目标加热脱气；设定时间结束且双路稳定到温后才预充。前驱体持续保温；预充液 ≤45℃ 后排废，每批一次。</p>
+        <p>先初始化 A/B，再按第一组目标加热；两路均达到或超过各自目标后，立即开始计时保温脱气，设定时间结束后预充。前驱体持续保温；预充液 ≤45℃ 后排废，每批一次。</p>
         <div class="form-group initialization-group"><h4>泵初始化</h4><div class="grid"><div v-for="(item,i) in initialization" :key="i" class="pump-initialization"><strong>泵 {{ i===0?'A':'B' }}</strong><label>方向<select v-model="item.direction"><option value="Z">Z：左吸右排</option><option value="Y">Y：右吸左排</option></select></label><label>代码<select v-model.number="item.initialization_code"><option v-for="code in initializationCodes" :key="code" :value="code">{{ code }}</option></select></label></div></div></div>
         <div class="form-group"><h4>预充与排气</h4>
           <label class="preheat-field">到温后等待时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
-          <p><small>两路先达到目标 ±3℃并稳定30秒，再计时脱气，暂停不计时；到温等待最多60分钟。填0表示到温后不额外等待。</small></p>
+          <p><small>两路实测温度均达到或超过各自目标后立即计时，无需稳定30秒，暂停不计时；到温等待最多60分钟。填0表示到温后不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input :data-field="p.key" :aria-invalid="!!fieldErrors[p.key]" v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span><small v-if="fieldErrors[p.key]" class="field-error" role="alert">{{ fieldErrors[p.key] }}</small></label></div>
           <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
@@ -106,7 +106,7 @@
         <label class="confirm-check"><input v-model="primingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对设备、容量及前驱体相容性</label>
         <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液</label>
         <small>修改参数后，需重新校验并勾选三项确认。</small>
-        <details class="batch-details"><summary>查看启动说明</summary><p>请先在装置控制页连接全部设备。系统会按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，设定时间结束且稳定到温后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 45℃及以下后自动收集。</p></details>
+        <details class="batch-details"><summary>查看启动说明</summary><p>请先在装置控制页连接全部设备。系统会按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，设定时间结束后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 45℃及以下后自动收集。</p></details>
       </div>
       <template v-if="stage===6">
         <el-button type="primary" :loading="controlling" :disabled="controlling||!!startBlockReason" aria-describedby="start-status" @click="startBatch">开始自动实验</el-button>
@@ -124,10 +124,12 @@ import {computed,nextTick,onMounted,onUnmounted,reactive,ref,watch} from 'vue'
 import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
 import axios from 'axios'
+import {usePendingConfirmation} from '../composables/pendingConfirmation'
+const confirmations=usePendingConfirmation()
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
-import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,batchCompletionConfirmed} from '../experiment/guidedProgress'
+import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed} from '../experiment/guidedProgress'
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
@@ -280,7 +282,7 @@ const currentStepLabel=computed(()=>batch.value.state==='completed'?'全部实�
 const currentDevice=computed(()=>{
  if(batch.value.progress?.device_id)return batch.value.progress.device_id
  const id=batch.value.progress?.step_id||''
- if(id==='heat_both_stable')return '加热器 A / B'
+ if(['heat_both_stable','prime_heat_both_stable','prime_heat_both_reached','prime_heat_duration'].includes(id))return '加热器 A / B'
  if(id.startsWith('heat_'))return id.startsWith('heat_0')?'加热器 A':'加热器 B'
  if(id.startsWith('aspirate_'))return id==='aspirate_0'?'注射泵 A':'注射泵 B'
  if(id==='feed_both')return '注射泵 A / B'
@@ -391,7 +393,7 @@ async function startBatch(){
  try{
   const key=requestKey.value
   if(startBlockReason.value)throw new Error(startBlockReason.value)
-  await ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热脱气，两路稳定到温后等待设定脱气时间，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})
+  if(!await confirmations.confirm('start',()=>ElMessageBox.confirm('将先自动初始化 A/B（移动活塞并切阀），按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至45℃后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})))return
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
@@ -405,6 +407,7 @@ async function startBatch(){
  }catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}
 }
 async function controlBatch(action:string){
+ if(action==='stop')confirmations.cancel()
  if(controlling.value||pendingControl.value==='stop'||(pendingControl.value&&action!=='stop'))return
  const sequence=++controlSequence
  ++refreshSequence
@@ -443,7 +446,7 @@ function returnToSetup(reuse=false){
  error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true;draftEnabled=true
  void router.replace({query:{...route.query,new:'1'}})
 }
-async function acknowledgeInterrupted(){controlling.value=true;try{await ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'});++refreshSequence;batch.value=(await axios.post(`/api/guided/${batch.value.batch_id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
+async function acknowledgeInterrupted(){if(controlling.value)return;const id=batch.value.batch_id;controlling.value=true;try{if(!await confirmations.confirm('recover',()=>ElMessageBox.confirm('请在现场确认所有设备已停止，并检查预充残留、气泡和液路。解除锁定后可新建实验，原记录保留，不恢复原批次。','确认失败或中断后的设备状态',{type:'warning'}),()=>batch.value.batch_id===id))return;++refreshSequence;batch.value=(await axios.post(`/api/guided/${id}/acknowledge-interrupted`,{devices_stopped_confirmed:true})).data}catch(e){if(e!=='cancel'&&e!=='close')showError(e)}finally{controlling.value=false}}
 
 const draftKey='heat.guided-draft.v1'
 const draftNotice=ref('')

@@ -51,7 +51,7 @@
                   inactive-text=""
                   style="margin-right: 12px"
                 />
-                <el-button type="success" @click="startExperiment" :disabled="isRunning || isPaused || cleanupPending || recoveryBlocked" :loading="starting">
+                <el-button type="success" @click="startExperiment" :disabled="selectionLoading || isRunning || isPaused || cleanupPending || recoveryBlocked" :loading="starting">
                   启动实验
                 </el-button>
                 <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning" :loading="pausing">
@@ -233,6 +233,9 @@ const previewExp = ref<ExperimentDetail | null>(null)
 let previewRequest = 0
 const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
+const selectionLoading = ref(false)
+let selectionRequest = 0, startRequest = 0, progressRequest = 0
+const experimentUrl = (filename: string) => `/api/experiments/${encodeURIComponent(filename)}`
 const experimentsLoading = ref(false)
 const progress = ref<ExperimentProgress | null>(null)
 const starting = ref(false)
@@ -270,6 +273,7 @@ async function acknowledgeRecovery(id: string) {
         confirmButtonText: '已现场确认全部停止', cancelButtonText: '取消', type: 'warning',
       })
     } catch { return }
+    if (wsClosed) return
     const { data } = await axios.post(`/api/experiments/recovery/${encodeURIComponent(id)}/acknowledge`, { devices_stopped_confirmed: true })
     if (data.success !== true) throw new Error('解除锁定未确认')
     await loadRecovery()
@@ -532,7 +536,7 @@ async function previewExperiment(filename: string) {
   previewLoading.value = true
   previewVisible.value = true
   try {
-    const res = await axios.get(`/api/experiments/${filename}`)
+    const res = await axios.get(experimentUrl(filename))
     if (request === previewRequest) previewExp.value = res.data
   } catch (e: any) {
     if (request === previewRequest) previewError.value = `加载失败: ${e.response?.data?.detail || e.message}`
@@ -548,37 +552,50 @@ async function choosePreviewExperiment() {
 }
 
 async function selectExperiment(filename: string) {
-  selectedFilename.value = filename
+  const request = ++selectionRequest
+  ++startRequest
+  selectionLoading.value = true
+  selectedFilename.value = ''
+  selectedExp.value = null
   progress.value = null
   currentRunId.value = ''
   currentSampleId.value = ''
   currentMetadata.value = {}
   try {
-    const res = await axios.get(`/api/experiments/${filename}`)
+    const res = await axios.get(experimentUrl(filename))
+    if (request !== selectionRequest || wsClosed) return
+    selectedFilename.value = filename
     selectedExp.value = res.data
+    await pollProgress()
   } catch (e: any) {
-    ElMessage.error(`加载失败: ${e.response?.data?.detail || e.message}`)
+    if (request === selectionRequest && !wsClosed) ElMessage.error(`加载失败: ${e.response?.data?.detail || e.message}`)
+  } finally {
+    if (request === selectionRequest) selectionLoading.value = false
   }
-  await pollProgress()
 }
 
 async function startExperiment() {
-  if (starting.value) return
+  if (starting.value || selectionLoading.value || !selectedExp.value || !selectedFilename.value) return
+  const filename = selectedFilename.value, experiment = selectedExp.value
+  const selection = selectionRequest, request = ++startRequest
+  const stillSelected = () => !wsClosed && !selectionLoading.value && request === startRequest
+    && selection === selectionRequest && selectedFilename.value === filename && selectedExp.value === experiment
   starting.value = true
   try {
     await loadRecovery()
-    if (recoveryBlocked.value || wsClosed) return
+    if (recoveryBlocked.value || !stillSelected()) return
     try {
       await ElMessageBox.confirm(
-        `确定要启动实验 "${selectedExp.value?.name}" 吗？`,
+        `确定要启动实验 "${experiment.name}" 吗？`,
         '确认启动',
         { confirmButtonText: '启动', cancelButtonText: '取消', type: 'info' },
       )
     } catch { return }
-    if (wsClosed) return
-    const res = await axios.post(`/api/experiments/${selectedFilename.value}/start`, {
+    if (!stillSelected() || recoveryBlocked.value) return
+    const res = await axios.post(`${experimentUrl(filename)}/start`, {
       save_log: saveLog.value,
     })
+    if (!stillSelected()) return
     currentRunId.value = res.data.run_id || ''
     currentSampleId.value = res.data.sample_id || ''
     currentMetadata.value = res.data.metadata || {}
@@ -597,7 +614,7 @@ async function startExperiment() {
 async function pauseExperiment() {
   pausing.value = true
   try {
-    await axios.post(`/api/experiments/${selectedFilename.value}/pause`)
+    await axios.post(`${experimentUrl(selectedFilename.value)}/pause`)
     ElMessage.warning('实验已暂停')
   } catch (e: any) {
     ElMessage.error(`暂停失败: ${e.response?.data?.detail || e.message}`)
@@ -609,7 +626,7 @@ async function pauseExperiment() {
 async function resumeExperiment() {
   resuming.value = true
   try {
-    await axios.post(`/api/experiments/${selectedFilename.value}/resume`)
+    await axios.post(`${experimentUrl(selectedFilename.value)}/resume`)
     ElMessage.success('实验已恢复')
   } catch (e: any) {
     ElMessage.error(`恢复失败: ${e.response?.data?.detail || e.message}`)
@@ -619,15 +636,18 @@ async function resumeExperiment() {
 }
 
 async function stopExperiment() {
+  ++startRequest
+  const filename = selectedFilename.value, selection = selectionRequest
   try {
     await ElMessageBox.confirm('确定要停止实验吗？', '确认停止', {
       confirmButtonText: '停止', cancelButtonText: '取消', type: 'warning',
     })
   } catch { return }
+  if (wsClosed || selection !== selectionRequest || filename !== selectedFilename.value || !filename) return
 
   stopping.value = true
   try {
-    const res = await axios.post(`/api/experiments/${selectedFilename.value}/stop`)
+    const res = await axios.post(`${experimentUrl(filename)}/stop`)
     if (!res.data.success) {
       ElMessage.error('停止未确认：至少一个设备停止或清理失败')
       return
@@ -643,8 +663,10 @@ async function stopExperiment() {
 
 async function pollProgress() {
   if (!selectedFilename.value) return
+  const filename = selectedFilename.value, selection = selectionRequest, request = ++progressRequest
   try {
-    const res = await axios.get(`/api/experiments/${selectedFilename.value}/progress`)
+    const res = await axios.get(`${experimentUrl(filename)}/progress`)
+    if (wsClosed || selection !== selectionRequest || filename !== selectedFilename.value || request !== progressRequest) return
     const nextProgress = normalizeProgress(res.data)
     if (nextProgress.state === 'idle' && progress.value && terminalStates.has(progress.value.state)) {
       progress.value.cleanup_pending = false

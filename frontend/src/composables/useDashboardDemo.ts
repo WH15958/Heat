@@ -12,7 +12,7 @@ export function useDashboardDemo() {
   const devices = {
     heaters: { heater1: { name: '加热器 1', connected: true }, heater2: { name: '加热器 2', connected: true } },
     microwaves: { microwave1: { name: '微波仪 1', connected: true } },
-    pumps: {}, syringe_pumps: {}, valves: {},
+    pumps: {}, syringe_pumps: {}, valves: {}, turntables: {},
   }
   let timer: ReturnType<typeof setInterval> | undefined
   let tick = 0
@@ -27,7 +27,7 @@ export function useDashboardDemo() {
         heater1: { pv: temperature(80), sv: 80, mv: tick < 31 ? 85 : 18, alarms: [], run_status: 'RUN' },
         heater2: { pv: temperature(75, -3), sv: 75, mv: tick < 31 ? 80 : 15, alarms: [], run_status: 'RUN' },
       }, microwaves: { microwave1: { material_temperature: temperature(120), power_percent: 40, current: 1.2, runtime_seconds: tick, current_segment: 1, mode: 'auto_power', fault_code: 0, control_active: true, output_active: true } },
-      pumps: {}, syringe_pumps: {}, valves: {},
+      pumps: {}, syringe_pumps: {}, valves: {}, turntables: {},
     }
     fresh.value = true
     recordMonitorFrame(monitorHistory, data.value!, Date.now())

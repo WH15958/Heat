@@ -82,9 +82,9 @@
           <p class="hint">未填字段保留引擎默认值；已有别名参数可在高级 YAML 中核对。</p>
         </details>
         <details open><summary>步骤后的等待</summary>
-          <select :value="step.wait?.type || 'none'" @change="set(['steps', selected, 'wait', 'type'], inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
+          <select :value="step.wait?.type || 'none'" @change="changeWaitType(inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
           <ParameterFields :fields="waitFields(step.wait?.type)" :values="step.wait || {}" :devices="devicesFor(waitGroup(step.wait?.type))" @change="(k, v) => set(['steps', selected, 'wait', k], v)" />
-          <template v-if="step.wait?.type === 'heater_pair_stable'">
+          <template v-if="['heater_pair_stable','heater_pair_reached'].includes(step.wait?.type || '')">
             <div v-for="i in 2" :key="i"><strong>加热器 {{ i }}</strong><ParameterFields :fields="heaterStableTargetFields" :values="step.wait?.targets?.[i-1] || {}" :devices="devicesFor('heater')" @change="(k, v) => set(['steps', selected, 'wait', 'targets', i-1, k], v)" /></div>
           </template>
         </details>
@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, isAlias, isMap, parseDocument, visit, type Node } from 'yaml'
@@ -117,6 +117,8 @@ import ParameterFields from '../components/experiment/ParameterFields.vue'
 const route = useRoute(), router = useRouter()
 const source = ref(emptySource), baseline = ref(emptySource), filename = ref(''), loadedFilename = ref(''), revision = ref<string | null>(null)
 const loading = ref(false), saving = ref(false), validating = ref(false), fileError = ref('')
+let documentSequence = 0, alive = true
+onScopeDispose(() => { alive = false; documentSequence++ })
 const mode = ref<'graph' | 'yaml'>('graph'), selected = ref(0), dragged = ref<number | null>(null)
 const history = ref([emptySource]), cursor = ref(0), validation = ref<Validation | null>(null)
 const registry = ref<Record<string, Record<string, any>>>({}), devicesLoaded = ref(false)
@@ -146,6 +148,15 @@ function mutate(change: (doc: Document) => void) {
   try { changeSource(editSource(source.value, change)) } catch (e) { ElMessage.error(String(e)) }
 }
 function set(path: Path, value: unknown) { mutate(doc => setValue(doc, path, value)) }
+function changeWaitType(type: string) {
+  mutate(doc => {
+    setValue(doc, ['steps', selected.value, 'wait', 'type'], type)
+    if (type === 'heater_pair_reached') {
+      doc.deleteIn(['steps', selected.value, 'wait', 'seconds'])
+      doc.deleteIn(['steps', selected.value, 'wait', 'tolerance'])
+    }
+  })
+}
 function add(type: string, position?: string) {
   mutate(doc => doc.addIn(['steps'], { id: uniqueId(doc, type), type, params: position ? { position } : {}, enabled: true, on_error: 'stop' }))
   selected.value = stepsFrom(inspection.value.doc).length - 1
@@ -179,8 +190,8 @@ const localErrors = computed(() => {
   const ids = new Set<string>()
   return steps.value.flatMap((s, i) => {
     const errors = fieldErrors(parameterFields(s), s.params || {}).concat(fieldErrors(waitFields(s.wait?.type), s.wait || {}))
-    if (s.wait?.type === 'heater_pair_stable') {
-      for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait.targets?.[i] || {}))
+    if (['heater_pair_stable','heater_pair_reached'].includes(s.wait?.type || '')) {
+      for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait?.targets?.[i] || {}))
     }
     if (typeof s.id !== 'string' || !s.id.trim() || ids.has(s.id)) errors.push('步骤 ID 为空或重复')
     ids.add(s.id)
@@ -206,14 +217,19 @@ async function validate() {
   finally { validating.value = false }
 }
 async function save(name: string) {
+  if (saving.value || loading.value || !alive) return
   if (!name || !/^[^\\/:<>"|?*\x00-\x1f]+\.ya?ml$/.test(name) || name.includes('..')) { ElMessage.error('请输入普通 .yaml 或 .yml 文件名'); return }
   saving.value = true; fileError.value = ''
   const text = source.value
+  const sequence = documentSequence, inputFilename = filename.value
   try {
     const result = (await editorApi.save(name, text, name === loadedFilename.value ? revision.value : null)).data
-    loadedFilename.value = name; filename.value = name; revision.value = result.revision; baseline.value = text
+    if (!alive || sequence !== documentSequence) return
+    loadedFilename.value = name; if (filename.value === inputFilename) filename.value = name
+    revision.value = result.revision; baseline.value = text
     ElMessage.success('已保存。返回实验页后可选择并明确启动。')
   } catch (e: any) {
+    if (!alive || sequence !== documentSequence) return
     if (e.response?.data?.detail?.errors && source.value === text) validation.value = e.response.data.detail
     else fileError.value = message(e)
   } finally { saving.value = false }
@@ -230,23 +246,29 @@ async function discard(messageText = '存在未保存修改，确定放弃吗？
   try { await ElMessageBox.confirm(messageText, '未保存修改', { type: 'warning' }); return true } catch { return false }
 }
 async function load(name: string) {
+  const sequence = ++documentSequence
   loading.value = true; fileError.value = ''
   try {
     const result = (await editorApi.read(name)).data
+    if (!alive || sequence !== documentSequence) return
     source.value = result.content; baseline.value = result.content; history.value = [result.content]; cursor.value = 0
     filename.value = name; loadedFilename.value = name; revision.value = result.revision; selected.value = 0
-  } catch (e) { fileError.value = message(e) }
-  finally { loading.value = false }
+  } catch (e) { if (alive && sequence === documentSequence) fileError.value = message(e) }
+  finally { if (sequence === documentSequence) loading.value = false }
 }
 async function reload() { if (await discard()) await load(loadedFilename.value) }
 async function importFile(event: Event) {
   const input = event.target as HTMLInputElement, file = input.files?.[0]; input.value = ''
   if (!file || !await discard()) return
   if (file.size > 1_000_000) { ElMessage.error('文件不能超过 1 MB'); return }
+  const sequence = ++documentSequence
+  loading.value = true; fileError.value = ''
   try {
     const text = await file.text()
+    if (!alive || sequence !== documentSequence) return
     changeSource(text); filename.value = file.name; loadedFilename.value = ''; revision.value = null; baseline.value = emptySource; selected.value = 0
-  } catch (e) { ElMessage.error(String(e)) }
+  } catch (e) { if (alive && sequence === documentSequence) ElMessage.error(String(e)) }
+  finally { if (sequence === documentSequence) loading.value = false }
 }
 function download() {
   const url = URL.createObjectURL(new Blob([source.value], { type: 'text/yaml;charset=utf-8' }))

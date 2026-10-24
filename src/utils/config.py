@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar
 import logging
 
+from src.utils.runtime_paths import data_path
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound='BaseConfig')
@@ -561,6 +563,54 @@ class ValveDeviceConfig(BaseConfig):
 
 
 @dataclass
+class TurntableConfig(BaseConfig):
+    device_id: str = "turntable1"
+    name: str = "转盘接样"
+    enabled: bool = True
+    connection: DeviceConnectionConfig = field(default_factory=lambda: DeviceConnectionConfig(
+        port="", baudrate=115200, timeout=1.0))
+    action_timeout: float = 60.0
+    home_enabled: bool = False
+    position_encoding_verified: bool = False
+    bottle_count: int = 0
+    pulses_per_bottle: int = 12000
+    bottle_speed: int = 1000
+    bottle_home_speed: int = 1000
+    bottle_home_timeout: float = 180.0
+
+    def validate(self):
+        errors = self.connection.validate()
+        if not self.device_id:
+            errors.append("转盘设备ID不能为空")
+        for name in ("enabled", "home_enabled", "position_encoding_verified"):
+            if not _is_strict_bool(getattr(self, name)):
+                errors.append(f"{name} 必须为布尔值")
+        if (self.connection.baudrate != 115200 or self.connection.parity != "N"
+                or self.connection.bytesize != 8 or self.connection.stopbits != 1):
+            errors.append("转盘通信参数须为115200、8N1")
+        if not _is_finite_number(self.action_timeout) or not 1 <= self.action_timeout <= 3600:
+            errors.append("转盘动作超时须为1–3600秒")
+        if not _is_strict_int(self.bottle_count) or self.bottle_count < 0 or self.bottle_count == 1:
+            errors.append("瓶位数量须为0（未启用）或至少2的整数")
+        if not _is_strict_int(self.pulses_per_bottle) or not 1 <= self.pulses_per_bottle <= 99_999_999:
+            errors.append("每瓶脉冲数须为1–99999999的整数")
+        if not _is_strict_int(self.bottle_speed) or not 400 <= self.bottle_speed <= 40000:
+            errors.append("换瓶速度须为400–40000脉冲/秒的整数")
+        if not _is_strict_int(self.bottle_home_speed) or not 400 <= self.bottle_home_speed <= 40000:
+            errors.append("瓶位回零速度须为400–40000脉冲/秒的整数")
+        if not _is_finite_number(self.bottle_home_timeout) or not 1 <= self.bottle_home_timeout <= 3600:
+            errors.append("瓶位回零超时须为1–3600秒")
+        if not errors and self.bottle_count:
+            if self.bottle_count * self.pulses_per_bottle > 99_999_999:
+                errors.append("整圈脉冲数超出控制器坐标范围")
+            if self.bottle_home_timeout < self.bottle_count * self.pulses_per_bottle / self.bottle_home_speed + 5:
+                errors.append("瓶位回零超时须覆盖整圈运动及至少5秒余量")
+            if self.action_timeout < self.pulses_per_bottle / self.bottle_speed + 5:
+                errors.append("转盘动作超时须覆盖一次换瓶及至少5秒余量")
+        return errors
+
+
+@dataclass
 class SystemConfig(BaseConfig):
     """系统主配置"""
     name: str = "自动化控制系统"
@@ -570,6 +620,7 @@ class SystemConfig(BaseConfig):
     microwaves: List[MicrowaveDeviceConfig] = field(default_factory=list)
     syringe_pumps: List[SyringePumpConfig] = field(default_factory=list)
     valves: List[ValveDeviceConfig] = field(default_factory=list)
+    turntables: List[TurntableConfig] = field(default_factory=list)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -625,6 +676,11 @@ class SystemConfig(BaseConfig):
             if valve.device_id in seen:
                 errors.append(f"重复设备ID: {valve.device_id}")
             seen.add(valve.device_id)
+        for turntable in self.turntables:
+            errors.extend(f"转盘{turntable.device_id}: {e}" for e in turntable.validate())
+            if turntable.device_id in seen:
+                errors.append(f"重复设备ID: {turntable.device_id}")
+            seen.add(turntable.device_id)
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
         errors.extend(self.logging.validate())
@@ -685,7 +741,7 @@ class ConfigManager:
     def _get_default_config_path(self) -> str:
         """获取默认配置文件路径"""
         base_dir = Path(__file__).parent.parent.parent
-        config_dir = base_dir / "config"
+        config_dir = data_path("config", legacy=base_dir / "config")
         config_dir.mkdir(parents=True, exist_ok=True)
         return str(config_dir / self.DEFAULT_CONFIG_FILENAME)
     
@@ -746,6 +802,11 @@ class ConfigManager:
                 **{k: v for k, v in item.items() if k != "connection"},
                 connection=self._parse_connection_config(item.get("connection", {})),
             ) for item in data.get("valves", [])],
+            turntables=[TurntableConfig(
+                **{k: v for k, v in item.items() if k != "connection"},
+                connection=self._parse_connection_config({"port": "", "baudrate": 115200,
+                                                         **item.get("connection", {})}),
+            ) for item in data.get("turntables", [])],
             monitor=MonitorConfig(**data.get("monitor", {})),
             report=ReportConfig(**data.get("report", {})),
             logging=LoggingConfig(**data.get("logging", {})),

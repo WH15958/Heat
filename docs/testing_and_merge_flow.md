@@ -10,24 +10,18 @@
 - 想知道哪些改动需要实机：看“软件验证与实机验证边界”
 - 想知道文档何时必须同步：看“文档同步要求”
 - 想知道如何 commit / push 双远程：看“提交与推送流程”
+- 想构建或验收 Windows 桌面版：看 [desktop_app.md](desktop_app.md)
 
 ---
 
 ## 1. 最小验证清单
 
-任何准备合并的改动，至少完成以下软件层检查：
+按 [AGENTS.md 的验证矩阵](../AGENTS.md#6-validation-matrix) 和本文 [10.1 节](#101-按变更类型选择验证) 选择与改动范围匹配的检查：
 
-```powershell
-python tests\test_metadata.py
-python -c "import src.web.app; import src.web.api.experiments; import src.web.api.ws"
-npm --prefix frontend run build
-```
-
-检查目标：
-
-- 核心实验逻辑不回归
-- Web 关键模块可导入
-- 前端能构建出生产产物
+- 仅文档、规则或 Skill：`git diff --check -- <paths>` 与内容一致性检查。
+- Python 后端：metadata 测试、相关导入及受影响的行为检查。
+- 前端源码：生产构建；YAML parser / ExperimentEngine 改动补对应行为检查。
+- 硬件控制语义：软件检查之外，还需用户／实验室确认实机 smoke test；软件通过不能代替实机确认。
 
 ---
 
@@ -122,6 +116,14 @@ git status --short
 - 没有临时脚本误入提交
 - 没有测试日志误入提交
 - 没有无关文档或产物混入
+
+`.gitignore` 按根目录用途排除 `/data/`、`/logs/`、`/reports/`、`/output/` 等运行数据，不按 CSV/XLSX/XLS 或日志扩展名隐藏受控样例；`tests/fixtures/` 和厂家资料中的这类文件应可见，提交前仍需核对来源及内容。私有 `.env`/`.env.*` 与 `config/local_config.yaml`/`.yml` 保持忽略，`.env.example`/`.env.*.example` 可审查；`packaging/desktop/heat.spec` 是明确保留的打包源码。规则回归可运行 `python -m unittest discover -s tests -p test_gitignore.py`。
+
+### 4.4 Windows 桌面产物
+
+桌面构建使用 `scripts/build_desktop.ps1`，在 `output/desktop/venv` 建立独立 Python 3.10 x64 环境，产物与发行清单位于 `output/desktop/`，不进入源码提交。随包 WebView2 必须是通过微软签名验证的完整 x64 离线安装程序；发行资源清单不得包含现场配置、实验历史或工作区目录。
+
+路径、迁移、退出及打包软件回归，与干净 Windows 11 x64 离线安装、升级卸载和实机退出验收分别记录。测试命令及待验收清单见 [desktop_app.md](desktop_app.md)；构建成功不能代替虚拟机或真实设备验收。
 
 ---
 
@@ -320,7 +322,7 @@ python -m pytest -q
 | 变更类型 | 默认验证 |
 | --- | --- |
 | 仅文档、规则、Skill | `git diff --check -- <paths>` + 内容一致性检查 |
-| Python 后端 | `python tests\test_metadata.py` + `python tests\test_code_review_fixes.py` + 相关 import 检查 |
+| Python 后端 | `python tests\test_metadata.py` + 相关 import 与受影响的行为检查 |
 | Campaign / planner | 后端检查 + `import src.web.api.campaigns; import src.campaigns.store; import src.ml.planner` |
 | 前端源码 | `cd frontend; npm run build -- --mode production` |
 | YAML parser / ExperimentEngine | metadata 测试 + 定向行为或 import 检查 |

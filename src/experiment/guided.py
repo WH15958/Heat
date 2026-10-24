@@ -22,9 +22,10 @@ from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
 from src.devices.syringe_commands import SyringeCommand
+from src.utils.runtime_paths import data_path
 
 
-BATCH_DIR = Path("output/guided_batches")
+BATCH_DIR = data_path("output/guided_batches")
 TERMINAL = {"completed", "failed", "stopped", "interrupted"}
 
 
@@ -147,7 +148,7 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "stable_then_dwell_flow_drain_v4"
+    fields["priming_protocol"] = "reached_then_dwell_flow_drain_v5"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters) for device in group
         if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2")]
@@ -171,9 +172,9 @@ def priming_recipe(spec, batch_id):
         add(f"prime_heat_{n}_set", "heater.set_temperature",
             dict(device_id=f"heater{n+1}", temperature=spec.axes[n][0]))
         add(f"prime_heat_{n}_start", "heater.start", dict(device_id=f"heater{n+1}"))
-    add("prime_heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
+    add("prime_heat_both_reached", "wait", wait=dict(type="heater_pair_reached",
         targets=[dict(device_id=f"heater{n+1}", target_temperature=spec.axes[n][0]) for n in (0, 1)],
-        tolerance=3, seconds=30, timeout=spec.precursor_timeout))
+        timeout=spec.precursor_timeout))
     add("prime_heat_duration", "wait", wait=dict(type="duration",
         seconds=hold_seconds(spec.prime_heat_minutes)))
     for n, (volume, speed) in enumerate(((spec.prime_volume_a, spec.speed_a),
@@ -344,6 +345,7 @@ class GuidedBatch:
         self.state = ExperimentState.IDLE
         self.stopping = False
         self.task = None
+        self._stop_task = None
         self.persistence_failure = None
         self.priming_stop_pending = False
         self._priming_cleanup_count = 0
@@ -387,6 +389,21 @@ class GuidedBatch:
             self.persistence_failure = str(exc)
             raise
 
+    def retry_persistence(self):
+        """Repair terminal storage without changing execution or recovery state."""
+        if self.exp_logger is None:
+            return False
+        saved = self.exp_logger.retry_persistence()
+        run = self.exp_logger.active_run
+        if run is None or not run.finished_at:
+            return False
+        for entry in [self.record["priming"], *self.record["groups"]]:
+            if entry.get("run_id") == run.run_id:
+                entry["persistence_status"] = run.persistence_status
+                entry["persistence_errors"] = list(run.persistence_errors)
+        self.save()
+        return saved
+
     def snapshot(self):
         result = dict(self.record)
         result["state"] = self.state.value
@@ -419,6 +436,7 @@ class GuidedBatch:
                 prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤45℃",
                     "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
                     "prime_heat_duration": f"到温后脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
+                    "prime_heat_both_reached": "等待两路达到各自目标温度，随后计时脱气",
                     "prime_heat_both_stable": "等待两路目标 ±3℃ 并稳定 30 秒，随后计时脱气",
                     **{f"prime_heat_{n}_{action}": f"预充前{verb}前驱体 {name}"
                        for n, name in enumerate(("A", "B"))
@@ -428,7 +446,7 @@ class GuidedBatch:
                 result["progress"]["step_label"] = prime_labels.get(p.step_id, label)
                 if p.step_id in ("prime_initialize_1", "prime_initialize_2"):
                     result["progress"]["device_id"] = "syringe_pump" + parts[2]
-                elif p.step_id in ("prime_heat_both_stable", "prime_heat_duration"):
+                elif p.step_id in ("prime_heat_both_reached", "prime_heat_both_stable", "prime_heat_duration"):
                     result["progress"]["device_id"] = "heater1 / heater2"
                 elif p.step_id.startswith("prime_heat_"):
                     result["progress"]["device_id"] = f"heater{int(parts[2])+1}"
@@ -626,8 +644,13 @@ class GuidedBatch:
 
     async def stop(self):
         self.request_stop()
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop())
+        return await asyncio.shield(self._stop_task)
+
+    async def _stop(self):
         if self.task and not self.task.done():
-            await self.task
+            await asyncio.shield(self.task)
         success = await self.engine.stop() if self.engine else True
         self.executor.release_resources_on_cleanup = True
         success = await self.executor.stop_active_devices(source="user_stop") and success

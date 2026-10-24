@@ -10,12 +10,13 @@ from typing import Optional, List, Callable
 from enum import Enum
 
 from src.utils.logger import get_logger
+from src.utils.runtime_paths import data_path
 from src.science.sample_id import generate_unique_sample_id
 from src.science.sample_record import remove_sample_records_for_run_ids, write_sample_record
 
 logger = get_logger(__name__)
 
-LOGS_DIR = Path("output/experiment_logs")
+LOGS_DIR = data_path("output/experiment_logs")
 
 
 class StepStatus(Enum):
@@ -341,6 +342,36 @@ class ExperimentLogger:
             f"persistence={self._active_run.persistence_status}"
         )
         return self._active_run.persistence_status == "ok"
+
+    def retry_persistence(self) -> bool:
+        """Retry terminal storage without changing the recorded execution facts."""
+        run = self._active_run
+        if run is None or not run.finished_at or run.status not in {
+            RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.STOPPED.value
+        }:
+            return False
+        if run.persistence_status == "ok":
+            return True
+
+        run.persistence_errors = []
+        if run.sample_record_saved is not True:
+            try:
+                run.sample_record_saved = bool(self._write_sample_record(run.status))
+                if not run.sample_record_saved:
+                    run.persistence_errors.append("sample_record_not_saved")
+            except Exception as exc:
+                run.sample_record_saved = False
+                run.persistence_errors.append(f"sample_record_error: {exc}")
+                logger.error(f"Failed to retry sample record: {exc}")
+
+        run.persistence_status = "ok" if run.sample_record_saved else "error"
+        run.log_saved = True if self._save_log else None
+        # Even a previously saved log needs the repaired sample/status flags.
+        if self._save_log and not self._save_to_file():
+            run.log_saved = False
+            run.persistence_status = "error"
+            run.persistence_errors.append("experiment_log_not_saved")
+        return run.persistence_status == "ok"
 
     def _write_sample_record(self, status: str) -> bool:
         run = self._active_run

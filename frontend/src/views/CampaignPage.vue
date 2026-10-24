@@ -132,7 +132,7 @@
 
           <el-card shadow="hover" style="margin-top: 20px">
             <template #header><span>Trial 队列</span></template>
-            <el-table :data="trials" stripe style="width: 100%">
+            <el-table v-loading="dataLoading" :data="trials" stripe style="width: 100%">
               <el-table-column prop="trial_id" label="Trial ID" width="230" />
               <el-table-column label="参数">
                 <template #default="{ row }">
@@ -157,13 +157,13 @@
                     size="small"
                     placeholder="run_id"
                     style="margin-bottom: 6px"
-                    @change="() => updateTrialLinks(row)"
+                    @change="() => updateTrialLinks(row, 'run_id')"
                   />
                   <el-input
                     v-model="row.sample_id"
                     size="small"
                     placeholder="sample_id"
-                    @change="() => updateTrialLinks(row)"
+                    @change="() => updateTrialLinks(row, 'sample_id')"
                   />
                 </template>
               </el-table-column>
@@ -172,7 +172,7 @@
 
           <el-card shadow="hover" style="margin-top: 20px">
             <template #header><span>表征结果</span></template>
-            <el-table :data="characterizations" stripe style="width: 100%">
+            <el-table v-loading="dataLoading" :data="characterizations" stripe style="width: 100%">
               <el-table-column prop="trial_id" label="Trial ID" width="230" />
               <el-table-column prop="sample_id" label="Sample ID" width="180" />
               <el-table-column prop="characterization_type" label="类型" width="100" />
@@ -223,7 +223,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { campaignsApi, type Campaign, type CharacterizationResult, type Trial } from '../api/campaigns'
 
@@ -233,6 +233,9 @@ const previewCampaign = ref<Campaign | null>(null)
 const selectedCampaign = ref<Campaign | null>(null)
 const trials = ref<Trial[]>([])
 const characterizations = ref<CharacterizationResult[]>([])
+const dataLoading = ref(false)
+let campaignRequest = 0
+onScopeDispose(() => { campaignRequest++ })
 const loading = ref(false)
 const creating = ref(false)
 const recommending = ref(false)
@@ -296,16 +299,20 @@ async function loadCampaigns() {
 async function loadCampaignData() {
   if (!selectedCampaign.value) return
   const campaignId = selectedCampaign.value.campaign_id
+  const request = ++campaignRequest
+  const current = () => request === campaignRequest && selectedCampaign.value?.campaign_id === campaignId
+  dataLoading.value = true
   try {
     const [trialResp, charResp] = await Promise.all([
       campaignsApi.listTrials(campaignId),
       campaignsApi.listCharacterizations(campaignId),
     ])
+    if (!current()) return
     trials.value = trialResp.data
     characterizations.value = charResp.data
   } catch (e) {
-    ElMessage.error(`加载 Campaign 数据失败: ${readError(e)}`)
-  }
+    if (current()) ElMessage.error(`加载 Campaign 数据失败: ${readError(e)}`)
+  } finally { if (current()) dataLoading.value = false }
 }
 
 async function createCampaign() {
@@ -334,6 +341,8 @@ async function createCampaign() {
 
 async function selectCampaign(campaign: Campaign) {
   selectedCampaign.value = campaign
+  trials.value = []
+  characterizations.value = []
   charForm.trial_id = ''
   await loadCampaignData()
 }
@@ -388,16 +397,17 @@ async function updateTrialStatus(trial: Trial, status: string) {
   }
 }
 
-async function updateTrialLinks(trial: Trial) {
+async function updateTrialLinks(trial: Trial, field: 'run_id' | 'sample_id') {
   if (!selectedCampaign.value) return
+  const campaignId = selectedCampaign.value.campaign_id
+  if (trial.campaign_id !== campaignId) return
   try {
-    await campaignsApi.updateTrial(selectedCampaign.value.campaign_id, trial.trial_id, {
-      run_id: trial.run_id,
-      sample_id: trial.sample_id,
+    await campaignsApi.updateTrial(campaignId, trial.trial_id, {
+      [field]: trial[field],
     })
   } catch (e) {
     ElMessage.error(`关联更新失败: ${readError(e)}`)
-    await loadCampaignData()
+    if (selectedCampaign.value?.campaign_id === campaignId) await loadCampaignData()
   }
 }
 

@@ -19,6 +19,7 @@ from src.protocols.pump_params import get_channel_address
 from src.utils.logger import get_logger
 from src.utils.serial_binding import resolve_connection
 from src.web.syringe_control import SyringeController
+from src.web.turntable_control import TurntableController
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,7 @@ class DeviceManager:
         self._global_stop_depth = 0
         self._last_emergency_stop_report: list[dict] = []
         self.syringe_pumps: Dict[str, SyringeController] = {}
+        self.turntables: Dict[str, TurntableController] = {}
         self.valves = {}
         self._valve_bindings = {}
         self._valve_locks = {}
@@ -151,6 +153,28 @@ class DeviceManager:
             control = self.syringe(device_id)
             generation = control.generation
         return control.command(command, owner, generation)
+
+    def add_turntable(self, config):
+        controller = TurntableController(config)
+        self.turntables[config.device_id] = controller
+        controller.refresh_binding()
+
+    def turntable(self, device_id):
+        if device_id not in self.turntables:
+            raise ValueError(f"Turntable not found: {device_id}")
+        return self.turntables[device_id]
+
+    def turntable_command(self, device_id, command, expected_generation=None):
+        with self._lock:
+            if self._global_stop_depth and command.get("action") != "stop":
+                raise RuntimeError("全局停止中")
+            control = self.turntable(device_id)
+            generation = control.generation if expected_generation is None else expected_generation
+        return control.command(command, generation)
+
+    def require_turntables_idle(self):
+        for controller in self.turntables.values():
+            controller.require_idle()
 
     def add_heater(
         self,
@@ -432,6 +456,8 @@ class DeviceManager:
                 if not valve.is_connected():
                     self._update_binding_resolution(did, "Valve", self._valve_bindings[did], valve)
         for controller in self.syringe_pumps.values():
+            controller.refresh_binding()
+        for controller in self.turntables.values():
             controller.refresh_binding()
         for did, heater in self._heaters.items():
             self._update_binding_resolution(did, "Heater", self._heater_bindings.get(did), heater)
@@ -881,7 +907,23 @@ class DeviceManager:
         success = True
         attempted = False
         report = []
-        registered = bool(self._heaters or self._pumps or self._microwaves or self.syringe_pumps or self.valves)
+        registered = bool(self._heaters or self._pumps or self._microwaves or self.syringe_pumps or self.valves or self.turntables)
+        for device_id, controller in self.turntables.items():
+            if not controller.device.is_connected():
+                success = False
+                report.append(self._stop_report("turntable", device_id, False, None, "not_connected"))
+                continue
+            attempted = True
+            try:
+                result = controller.stop()
+            except Exception:
+                logger.exception("Turntable emergency stop failed: %s", device_id)
+                result = False
+            success = result and success
+            item = self._stop_report("turntable", device_id, True, result,
+                                     "0x02暂停/停止请求；仅确认控制器静止，不证明内部程序已取消")
+            item["physical_stop_confirmed"] = False
+            report.append(item)
         for device_id in self.valves:
             with self._valve_locks[device_id]:
                 success = False
@@ -1067,6 +1109,7 @@ class DeviceManager:
             }, self._microwave_bindings.get(did), m.config.connection_params.get("port"))
         return {"valves": {did: self.valve_status(did) for did in self.valves},
                 "heaters": heaters, "pumps": pumps, "microwaves": microwaves,
+                "turntables": {did: c.summary() for did, c in self.turntables.items()},
                 "syringe_pumps": {did: c.summary() for did, c in self.syringe_pumps.items()}}
 
     def _microwave_payload(self, microwave: MicrowaveDevice, data: dict) -> dict:
@@ -1914,25 +1957,40 @@ class DeviceManager:
             if pump_lock:
                 pump_lock.release()
 
-    def cleanup(self) -> bool:
-        """Stop connected devices before releasing their resources."""
+    def cleanup(self, *, disconnect: bool = True) -> bool:
+        """Stop connected devices, optionally retaining connections for a retry."""
         self._begin_global_stop()
         try:
-            return self._cleanup_devices()
+            return self._cleanup_devices(disconnect=disconnect)
         finally:
             self._end_global_stop()
 
-    def _cleanup_devices(self) -> bool:
-        """Stop and disconnect every registered device."""
+    def _cleanup_devices(self, *, disconnect: bool = True) -> bool:
+        """Stop every registered device and release connections when requested."""
         success = True
-        for did, valve in self.valves.items():
-            with self._valve_locks[did]:
-                success = valve.disconnect() and success
+        for controller in self.turntables.values():
+            try:
+                if disconnect:
+                    # The controller distinguishes an unopened connection from
+                    # a lost connection or motion whose outcome is unknown.
+                    controller.disconnect()
+                elif controller.device.is_connected():
+                    if not controller.stop():
+                        success = False
+                else:
+                    controller.require_idle()
+            except Exception:
+                logger.exception("Turntable cleanup failed; retaining connection/state")
+                success = False
+        if disconnect:
+            for did, valve in self.valves.items():
+                with self._valve_locks[did]:
+                    success = valve.disconnect() and success
         for controller in self.syringe_pumps.values():
             try:
                 if controller.device.is_connected():
                     stopped = controller.stop()
-                    if stopped:
+                    if stopped and disconnect:
                         with controller.lock:
                             stopped = controller.device.disconnect()
                     success = stopped and success
@@ -1943,14 +2001,14 @@ class DeviceManager:
             self._request_heater_stop(device_id)
             with self._heater_control_lock(device_id):
                 device_success = self._cleanup_device(
-                    "heater", device_id, heater, heater.stop
+                    "heater", device_id, heater, heater.stop, disconnect=disconnect
                 )
             success = device_success and success
         for device_id, pump in self._pumps.items():
             self._request_pump_abort(device_id)
             with self._pump_control_lock(device_id):
                 device_success = self._cleanup_device(
-                    "pump", device_id, pump, pump.stop_all
+                    "pump", device_id, pump, pump.stop_all, disconnect=disconnect
                 )
                 success = device_success and success
         for device_id, microwave in self._microwaves.items():
@@ -1958,20 +2016,21 @@ class DeviceManager:
             with self._microwave_control_lock(device_id):
                 device_success = self._cleanup_device(
                     "microwave", device_id, microwave,
-                    lambda did=device_id: self._stop_microwave_command(did, "service_cleanup")
+                    lambda did=device_id: self._stop_microwave_command(did, "service_cleanup"),
+                    disconnect=disconnect,
                 )
             success = device_success and success
         return success
 
     @staticmethod
-    def _cleanup_device(kind: str, device_id: str, device, stop) -> bool:
+    def _cleanup_device(kind: str, device_id: str, device, stop, *, disconnect: bool = True) -> bool:
         return DeviceManager._stop_and_disconnect(
-            kind, device_id, device, stop, "Cleanup"
+            kind, device_id, device, stop, "Cleanup", disconnect=disconnect
         )
 
     @staticmethod
     def _stop_and_disconnect(
-        kind: str, device_id: str, device, stop, operation: str
+        kind: str, device_id: str, device, stop, operation: str, *, disconnect: bool = True
     ) -> bool:
         connection_check_failed = False
         try:
@@ -2000,6 +2059,9 @@ class DeviceManager:
             )
             return False
 
+        if not disconnect:
+            return not connection_check_failed
+
         try:
             if not device.disconnect():
                 logger.error(
@@ -2017,6 +2079,8 @@ class DeviceManager:
             for did in self.valves:
                 self._valve_stop_generations[did] += 1
             for controller in self.syringe_pumps.values():
+                controller.invalidate_pending()
+            for controller in self.turntables.values():
                 controller.invalidate_pending()
             for device_id in self._heaters:
                 self._heater_stop_generations[device_id] = (

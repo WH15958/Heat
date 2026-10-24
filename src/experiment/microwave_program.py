@@ -16,8 +16,9 @@ from src.experiment.engine import ExperimentEngine, ExperimentState
 from src.experiment.executor import StepExecutor
 from src.experiment.experiment_logger import ExperimentLogger
 from src.utils.config import ConfigManager
+from src.utils.runtime_paths import data_path
 
-PROGRAM_DIR = Path(__file__).resolve().parents[2] / "output" / "microwave_programs"
+PROGRAM_DIR = data_path("output/microwave_programs", legacy=Path(__file__).resolve().parents[2] / "output" / "microwave_programs")
 TERMINAL = {"completed", "failed", "stopped"}
 
 
@@ -118,6 +119,7 @@ class MicrowaveProgramRun:
                 microwave_hold_policy=dict(hold_mode="timed", tolerance=3, stable_seconds=30, excursion="continue_timing")))
         self.engine.on_progress(self.checkpoint)
         self.task = None
+        self._stop_task = None
         self.record = dict(program_id="mwprogram_" + spec.request_id, device_id=device_id,
             request=spec.model_dump(), created_at=datetime.now(timezone.utc).isoformat(),
             state="idle", current_stage=0, phase="ready", total_stages=len(spec.stages),
@@ -195,6 +197,12 @@ class MicrowaveProgramRun:
                 pass  # Live lock remains; the last durable intent also locks after restart.
 
     async def stop(self):
+        self.engine.request_stop()
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop())
+        return await asyncio.shield(self._stop_task)
+
+    async def _stop(self):
         success = False
         try:
             success = await self.engine.stop()
@@ -202,7 +210,7 @@ class MicrowaveProgramRun:
             self.record.update(recovery_required=True, error=str(exc))
         try:
             if self.task and self.task is not asyncio.current_task():
-                await self.task
+                await asyncio.shield(self.task)
             self.save()
             return success
         except Exception as exc:

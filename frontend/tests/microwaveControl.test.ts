@@ -8,6 +8,7 @@ import * as vue from 'vue'
 import { webcrypto } from 'node:crypto'
 import * as program from '../src/utils/microwaveProgram'
 import * as connection from '../src/composables/connectionBatch'
+import * as confirmations from '../src/composables/pendingConfirmation'
 
 // Execute the real page handlers with Vue reactivity and fake transport/dialogs.
 // No server, serial connection, or hardware is used.
@@ -30,7 +31,9 @@ function page() {
   const imports: Record<string, any> = {
     vue: { ...vue, onMounted: () => {}, onUnmounted: () => {}, provide: () => {} },
     '../api/syringePumps': { syringeApi: {} },
+    '../api/turntables': { turntableApi: {} },
     '../composables/connectionBatch': connection,
+    '../composables/pendingConfirmation': confirmations,
     '../api/devices': { devicesApi: api, FLOW_UNITS: [], PUMP_MODES: [], TUBE_MODELS: [] },
     '../utils/microwaveProgram': program,
     '../utils/pumpCalculations': {},

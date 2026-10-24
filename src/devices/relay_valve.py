@@ -10,6 +10,7 @@ class RelayValveDevice(BaseDevice):
     def __init__(self, config):
         super().__init__(config, DeviceInfo(name=config.device_id, device_type=DeviceType.VALVE))
         self._protocol = None
+        self._cleanup_pending = False
         self.relay_energized = None
         self.read_ok = False
 
@@ -18,8 +19,12 @@ class RelayValveDevice(BaseDevice):
 
     def connect(self):
         with self._lock:
+            if self._cleanup_pending:
+                return False
             if self.is_connected():
                 return True
+            if self._protocol is not None and not self.disconnect():
+                return False
             self.status = DeviceStatus.CONNECTING
             self._protocol = ModbusRTUProtocol(**self.config.connection_params)
             try:
@@ -28,7 +33,7 @@ class RelayValveDevice(BaseDevice):
                 self.read_data()
                 return True
             except Exception:
-                self._protocol.disconnect()
+                self.disconnect()
                 self.status = DeviceStatus.ERROR
                 self.read_ok = False
                 self.relay_energized = None
@@ -38,7 +43,17 @@ class RelayValveDevice(BaseDevice):
         """Release communications without changing the fluid route."""
         with self._lock:
             if self._protocol is not None:
-                self._protocol.disconnect()
+                try:
+                    released = self._protocol.disconnect() is not False
+                except Exception as e:
+                    self._logger.error(f"Failed to disconnect valve: {e}")
+                    released = False
+                if not released:
+                    self._cleanup_pending = True
+                    self.status = DeviceStatus.ERROR
+                    return False
+                self._protocol = None
+            self._cleanup_pending = False
             self.status = DeviceStatus.DISCONNECTED
             self.relay_energized = None
             self.read_ok = False

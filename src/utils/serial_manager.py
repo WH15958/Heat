@@ -16,8 +16,9 @@ import atexit
 import threading
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Set
+from typing import BinaryIO, Optional, Dict, Set
 from datetime import datetime
+from uuid import uuid4
 import logging
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,8 @@ class SerialPortLock:
     
     def __init__(self):
         self._locks: Dict[str, Path] = {}
+        self._owners: Dict[str, str] = {}
+        self._guards: Dict[str, BinaryIO] = {}
         self._ensure_lock_dir()
     
     def _ensure_lock_dir(self):
@@ -67,6 +70,26 @@ class SerialPortLock:
         safe_name = port.replace(":", "_").replace("\\", "_")
         # COM1..COM9 remain reserved Windows device names even with an extension.
         return self.LOCK_DIR / f"port_{safe_name}.lock"
+
+    @staticmethod
+    def _acquire_guard(lock_file: Path) -> Optional[BinaryIO]:
+        # Keep this file in place: unlinking an OS-locked file permits a new
+        # inode/handle to bypass its lock. The OS releases ownership on exit.
+        fd = os.open(str(lock_file.with_suffix('.guard')), os.O_CREAT | os.O_RDWR)
+        try:
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b'\0')
+            os.lseek(fd, 0, os.SEEK_SET)
+            if _platform == 'win32':
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return os.fdopen(fd, 'r+b', buffering=0)
     
     def acquire(self, port: str, pid: Optional[int] = None) -> bool:
         """
@@ -82,72 +105,48 @@ class SerialPortLock:
         if pid is None:
             pid = os.getpid()
         
+        if port in self._guards:
+            return False
         lock_file = self._get_lock_file(port)
-        temp_lock_file = self._get_lock_file(f"{port}_temp_{pid}")
-        
+        guard = None
         try:
-            data = {
-                'pid': pid,
-                'port': port,
-                'time': time.time(),
-                'datetime': datetime.now().isoformat(),
-            }
-            
-            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
-            
-            self._locks[port] = lock_file
-            logger.info(f"Lock acquired for {port} by PID {pid}")
-            return True
-            
-        except FileExistsError:
-            try:
-                with open(lock_file, 'r') as f:
+            self._ensure_lock_dir()
+            guard = self._acquire_guard(lock_file)
+            if guard is None:
+                return False
+            if lock_file.exists():
+                with lock_file.open('r', encoding='utf-8') as f:
                     existing_data = json.load(f)
-                
                 old_pid = existing_data.get('pid')
-                
                 if old_pid and self._is_process_alive(old_pid):
                     logger.warning(f"Port {port} is locked by process {old_pid}")
                     return False
-                
                 logger.info(f"Removing stale lock file for {port} (dead process {old_pid})")
-                
-                try:
-                    fd = os.open(str(temp_lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                        json.dump(data, f)
-                    
-                    try:
-                        os.replace(str(temp_lock_file), str(lock_file))
-                        self._locks[port] = lock_file
-                        logger.info(f"Lock acquired for {port} by PID {pid} (replaced stale)")
-                        return True
-                    except OSError as e:
-                        try:
-                            temp_lock_file.unlink()
-                        except (OSError, FileNotFoundError):
-                            pass
-                        logger.warning(f"Race condition detected for {port}, please retry")
-                        return False
-                        
-                except FileExistsError:
-                    logger.warning(f"Race condition detected for {port}, please retry")
-                    return False
-                    
-            except Exception as e:
-                logger.warning(f"Failed to read existing lock file: {e}")
-                try:
-                    lock_file.unlink()
-                except (OSError, FileNotFoundError):
-                    pass
-                logger.warning(f"Removed corrupted lock file for {port}, please retry")
-                return False
-                
+                lock_file.unlink()
+
+            owner = uuid4().hex
+            data = {
+                'pid': pid,
+                'port': port,
+                'owner_token': owner,
+                'time': time.time(),
+                'datetime': datetime.now().isoformat(),
+            }
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+            self._locks[port] = lock_file
+            self._owners[port] = owner
+            self._guards[port] = guard
+            guard = None
+            logger.info(f"Lock acquired for {port} by PID {pid}")
+            return True
         except Exception as e:
             logger.error(f"Failed to create lock file: {e}")
             return False
+        finally:
+            if guard is not None:
+                guard.close()
     
     def release(self, port: str) -> bool:
         """
@@ -162,6 +161,14 @@ class SerialPortLock:
         lock_file = self._get_lock_file(port)
         
         try:
+            if port not in self._guards:
+                return not lock_file.exists()
+            if lock_file.exists():
+                with lock_file.open('r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get('owner_token') != self._owners[port]:
+                    logger.error(f"Refusing to release another owner's lock: {port}")
+                    return False
             for attempt in range(3):
                 try:
                     lock_file.unlink()
@@ -172,8 +179,9 @@ class SerialPortLock:
                     if attempt == 2:
                         raise
                     time.sleep(0.05)
-            if port in self._locks:
-                del self._locks[port]
+            del self._locks[port]
+            del self._owners[port]
+            self._guards.pop(port).close()
             logger.info(f"Lock released for {port}")
             return True
         except Exception as e:
@@ -243,26 +251,21 @@ class SerialPortLock:
         try:
             if self.LOCK_DIR.exists():
                 for lock_file in self.LOCK_DIR.glob("*.lock"):
+                    guard = None
                     try:
-                        should_delete = False
-                        
-                        if include_current_process:
+                        guard = self._acquire_guard(lock_file)
+                        if guard is None:
+                            continue
+                        try:
+                            with lock_file.open('r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            pid = data.get('pid')
+                            should_delete = bool(pid and (
+                                not self._is_process_alive(pid)
+                                or (include_current_process and pid == current_pid)
+                            ))
+                        except json.JSONDecodeError:
                             should_delete = True
-                        else:
-                            # 检查是否是过期锁
-                            try:
-                                with open(lock_file, 'r') as f:
-                                    data = json.load(f)
-                                pid = data.get('pid')
-                                
-                                if pid and not self._is_process_alive(pid):
-                                    should_delete = True
-                                    logger.info(f"Found stale lock for {data.get('port')} (dead PID {pid})")
-                            except (OSError, json.JSONDecodeError):
-                                # 损坏的锁文件也删除
-                                should_delete = True
-                                logger.info(f"Found corrupted lock file: {lock_file.name}")
-                        
                         if should_delete:
                             lock_file.unlink()
                             cleaned += 1
@@ -270,6 +273,9 @@ class SerialPortLock:
                             
                     except Exception as e:
                         logger.warning(f"Failed to delete {lock_file.name}: {e}")
+                    finally:
+                        if guard is not None:
+                            guard.close()
                 
                 # 如果目录空了，删除目录
                 try:
@@ -488,23 +494,23 @@ class SerialPortManager:
             if port not in self._active_ports:
                 return True
 
-            success = True
             if port in self._port_handles:
                 try:
                     handle = self._port_handles[port]
-                    if hasattr(handle, 'close'):
+                    if hasattr(handle, 'close') and getattr(handle, 'is_open', True):
                         handle.close()
+                    if getattr(handle, 'is_open', False):
+                        logger.warning(f"Port handle remains open after close: {port}")
+                        return False
                 except Exception as e:
                     logger.warning(f"Error closing port handle: {e}")
-                    success = False
-                del self._port_handles[port]
+                    return False
 
             if not self._port_lock.release(port):
-                success = False
-            if success:
-                self._active_ports.discard(port)
-
-            return success
+                return False
+            self._port_handles.pop(port, None)
+            self._active_ports.discard(port)
+            return True
     
     def register_handle(self, port: str, handle):
         """注册串口句柄"""
@@ -525,8 +531,6 @@ class SerialPortManager:
                     self.release_port(port)
                 except Exception as e:
                     logger.error(f"Error releasing {port}: {e}")
-
-            self._port_lock.release_all()
 
             if self._watchdog:
                 self._watchdog.stop()
