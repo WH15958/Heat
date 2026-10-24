@@ -1,4 +1,4 @@
-"""Manual motion coordination. Only the application supervisor initiates timed stops."""
+"""Synchronous motion coordination with application/orchestration supervision."""
 import copy
 from datetime import datetime, timezone
 import logging
@@ -21,6 +21,7 @@ class TurntableController:
         self.device = device or TurntableDevice(config)
         self.lock = threading.RLock()
         self.gate = threading.Lock()
+        self.owner = None
         self.generation = 0
         self.stopping = 0
         self.binding = None
@@ -66,6 +67,44 @@ class TurntableController:
             if not self.device.is_connected():
                 self.binding = resolve_connection(self.config.connection)
             return self.summary()
+
+    def _check_owner(self, owner):
+        if self.owner is not None and self.owner is not owner:
+            raise RuntimeError("转盘已被实验占用")
+
+    def claim(self, owner):
+        """Reserve the controller without reading or commanding hardware."""
+        if owner is None:
+            raise ValueError("转盘占用标识不能为空")
+        with self.lock:
+            self._check_owner(owner)
+            if not self.device.is_connected():
+                raise RuntimeError("转盘未连接")
+            self.require_idle()
+            with self.gate:
+                if self.stopping:
+                    raise RuntimeError("转盘停止/断开处理中")
+                self.owner = owner
+
+    def release(self, owner):
+        with self.lock:
+            if self.owner is None:
+                return True
+            if self.owner is not owner:
+                return False
+            try:
+                self.require_idle()
+            except RuntimeError:
+                return False
+            status = self.device.snapshot
+            if (not self.device.is_connected() or status.get("read_ok") is not True
+                    or status.get("busy") is not False or not self.stop_confirmed):
+                return False
+            with self.gate:
+                if self.stopping:
+                    return False
+                self.owner = None
+            return True
 
     def snapshot_version(self):
         # Also usable for a timeout response while the serial lock is occupied.
@@ -116,14 +155,16 @@ class TurntableController:
                     "home_enabled": self.config.home_enabled,
                     "position_encoding_verified": self.config.position_encoding_verified,
                     "homed": self.homed, "stop_confirmed": self.stop_confirmed,
+                    "experiment_owned": self.owner is not None,
                     "motion_blocked": self._requires_stop or self._stability_pending or bool(self.stopping),
                     **self._bottle_state(),
                     "action": {k: v for k, v in (self.action or {}).items()
                                if k not in ("deadline", "saw_homing", "saw_running", "stop_attempted", "motion_action")} or None,
                     **self.snapshot_version()}
 
-    def connect(self):
+    def connect(self, owner=None):
         with self.lock:
+            self._check_owner(owner)
             if self.device.is_connected():
                 return self.summary()
             if self.action and self.action["result"] in PENDING:
@@ -247,7 +288,7 @@ class TurntableController:
                     self._fail(str(exc))
             return self.summary()
 
-    def command(self, request, expected_generation=None):
+    def command(self, request, expected_generation=None, owner=None):
         req = parse_turntable_command(request)
         if req.action == "stop":
             if not self.stop():
@@ -263,6 +304,7 @@ class TurntableController:
 
         with self.lock:
             check_generation()
+            self._check_owner(owner)
             if self._requires_stop or self._stability_pending or (self.action and self.action["result"] in PENDING):
                 raise RuntimeError("已有运动或停止结果未确认")
             if req.action in ("move_relative", "move_absolute", "next_bottle") and not self.config.position_encoding_verified:
@@ -308,7 +350,8 @@ class TurntableController:
             duration = motion.duration_seconds if motion.action == "run" else self.config.action_timeout
             if req.action == "home_bottle":
                 duration = self.config.bottle_home_timeout
-            self.action = {"action": req.action, "result": "accepted", "target": target,
+            self.action = {"action_id": str(uuid4()),
+                           "action": req.action, "result": "accepted", "target": target,
                            "motion_action": motion.action, **bottle_fields,
                            "requested_speed": motion.speed, "duration_seconds": duration,
                            "deadline": time.monotonic() + duration}
@@ -419,10 +462,14 @@ class TurntableController:
                     action["error"] = error + ("；停止已确认" if stopped else "；停止未确认")
                 logger.info("Turntable %s supervised result: %s", self.config.device_id, action)
 
-    def disconnect(self):
-        self.begin_stop()
+    def disconnect(self, owner=None):
+        with self.gate:
+            self._check_owner(owner)
+            self.generation += 1
+            self.stopping += 1
         try:
             with self.lock:
+                self._check_owner(owner)
                 if not self.device.is_connected() and (
                         self._read_at is not None or
                         (self.action and self.action["result"] in PENDING)):

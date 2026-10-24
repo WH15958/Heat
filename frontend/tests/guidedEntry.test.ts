@@ -42,3 +42,17 @@ test('batch detail keeps parameters and partial/failed priming even with no exec
   p.failPlan();await p.state.readDetail('B');assert.equal(p.state.detail.value.priming.status,'failed');assert.match(p.state.detailError.value,/快照/)
  }finally{p.dispose()}
 })
+
+test('batch history preserves bottle associations and distinguishes collection from final homing',async()=>{
+ const p=page();try{
+  const group={index:1,state:'completed',sample_id:'B_S001',bottle_number:1,collection_status:'collected',run_id:'R'}
+  p.details.B={batch_id:'B',state:'failed',total_groups:1,groups:[group],finalization:{status:'failed',error:'回零失败'},turntable:{current_bottle:null,target_bottle:1},turntable_events:[{operation:'homing'}]}
+  p.plans.B={batch_id:'B',request:{},priming:{},recipes:[]};p.setRuns([{run_id:'R',metadata:{batch_id:'B'}}])
+  await p.state.readDetail('B')
+  assert.equal(p.state.finalizationFailed.value,true);assert.equal(p.state.groups.value[0].bottle_number,1);assert.equal(p.state.groups.value[0].collection_status,'collected')
+  p.details.B.groups=[{...group,state:'failed',collection_status:'possibly_partial',collection_error:'排液中断'}]
+  await p.state.readDetail('B')
+  assert.equal(p.state.finalizationFailed.value,false);assert.equal(p.state.groups.value[0].collection_status,'possibly_partial');assert.equal(p.state.groups.value[0].collection_error,'排液中断')
+  assert.ok(p.calls.every(url=>url.startsWith('/api/guided/')||url==='/api/experiments/history/runs'))
+ }finally{p.dispose()}
+})

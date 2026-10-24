@@ -18,6 +18,9 @@ from src.experiment.actions import WaitType
 from src.experiment.parser import parse_experiment_data
 from src.web.api import experiments, guided as api
 from src.web.api import devices, valves, syringe_pumps
+from src.utils.config import TurntableConfig
+from src.web.turntable_control import TurntableController
+from test_turntable_controller import FakeDevice as FakeTurntableDevice
 
 
 def spec(**kwargs):
@@ -26,7 +29,8 @@ def spec(**kwargs):
         clean_volume=1, clean_flow=1,
         clean_dwell=0, clean_cycles=1, plumbing_confirmed=True, priming_confirmed=True,
         reactor_available_ml=20, source_available_a_ml=100, source_available_b_ml=100, waste_available_ml=500,
-        prime_drain_seconds=480, prime_drain_flow=1, prime_heat_minutes=0)
+        prime_drain_seconds=480, prime_drain_flow=1, prime_heat_minutes=0,
+        turntable_drip_seconds=0, bottles_confirmed=True)
     values.update(initialization_a=dict(direction="Z", initialization_code=0),
                   initialization_b=dict(direction="Z", initialization_code=0), initialization_confirmed=True)
     return guided.GuidedRequest(**{**values, **kwargs})
@@ -63,12 +67,32 @@ class FakeSyringe:
         return not self.dm.stop_failure
 
 
+class GuidedTurntableDevice(FakeTurntableDevice):
+    """Finite motion profiles for real controller/orchestrator integration tests."""
+    def __init__(self, dm):
+        super().__init__()
+        self.dm = dm
+
+    def send_command(self, request):
+        super().send_command(request)
+        self.reads.clear()
+        if request.action == "home":
+            self.dm.calls.append(("turntable_home", 1))
+            self.reads.extend([(self.position, 8), (0, 0x20), (0, 0x20)])
+        elif request.action == "move_absolute":
+            self.dm.calls.append(("turntable_next", request.position // 12000 + 1))
+            self.reads.extend([(self.position, 1), (request.position, 0x20), (request.position, 0x20)])
+        elif request.action == "stop":
+            self.dm.calls.append(("turntable_stop", None))
+
+
 class FakeManager:
     def __init__(self):
         self.calls = []
         self.syringes = {did: FakeSyringe(self, did) for did in ("syringe_pump1", "syringe_pump2")}
         self.valves = {"valve1": SimpleNamespace(is_connected=lambda: True)}
         self.valve_owner = None
+        self.valve_energized = None
         self.heating = {}
         self.pump_reads = {}
         self.flow_channels = set()
@@ -77,6 +101,21 @@ class FakeManager:
         self.fail_feed = False
         self.stop_failure = False
         self.barrier = threading.Barrier(2)
+        self.turntables = {"turntable1": TurntableController(TurntableConfig(
+            device_id="turntable1", enabled=True, home_enabled=True,
+            position_encoding_verified=True, bottle_count=12, pulses_per_bottle=12000,
+            bottle_home_timeout=180), device=GuidedTurntableDevice(self))}
+        self.turntables["turntable1"].read()
+
+    def turntable(self, did):
+        return self.turntables[did]
+
+    def turntable_command(self, did, request, expected_generation=None, *, owner=None):
+        return self.turntable(did).command(request, expected_generation, owner=owner)
+
+    def require_turntables_idle(self):
+        for controller in self.turntables.values():
+            controller.require_idle()
 
     def get_all_heaters(self):
         return {did: SimpleNamespace(is_connected=lambda: True) for did in ("heater1", "heater2")}
@@ -119,10 +158,13 @@ class FakeManager:
     def cancel_valve_operations(self, ids):
         pass
 
-    def valve_operation(self, did, action, energized, owner, stop):
+    def valve_operation(self, did, action, energized=None, owner=None, stop=None):
+        if action == "status":
+            return {"read_ok": True, "relay_energized": self.valve_energized}
         assert self.valve_owner is owner
-        assert not stop()
+        assert not (stop and stop())
         self.calls.append(("valve", energized))
+        self.valve_energized = energized
         return {"read_ok": True, "relay_energized": energized}
 
     def set_temperature(self, did, value):
@@ -296,8 +338,8 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
             current = guided.priming_signature(request)
         fields = json.loads(digest.call_args.args[0])
-        self.assertEqual(fields.pop("priming_protocol"), "reached_then_dwell_flow_drain_v5")
-        previous_fields = dict(fields, priming_protocol="stable_then_dwell_flow_drain_v4")
+        self.assertEqual(fields.pop("priming_protocol"), "turntable_collection_v6")
+        previous_fields = dict(fields, priming_protocol="reached_then_dwell_flow_drain_v5")
         self.assertNotEqual(current, hashlib.sha256(json.dumps(previous_fields, sort_keys=True, allow_nan=False).encode()).hexdigest())
         self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
         fields["devices"] = [d for d in fields["devices"] if d["device_id"] not in ("heater1", "heater2")]
@@ -420,7 +462,12 @@ class GuidedTests(unittest.TestCase):
         async def scenario(failing_method):
             dm = FakeManager()
             batch = guided.GuidedBatch(dm, spec())
-            with patch.object(dm, failing_method, side_effect=IOError("hardware failure")):
+            original = getattr(dm, failing_method)
+            def fail_priming(*args, **kwargs):
+                if batch.record["phase"] == "priming":
+                    raise IOError("hardware failure")
+                return original(*args, **kwargs)
+            with patch.object(dm, failing_method, side_effect=fail_priming):
                 await batch.start(prime_only=True)
                 await batch.task
             self.assertEqual(batch.record["priming"]["status"], "failed")
@@ -558,7 +605,7 @@ class GuidedTests(unittest.TestCase):
             bid = response.json()["batch_id"]
             for _ in range(200):
                 record = client.get(f"/api/guided/{bid}").json()
-                if record["state"] == "failed":
+                if record["state"] == "failed" and not record.get("cleanup_required"):
                     break
                 time.sleep(0.01)
             self.assertTrue(record["recovery_required"])
@@ -577,7 +624,7 @@ class GuidedTests(unittest.TestCase):
             self.assertEqual(saved["state"], "failed")
             self.assertEqual(client.post("/api/guided/start", json=spec(priming_batch_id=bid).model_dump()).status_code, 409)
 
-    def test_two_groups_complete_without_bottle_confirmation(self):
+    def test_two_groups_complete_without_per_group_bottle_confirmation(self):
         async def scenario():
             dm = FakeManager()
             batch = guided.GuidedBatch(dm, spec(repeats=2))
@@ -655,7 +702,7 @@ class GuidedTests(unittest.TestCase):
             await batch.task
             self.assertEqual(batch.state.value, "failed")
             self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
-            self.assertEqual([c for c in dm.calls if c[0] == "valve"], [("valve", True)])
+            self.assertEqual([c for c in dm.calls if c[0] == "valve"], [("valve", True), ("valve", True)])
         asyncio.run(scenario())
 
     def test_checkpoint_save_failure_prevents_collection_and_next_group(self):

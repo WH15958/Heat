@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+import time
 import uuid
 import unicodedata
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from src.experiment.progress import guided_activity
 from src.experiment.editor import validate_source
 from src.experiment.engine import ExperimentEngine, ExperimentState
 from src.experiment.executor import StepExecutor
+from src.experiment.guided_turntable import GuidedTurntable
 from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
 from src.devices.syringe_commands import SyringeCommand
@@ -67,6 +69,8 @@ class GuidedRequest(BaseModel):
     clean_flow: float = Field(ge=0.01, le=9999)
     clean_dwell: float = Field(ge=0, le=3600)
     clean_cycles: int = Field(ge=1, le=10)
+    turntable_drip_seconds: float = Field(ge=0, le=3600)
+    bottles_confirmed: bool = False
     drain_direction: Literal["CW", "CCW"] = "CW"
     clean_direction: Literal["CW", "CCW"] = "CW"
     heating_timeout: float = Field(default=600, gt=0, le=7200)
@@ -146,12 +150,12 @@ def drain_seconds(volume, flow):
 
 def priming_signature(spec):
     from src.utils.config import ConfigManager
-    fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id"})
+    fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id", "bottles_confirmed"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "reached_then_dwell_flow_drain_v5"
+    fields["priming_protocol"] = "turntable_collection_v6"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
-        config.pumps, config.microwaves, config.heaters) for device in group
-        if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2")]
+        config.pumps, config.microwaves, config.heaters, config.turntables) for device in group
+        if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2", "turntable1")]
     return hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
@@ -269,6 +273,8 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     return dict(name=f"{spec.experiment_name} · 第 {index+1} 组", steps=steps, metadata=dict(
         batch_id=batch_id, experiment_name=spec.experiment_name, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
         guided_parameters=row, product_port=spec.product_port,
+        bottle_number=index+1, collection_device_id="turntable1",
+        collection_status="pending",
         microwave_hold_policy=dict(hold_mode="timed", tolerance=3, stable_seconds=30, excursion="continue_timing"),
         theoretical_product_volume_ml=row[2]+row[3],
         product_drain_seconds=spec.product_drain_seconds, clean_drain_seconds=spec.clean_drain_seconds,
@@ -279,6 +285,12 @@ def compile_plan(spec, batch_id="preview"):
     from src.utils.config import ConfigManager
     config = ConfigManager().load()
     validate_fixed_channels(config, spec)
+    turntable = next((t for t in config.turntables if t.device_id == "turntable1" and t.enabled), None)
+    if (turntable is None or not turntable.home_enabled or not turntable.position_encoding_verified
+            or turntable.bottle_count < 1 or turntable.pulses_per_bottle <= 0):
+        raise ValueError("固定接样转盘 turntable1 未启用或瓶位、机械回零配置未完成")
+    if len(spec.rows()) > turntable.bottle_count:
+        raise ValueError(f"本批共 {len(spec.rows())} 组，超过转盘 {turntable.bottle_count} 个瓶位；禁止循环覆盖产物瓶")
     for i, did in enumerate(("heater1", "heater2")):
         heater = next((h for h in config.heaters if h.device_id == did and h.enabled), None)
         if heater is None or any(not heater.min_temperature <= t <= heater.max_temperature for t in spec.axes[i]):
@@ -331,6 +343,56 @@ def atomic_record(record, directory=None):
             os.unlink(temporary)
 
 
+class GuidedStepExecutor(StepExecutor):
+    """Bind collection to this batch's reserved, verified bottle position."""
+
+    def __init__(self, dm, batch):
+        super().__init__(dm)
+        self.batch = batch
+
+    async def check_flow_interlock(self, device_id, channel):
+        if self._activity_step and self._activity_step.id == "collect_product":
+            try:
+                await self.batch.turntable.verify(self.batch.record["current_group"])
+            except Exception as exc:
+                self._last_error = "收取期间瓶位校验失败：" + str(exc)
+                return False
+        return True
+
+    async def execute(self, step):
+        collecting = step.id == "collect_product"
+        self.last_device_result = None
+        try:
+            if step.id in ("product_route", "collect_product"):
+                if self.batch.stopping or self._should_stop():
+                    return False
+                # A pause before the valve/pump may be long: read again after resume.
+                while True:
+                    if await self._wait_for_resume() is None:
+                        return False
+                    await self.batch.turntable.verify(self.batch.record["current_group"])
+                    if not self._is_paused():
+                        break
+            if collecting:
+                # Durable intent precedes the first possible pump write.
+                self.batch.collection_state("collecting")
+            success = await super().execute(step)
+            if collecting:
+                if success:
+                    await self.batch.turntable.verify(self.batch.record["current_group"])
+                self.batch.collection_state("collected" if success else "possibly_partial")
+                self.last_device_result = dict(self.last_device_result or {},
+                    bottle_number=self.batch.record["current_group"],
+                    collection_status="collected" if success else "possibly_partial")
+            return success
+        except Exception as exc:
+            self._last_error = str(exc)
+            self.last_device_result = dict(error=str(exc), bottle_number=self.batch.record["current_group"],
+                turntable=self.batch.record["turntable"]["status"])
+            if collecting:
+                self.batch.mark_partial_collection(str(exc))
+            return False
+
 class GuidedBatch:
     """One supervised batch; registry ownership spans all constituent runs."""
     def __init__(self, dm, spec, batch_id=None, directory=None):
@@ -340,7 +402,7 @@ class GuidedBatch:
         self.recipes = compile_plan(spec, self.batch_id)
         self.priming = priming_recipe(spec, self.batch_id)
         self.engine = None
-        self.executor = StepExecutor(dm)
+        self.executor = GuidedStepExecutor(dm, self)
         self.executor.release_resources_on_cleanup = False
         self.state = ExperimentState.IDLE
         self.stopping = False
@@ -349,10 +411,22 @@ class GuidedBatch:
         self.persistence_failure = None
         self.priming_stop_pending = False
         self._priming_cleanup_count = 0
+        self._orchestration_step = None
+        self._motion_active = False
+        self._motion_pause_pending = False
+        self._batch_paused_at = None
+        self._batch_paused_total = 0.0
+        self._elapsed_started_at = None
+        self._elapsed_finished_at = None
+        self.turntable = GuidedTurntable(dm, lambda: self.stopping, self.turntable_changed)
         self.record = dict(batch_id=self.batch_id, experiment_name=spec.experiment_name, state="idle", request=spec.model_dump(),
             created_at=datetime.now(timezone.utc).isoformat(), current_group=0,
-            total_groups=len(self.recipes), groups=[],
-            error=None, persistence_status="ok", phase="priming", recovery_required=False,
+            total_groups=len(self.recipes), groups=[], elapsed_seconds=0.0,
+            error=None, persistence_status="ok", phase="preparing", recovery_required=False,
+            preparation=dict(status="pending", error=None),
+            finalization=dict(status="pending", error=None),
+            turntable=dict(device_id="turntable1", current_bottle=None, target_bottle=1,
+                           operation="pending", status=None), turntable_events=[],
             priming=dict(status="pending", signature=priming_signature(spec), completed_cycles=[0, 0]),
             plan_file=f"plans/{self.batch_id}.json")
 
@@ -362,6 +436,7 @@ class GuidedBatch:
                     or self.executor._active_heaters or self.executor._active_microwaves
                     or self.executor._active_pumps or self.executor._active_syringes
                     or self.executor._reserved_syringes or self.executor._reserved_valves
+                    or self.turntable.claimed or self.turntable.needs_stop
                     or self.record["persistence_status"] == "error" or self.record["recovery_required"]
                     or self.priming_stop_pending)
 
@@ -373,14 +448,30 @@ class GuidedBatch:
     def progress(self):
         return self.engine.progress if self.engine else None
 
+    def elapsed_clock(self):
+        return time.monotonic()
+
+    @property
+    def elapsed_seconds(self):
+        if self._elapsed_started_at is None:
+            return 0.0
+        end = self._elapsed_finished_at if self._elapsed_finished_at is not None else self.elapsed_clock()
+        return max(0.0, end - self._elapsed_started_at)
+
+    def finish_elapsed(self):
+        if self._elapsed_started_at is not None and self._elapsed_finished_at is None:
+            self._elapsed_finished_at = self.elapsed_clock()
+        self.record["elapsed_seconds"] = self.elapsed_seconds
+
     def save(self):
         self.record["state"] = self.state.value
-        if self.engine:
-            self.record["progress"] = self.snapshot()["progress"]
-        self.record["pause_pending"] = bool(self.engine and self.engine.pause_pending)
+        self.record["elapsed_seconds"] = self.elapsed_seconds
+        self.record["progress"] = self.snapshot()["progress"]
+        self.record["pause_pending"] = self._motion_pause_pending or bool(self.engine and self.engine.pause_pending)
         self.record["cleanup_required"] = bool((self.engine and self.engine.cleanup_pending)
             or self.executor._active_heaters or self.executor._active_microwaves
-            or self.executor._active_pumps or self.executor._active_syringes)
+            or self.executor._active_pumps or self.executor._active_syringes
+            or self.turntable.claimed or self.turntable.needs_stop)
         try:
             self.record["persistence_status"] = "ok"
             atomic_record(self.record, self.directory)
@@ -407,7 +498,8 @@ class GuidedBatch:
     def snapshot(self):
         result = dict(self.record)
         result["state"] = self.state.value
-        result["pause_pending"] = bool(self.engine and self.engine.pause_pending)
+        result["elapsed_seconds"] = self.elapsed_seconds
+        result["pause_pending"] = self._motion_pause_pending or bool(self.engine and self.engine.pause_pending)
         result["cleanup_pending"] = self.cleanup_pending
         result["stop_requested"] = self.stopping
         result["cleanup_in_progress"] = bool(getattr(self.executor, "cleanup_in_progress", False) or self._priming_cleanup_count)
@@ -459,36 +551,195 @@ class GuidedBatch:
                     result["progress"]["device_id"] = "valve1"
                 else:
                     result["progress"]["device_id"] = "microwave1（只读温度）"
+        if self._orchestration_step:
+            result["progress"] = dict(current_step=0, total_steps=1, elapsed=0,
+                step_id=self._orchestration_step[0], step_label=self._orchestration_step[1],
+                device_id="turntable1")
         return result
 
+    def turntable_changed(self, status):
+        self.record["turntable"].update(status=status, current_bottle=status.get("current_bottle"))
+        # Live telemetry does not fsync at polling frequency. Movement intent,
+        # completion and collection boundaries below persist the relevant state.
+        # Restart handling always invalidates the saved bottle position.
+
+    def collection_state(self, status):
+        group = self.record["groups"][-1]
+        group["collection_status"] = status
+        run = self.exp_logger.active_run if self.exp_logger else None
+        if run:
+            run.metadata["collection_status"] = status
+        self.save()
+
+    def mark_partial_collection(self, error=None):
+        if self.record["groups"] and self.record["groups"][-1].get("collection_status") == "collecting":
+            group = self.record["groups"][-1]
+            group["collection_status"] = "possibly_partial"
+            group["collection_error"] = error or "收取中断，可能已有部分产物进入瓶中"
+            run = self.exp_logger.active_run if self.exp_logger else None
+            if run:
+                run.metadata["collection_status"] = "possibly_partial"
+
+    async def boundary(self):
+        while self.state == ExperimentState.PAUSED and not self.stopping:
+            await asyncio.sleep(0.05)
+        if self.stopping:
+            raise RuntimeError("批次已停止")
+        if self.persistence_failure:
+            raise RuntimeError("批次记录保存失败：" + self.persistence_failure)
+
+    def set_batch_paused(self, paused):
+        now = time.monotonic()
+        if paused and self._batch_paused_at is None:
+            self._batch_paused_at = now
+        elif not paused and self._batch_paused_at is not None:
+            self._batch_paused_total += now - self._batch_paused_at
+            self._batch_paused_at = None
+
+    def batch_wait_clock(self):
+        now = time.monotonic()
+        return (self._batch_paused_at if self._batch_paused_at is not None else now) - self._batch_paused_total
+
+    async def pumps_stopped(self):
+        status = await asyncio.to_thread(self.dm.read_pump_status, "pump1")
+        for channel in ("3", "4"):
+            data = status.get("channels", {}).get(channel, {})
+            if (data.get("read_ok") is not True or data.get("running") is not False
+                    or data.get("run_status") != "STOP"):
+                raise RuntimeError(f"转盘运动前蠕动泵通道 {channel} 未确认停止")
+        for did in ("syringe_pump1", "syringe_pump2"):
+            state = await asyncio.to_thread(self.dm.syringe(did).read)
+            if state.get("read_ok") is not True or state.get("busy") is not False:
+                raise RuntimeError(f"转盘运动前 {did} 未确认停止")
+
+    async def waste_route(self):
+        while True:
+            await self.boundary()
+            await self.pumps_stopped()
+            if self.state != ExperimentState.PAUSED:
+                break
+        status = await asyncio.to_thread(self.dm.valve_operation, "valve1", "switch", True,
+            self.executor._valve_owner, lambda: self.stopping)
+        if status.get("read_ok") is not True or status.get("relay_energized") is not True:
+            raise RuntimeError("转盘运动前未确认三通阀处于 NC 废液位")
+
+    async def verify_waste_route(self):
+        status = await asyncio.to_thread(self.dm.valve_operation, "valve1", "status")
+        if status.get("read_ok") is not True or status.get("relay_energized") is not True:
+            raise RuntimeError("转盘运动前废液阀位读取失败或已改变")
+
+    async def move_turntable(self, *, home, target, step_id, label):
+        while True:
+            await self.boundary()
+            await self.pumps_stopped()
+            await self.verify_waste_route()
+            if self.state != ExperimentState.PAUSED:
+                break
+        await self.boundary()
+        self._orchestration_step = (step_id, label)
+        self.record["turntable"].update(operation="homing" if home else "indexing", target_bottle=target)
+        event = dict(action="home" if home else "next", target_bottle=target,
+                     status="started", at=datetime.now(timezone.utc).isoformat())
+        self.record["turntable_events"].append(event)
+        self.save()  # Intent is durable before dispatch, even for the first home.
+        self._motion_active = True
+        try:
+            status = await (self.turntable.home() if home else self.turntable.next(target))
+            event.update(status="completed", current_bottle=status["current_bottle"])
+            self.record["turntable"].update(operation="ready")
+            self.save()
+        except Exception as exc:
+            event.update(status="failed", error=str(exc))
+            self.record["turntable"].update(operation="failed", current_bottle=None)
+            raise
+        finally:
+            self._motion_active = False
+        if self._motion_pause_pending and not self.stopping:
+            self._motion_pause_pending = False
+            self.state = ExperimentState.PAUSED
+            self.set_batch_paused(True)
+            self.save()
+        await self.boundary()
+
+    async def settle(self):
+        self._orchestration_step = ("turntable_settle", "清洗排液后等待滴液结束")
+        self.record["turntable"]["operation"] = "settling"
+        self.save()
+        deadline = self.batch_wait_clock() + self.spec.turntable_drip_seconds
+        remaining = self.spec.turntable_drip_seconds
+        while remaining > 0:
+            await asyncio.sleep(min(0.05, remaining))
+            remaining = deadline - self.batch_wait_clock()
+            if self.stopping:
+                raise RuntimeError("滴液等待期间批次已停止")
+        await self.boundary()
+
+    async def prepare_collection(self):
+        self.record["phase"] = "preparing"
+        self.record["preparation"]["status"] = "running"
+        self.save()
+        await self.pumps_stopped()
+        await self.waste_route()
+        await self.move_turntable(home=True, target=1, step_id="turntable_home_start", label="批次开始：回机械原点，确认1号瓶")
+        self.record["preparation"]["status"] = "completed"
+        self._orchestration_step = None
+        self.save()
+
+    async def finish_collection(self):
+        self.record["phase"] = "finishing"
+        self.record["finalization"]["status"] = "running"
+        self._orchestration_step = ("turntable_home_finish", "整批收尾：停止设备，准备回机械原点")
+        self.save()
+        await self.boundary()
+        # Keep all ownership until the final move and its checkpoint have succeeded.
+        if not await self.executor.stop_active_devices(source="normal_cleanup"):
+            raise RuntimeError("收尾停机未确认，禁止回零")
+        await self.waste_route()
+        await self.move_turntable(home=True, target=1, step_id="turntable_home_finish", label="整批收尾：回机械原点")
+        self.record["finalization"]["status"] = "completed"
+        self.save()
+
     async def start(self, prime_only=False):
+        self._elapsed_started_at = self.elapsed_clock()
         self.prime_only = prime_only
         self.state = ExperimentState.RUNNING
         try:
             # Immutable recipe snapshot, separate from small mutable checkpoints.
             atomic_record(dict(batch_id=self.batch_id, experiment_name=self.spec.experiment_name, request=self.spec.model_dump(),
-                               priming=self.priming, recipes=self.recipes), Path(self.directory or BATCH_DIR) / "plans")
+                               priming=self.priming, recipes=self.recipes,
+                               collection=dict(device_id="turntable1", home_before_priming=True,
+                                   advance_after="cleaning_and_settle", drip_seconds=self.spec.turntable_drip_seconds,
+                                   home_after_normal_completion=True, home_on_failure=False,
+                                   bottle_numbers=list(range(1, len(self.recipes)+1)))), Path(self.directory or BATCH_DIR) / "plans")
+            self.save()  # Do not dispatch hardware if the plan cannot be recorded.
         except Exception as exc:
             self.record["persistence_status"] = "error"
             self.persistence_failure = str(exc)
+            self.finish_elapsed()
             raise
-        self.save()  # Do not dispatch hardware if the plan cannot be recorded.
         all_steps = [s for data in [self.priming, *self.recipes] for s in parse_experiment_data(data)["steps"]]
         try:
             await self.executor.reserve_valves(all_steps)
             await self.executor.reserve_syringes(all_steps)
-        except Exception:
+            await self.turntable.claim()
+        except BaseException:
             self.executor.release_resources_on_cleanup = True
             self.executor.release_unused_syringes()
             await self.executor.release_valves()
+            if not await self.turntable.release():
+                self.record["recovery_required"] = True
             self.state = ExperimentState.FAILED
+            self.finish_elapsed()
             self.save()
             raise
         self.task = asyncio.create_task(self.run())
 
     async def run(self):
         try:
+            if self.record["preparation"]["status"] != "completed":
+                await self.prepare_collection()
             if self.record["priming"]["status"] != "completed":
+                await self.boundary()
                 self.record["phase"] = "priming"
                 self.record["priming"]["status"] = "running"
                 self.engine = ExperimentEngine(self.executor, ExperimentLogger(save_log=True),
@@ -520,7 +771,8 @@ class GuidedBatch:
                     raise RuntimeError("预充后批次已停止")
                 if priming_signature(self.spec) != self.record["priming"]["signature"]:
                     raise RuntimeError("预充后设备配置变化，禁止开始正式实验")
-                await preflight(self.dm, self.spec, owner=self.executor._syringe_owner)
+                await preflight(self.dm, self.spec, owner=self.executor._syringe_owner,
+                                turntable_owner=self.turntable.owner)
             self.record["phase"] = "experiments"
             for i, data in enumerate(self.recipes):
                 if self.stopping:
@@ -529,7 +781,10 @@ class GuidedBatch:
                     await asyncio.sleep(0.05)
                 if self.stopping:
                     break
+                self.record["phase"] = "experiments"
+                self._orchestration_step = None
                 self.record["current_group"] = i+1
+                await self.turntable.verify(i+1)
                 executor = self.executor
                 self.engine = ExperimentEngine(executor, ExperimentLogger(save_log=True),
                                                finish_reaction_before_pause=True,
@@ -546,7 +801,8 @@ class GuidedBatch:
                     await self.engine.pause()
                 run = self.engine.exp_logger.active_run
                 group = dict(index=i+1, parameters=data["metadata"]["guided_parameters"],
-                    run_id=run.run_id, sample_id=run.metadata.get("sample_id"), state="running")
+                    run_id=run.run_id, sample_id=run.metadata.get("sample_id"), state="running",
+                    bottle_number=i+1, collection_status="pending")
                 self.record["groups"].append(group)
                 self.save()
                 await self.engine.wait_finished()
@@ -560,13 +816,33 @@ class GuidedBatch:
                 if self.engine.state != ExperimentState.COMPLETED:
                     self.state = self.engine.state
                     self.record["error"] = executor.last_error
+                    self.record["recovery_required"] = True
+                    self.mark_partial_collection(executor.last_error)
                     self.save()
                     return
                 self.save()
-            self.state = ExperimentState.STOPPED if self.stopping else ExperimentState.COMPLETED
+                self.record["phase"] = "indexing" if i+1 < len(self.recipes) else "finishing"
+                await self.pumps_stopped()
+                await self.verify_waste_route()
+                await self.settle()
+                if i+1 < len(self.recipes):
+                    await self.move_turntable(home=False, target=i+2, step_id="turntable_next",
+                                             label=f"清洗完成：换至{i+2}号瓶")
+            if not self.stopping:
+                await self.finish_collection()
+            # Keep the batch active until final resource cleanup has also succeeded.
+            self.state = ExperimentState.STOPPED if self.stopping else ExperimentState.RUNNING
             self.save()
         except Exception as exc:
+            requested_stop = self.stopping
             self.record["error"] = str(exc)
+            self.record["recovery_required"] = True
+            self.mark_partial_collection(str(exc))
+            if self.record["phase"] == "preparing":
+                self.record["preparation"].update(status="failed", error=str(exc))
+            if self.record["phase"] == "finishing":
+                self.record["finalization"].update(status="failed", error=str(exc))
+                self.record["error"] = "实验组已完成，收尾回零失败：" + str(exc)
             if self.record["phase"] in ("priming", "ready"):
                 self.record["priming"]["status"] = "failed"
                 self.record["recovery_required"] = True
@@ -577,7 +853,7 @@ class GuidedBatch:
                     await self.engine.stop()
                 except Exception as cleanup_exc:
                     self.record["error"] += "; cleanup: " + str(cleanup_exc)
-            self.state = ExperimentState.FAILED
+            self.state = ExperimentState.STOPPED if requested_stop else ExperimentState.FAILED
             try:
                 self.save()
             except Exception:
@@ -586,14 +862,33 @@ class GuidedBatch:
             if self.record["phase"] != "ready" or self.stopping or self.state != ExperimentState.PAUSED:
                 self.executor.release_resources_on_cleanup = True
                 try:
-                    if not await self.executor.stop_active_devices(source="user_stop" if self.stopping else (
-                            "normal_cleanup" if self.state == ExperimentState.COMPLETED else "failure_cleanup")):
+                    normal = self.record["finalization"]["status"] == "completed" and not self.stopping
+                    if not normal and self.turntable.claimed:
+                        self.record["recovery_required"] = True
+                        await self.turntable.stop()
+                        self.record["turntable"]["operation"] = "stopped" if not self.turntable.needs_stop else "failed"
+                    clean = await self.executor.stop_active_devices(source="user_stop" if self.stopping else (
+                            "normal_cleanup" if normal else "failure_cleanup"))
+                    if self.stopping and self.turntable.claimed:
+                        clean = await self.turntable.stop() and clean
+                        self.record["turntable"]["operation"] = "stopped" if not self.turntable.needs_stop else "failed"
+                    released = await self.turntable.release()
+                    if not clean or not released:
                         self.state = ExperimentState.FAILED
+                        self.record["recovery_required"] = True
                         self.record["error"] = (self.record["error"] or "") + "; 停机未确认"
+                    elif self.stopping:
+                        self.state = ExperimentState.STOPPED if self.state != ExperimentState.FAILED else self.state
+                        self.record["recovery_required"] = True
+                    elif normal:
+                        self.state = ExperimentState.COMPLETED
+                    self.finish_elapsed()
                     self.save()
                 except Exception as exc:
                     self.state = ExperimentState.FAILED
+                    self.record["recovery_required"] = True
                     self.record["error"] = str(exc)
+                    self.finish_elapsed()
 
     def checkpoint(self, progress):
         if progress.state in (ExperimentState.RUNNING, ExperimentState.PAUSED):
@@ -615,30 +910,40 @@ class GuidedBatch:
     async def pause(self):
         if self.stopping or self.state != ExperimentState.RUNNING:
             raise ValueError("批次当前不可暂停")
-        if self.engine and self.engine.state == ExperimentState.RUNNING:
+        if self._motion_active:
+            self._motion_pause_pending = True
+        elif self.engine and self.engine.state == ExperimentState.RUNNING:
             await self.engine.pause()
             self.state = self.engine.state
         else:
             # No running engine yet (or a group just ended): pause the batch boundary.
             self.state = ExperimentState.PAUSED
+        self.set_batch_paused(self.state == ExperimentState.PAUSED)
         self.save()
 
     async def resume(self):
         if self.record["phase"] == "ready":
             raise ValueError("请在批次确认页启动正式实验，不能通过继续跳过签名检查")
-        if self.stopping or (self.state != ExperimentState.PAUSED and not (self.engine and self.engine.pause_pending)):
+        if self.stopping or (self.state != ExperimentState.PAUSED and not self._motion_pause_pending
+                             and not (self.engine and self.engine.pause_pending)):
             raise ValueError("批次当前不可继续")
         self.state = ExperimentState.RUNNING
+        self._motion_pause_pending = False
         try:
             self.save()
         except Exception:
             self.state = ExperimentState.PAUSED
             raise
+        self.set_batch_paused(False)
         if self.engine:
             await self.engine.resume()
 
     def request_stop(self):
         self.stopping = True
+        self._motion_pause_pending = False
+        if self.turntable.claimed:
+            self.turntable.invalidate_pending()
+        self.executor.cancel_pending_valve_operations()
         if self.engine:
             self.engine.request_stop()
 
@@ -654,10 +959,14 @@ class GuidedBatch:
         success = await self.engine.stop() if self.engine else True
         self.executor.release_resources_on_cleanup = True
         success = await self.executor.stop_active_devices(source="user_stop") and success
+        if self.turntable.claimed:
+            success = await self.turntable.stop() and success
+            success = await self.turntable.release() and success
         if self.priming_stop_pending:
             success = await self.stop_priming_devices() and success
         if success and self.state not in (ExperimentState.COMPLETED, ExperimentState.FAILED):
             self.state = ExperimentState.STOPPED
+        self.finish_elapsed()
         try:
             self.save()
         except Exception:
@@ -690,7 +999,8 @@ class GuidedBatch:
         return success
 
     async def begin_experiments(self, spec, before_start=None):
-        if not spec.plumbing_confirmed or not spec.priming_confirmed or not spec.initialization_confirmed:
+        if (not spec.plumbing_confirmed or not spec.priming_confirmed
+                or not spec.initialization_confirmed or not spec.bottles_confirmed):
             raise ValueError("请重新确认现场预充和液路条件")
         if (self.stopping or self.record["phase"] != "ready" or self.record["priming"]["status"] != "completed"
                 or self.record["recovery_required"] or self.persistence_failure):
@@ -698,12 +1008,17 @@ class GuidedBatch:
         if priming_signature(spec) != self.record["priming"]["signature"]:
             raise ValueError("参数已改变，原预充签名失效；请停止当前批次并重新预充")
         try:
-            await preflight(self.dm, spec, owner=self.executor._syringe_owner)
-        except (ValueError, RuntimeError) as exc:
+            await preflight(self.dm, spec, owner=self.executor._syringe_owner,
+                            turntable_owner=self.turntable.owner)
+            await self.turntable.verify(1)
+        except (ValueError, RuntimeError, OSError) as exc:
             self.record["priming"]["status"] = "invalidated"
             self.record["recovery_required"] = True
             self.record["error"] = "预充后设备状态变化：" + str(exc)
-            self.save()
+            self.state = ExperimentState.FAILED
+            # Lost bottle evidence also invalidates a ready batch. Stop retained
+            # heaters and all owned devices before returning the startup error.
+            await self.stop()
             raise
         if before_start:
             before_start()
@@ -713,7 +1028,7 @@ class GuidedBatch:
         self.task = asyncio.create_task(self.run())
 
 
-async def preflight(dm, spec, owner=None, *, before_initialization=False):
+async def preflight(dm, spec, owner=None, *, before_initialization=False, turntable_owner=None):
     """Read-only checks: preparation permits uninitialized pumps; formal start requires zero."""
     compile_plan(spec)  # Recheck current configuration before any reagent-consuming write.
     if not spec.plumbing_confirmed:
@@ -722,6 +1037,19 @@ async def preflight(dm, spec, owner=None, *, before_initialization=False):
         raise ValueError("请确认前驱体相容性、液路排气、容积及废液条件")
     if not spec.initialization_confirmed:
         raise ValueError("请明确确认本批次初始化运动及切阀")
+    if not spec.bottles_confirmed:
+        raise ValueError("请确认本批所需产物瓶已清空或更换，并已按瓶号就位")
+    control = dm.turntable("turntable1")
+    if (not control.config.enabled or not control.config.home_enabled
+            or not control.config.position_encoding_verified
+            or control.config.bottle_count < len(spec.rows())):
+        raise ValueError("运行中的转盘配置未启用或瓶位不足，请核对当前服务配置")
+    if not control.device.is_connected() or control.owner not in (None, turntable_owner):
+        raise ValueError("接样转盘未连接或已被其他任务占用")
+    state = await asyncio.to_thread(control.read)
+    if (not state.get("read_ok") or state.get("busy") is not False
+            or state.get("work_state") != 0x20 or state.get("motion_blocked")):
+        raise ValueError("接样转盘未确认停止，不能开始批次")
     for devices, ids in ((dm.get_all_heaters(), ("heater1", "heater2")),
                          (dm.get_all_pumps(), ("pump1",)),
                          (dm.get_all_microwaves(), ("microwave1",)),
@@ -748,5 +1076,6 @@ async def preflight(dm, spec, owner=None, *, before_initialization=False):
     pump_status = await asyncio.to_thread(dm.read_pump_status, "pump1")
     for channel in ("3", "4"):
         status = pump_status.get("channels", {}).get(channel, {})
-        if status.get("read_ok") is not True or status.get("running") is not False:
+        if (status.get("read_ok") is not True or status.get("running") is not False
+                or status.get("run_status") != "STOP"):
             raise ValueError(f"蠕动泵通道 {channel} 未确认停止")

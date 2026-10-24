@@ -25,6 +25,7 @@
         <el-table-column type="selection" width="48" />
         <el-table-column prop="run_id" label="Run ID" width="220" />
         <el-table-column prop="experiment_name" label="实验名称" width="200" />
+        <el-table-column label="产物瓶 / 收取" width="165"><template #default="{ row }"><span v-if="row.metadata?.bottle_number!=null">{{ turntableBottleLabel(row.metadata.bottle_number) }} · {{ collectionStatusLabel(row.metadata.collection_status) }}</span><span v-else>—</span></template></el-table-column>
         <el-table-column prop="status" label="状态" width="180">
           <template #default="{ row }">
             <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
@@ -79,6 +80,8 @@
           <el-descriptions-item label="总耗时">{{ detailData.total_duration?.toFixed(1) }}s</el-descriptions-item>
           <el-descriptions-item label="开始时间">{{ formatTime(detailData.started_at) }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ formatTime(detailData.finished_at) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailData.metadata?.bottle_number!=null" label="产物瓶">{{ turntableBottleLabel(detailData.metadata.bottle_number) }} · {{ detailData.metadata.collection_device_id || '转盘' }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailData.metadata?.collection_status" label="产物收取">{{ collectionStatusLabel(detailData.metadata.collection_status) }}<span v-if="detailData.metadata.collection_status==='possibly_partial'">（请现场核对，不视为完整收取）</span></el-descriptions-item>
           <el-descriptions-item label="步骤统计">
             完成 {{ detailData.completed_steps }} / 失败 {{ detailData.failed_steps }} / 共 {{ detailData.total_steps }}
           </el-descriptions-item>
@@ -164,7 +167,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
 import {useRoute} from 'vue-router'
-import {batchRunIds} from '../experiment/guidedProgress'
+import {batchRunIds,collectionStatusLabel,turntableBottleLabel} from '../experiment/guidedProgress'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { init, type ECharts, type LineSeriesOption } from '../lib/echarts'
 import SyringeHistory from '../components/SyringeHistory.vue'
@@ -208,7 +211,7 @@ interface SensorData {
 }
 
 interface RunData {
-  metadata?: {batch_id?:string}
+  metadata?: {batch_id?:string;bottle_number?:number;collection_device_id?:string;collection_status?:string}
   run_id: string
   experiment_name: string
   experiment_file: string

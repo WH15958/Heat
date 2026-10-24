@@ -545,6 +545,10 @@ class StepExecutor:
             logger.error(f"Step {step.id} failed: {e}")
             return False
 
+    async def check_flow_interlock(self, device_id, channel):
+        """Optional orchestration interlock; plain YAML retains its existing behavior."""
+        return True
+
     async def _run_timed_flow(self, device_id, channel, seconds):
         """Finish the issued flow run even while paused; always confirm STOP before return."""
         started = time.monotonic()
@@ -565,6 +569,8 @@ class StepExecutor:
                     success = True
                     break
                 if now >= next_read:
+                    if not await self.check_flow_interlock(device_id, channel):
+                        break
                     status = await asyncio.to_thread(self._dm.read_pump_status, device_id)
                     data = status.get("channels", {}).get(str(channel), {})
                     self.activity.device(device_id, data)
