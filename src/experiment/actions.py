@@ -32,6 +32,9 @@ class ActionType(Enum):
     SYRINGE_PROGRAM_RUN = "syringe_pump.program_run"
     SYRINGE_REPEAT = "syringe_pump.repeat"
     VALVE_SWITCH = "valve.switch"
+    TURNTABLE_HOME = "turntable.home_bottle"
+    TURNTABLE_NEXT = "turntable.next_bottle"
+    TURNTABLE_STOP = "turntable.stop"
     SYRINGE_PAIR_DISPENSE = "syringe_pair.dispense"
     WAIT = "wait"
     EMERGENCY_STOP = "emergency_stop"
@@ -97,6 +100,17 @@ class ExperimentStep:
     wait: WaitCondition = field(default_factory=WaitCondition)
     enabled: bool = True
     on_error: str = "stop"
+
+
+def validate_turntable_step(step):
+    if not step.type.value.startswith("turntable."):
+        return
+    if (set(step.params) != {"device_id"}
+            or not isinstance(step.params["device_id"], str)
+            or not step.params["device_id"].strip()):
+        raise ValueError("转盘步骤只接受非空 device_id")
+    if step.wait.type != WaitType.NONE or step.on_error != "stop":
+        raise ValueError("转盘步骤必须 wait=none 且 on_error=stop")
 
 
 def validate_flow_duration(step):

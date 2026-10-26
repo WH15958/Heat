@@ -291,6 +291,11 @@ async def _start_experiment_locked(filename: str, body: StartExperimentRequest, 
                         raise ValueError(f"{device_id} 未配置或未连接")
                 except ValueError as exc:
                     raise HTTPException(409, str(exc)) from exc
+    from src.experiment.recipe_turntable import check_turntable_connections
+    try:
+        check_turntable_connections(dm, data["steps"])
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
     executor = StepExecutor(dm)
     exp_logger = ExperimentLogger(save_log=body.save_log)
 
@@ -398,6 +403,7 @@ async def get_progress(filename: str):
         "elapsed": round(p.elapsed, 1),
         "pause_pending": p.pause_pending,
         "cleanup_pending": engine.cleanup_pending,
+        "activity": p.activity,
     }
 
 
@@ -457,6 +463,7 @@ async def _broadcast_progress(filename: str, progress):
             "elapsed": round(progress.elapsed, 1),
             "pause_pending": progress.pause_pending,
             "cleanup_pending": progress.cleanup_pending,
+            "activity": progress.activity,
         }
     )
 

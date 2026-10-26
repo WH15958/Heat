@@ -7,7 +7,7 @@ import secrets
 import sys
 
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 URL = "http://127.0.0.1:8000"
 SHELL_MUTEX = "HeatDesktopShell"
 BACKEND_MUTEX = "HeatDesktopBackend"

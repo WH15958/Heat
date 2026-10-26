@@ -1,5 +1,19 @@
 # Heat 开发者指南
 
+## 搭建式转盘执行（2026-10-26）
+
+`turntable.home_bottle/next_bottle/stop` 贯通动作枚举、parser、源文校验、编辑器和 StepExecutor。参数仅 `device_id`；限定 wait=none、on_error=stop。解析时检查启用步骤的本次回原点顺序及配置瓶数，执行时再次检查，不继承控制器既有可信瓶位。未引用转盘的旧配方不新增液路设备要求。
+
+`turntable_sequence.py` 从原 GuidedTurntable 提取所有权、停止代次、动作ID、位置令牌、完成读回和停机确认；原 `GuidedTurntable` 保留薄封装及引导式准备/换瓶/收尾语义。`RecipeTurntable` 增加每次执行的瓶位基准、显式停止后重新回原点和正常静止释放。同步驱动未改动，不新增依赖或驱动后台任务。
+
+启动通过既有资源协调占用所用转盘、两台注射泵和 valve1，手动泵阀写控制仍受实验注册锁保护。每次运动前在编排层新鲜读取 pump1 CH3/CH4、syringe_pump1/2 和 valve1，要求停泵及NC；不发隐式液路命令。占用工作线程取消时等待线程退出并登记结果，再回收资源，避免迟到的占用泄漏。停止代次在等待请求锁前生效；暂停只阻挡下一动作，不中断已发送转盘动作的监督。
+
+正常结束新鲜确认静止后释放，不额外停止或回原点；状态未知时尝试停机并报告清理失败。运动/停止未确认保留转盘和液路占用，复用 PersistentExperimentEngine 的持久化恢复锁。STOP可在液路检查失败后执行，失败不重发运动。
+
+步骤 `device_result` 包含 `operation/from_bottle/to_bottle/target_position`、控制器摘要、动作ID及停止结果；REST/WS `activity.devices` 保留当前/目标瓶号和停止状态。复用 run_id/sample_id；动作不新增样品记录或收取完成声明。设备REST接口保持不变，保存/预览/校验仅访问源码和配置。
+
+验证入口：`tests/test_turntable_yaml.py`、原引导式转盘测试及 `frontend/tests/turntableAutomation.test.ts`。生产构建输出隔离到 `output/turntable-yaml-build`；最初源码交付不覆盖现场静态资源、不启动硬件；用户于2026-10-26追加授权打包，最新源码和重新构建前端已纳入0.1.4安装包，详见 desktop_app.md。
+
 面向人类开发者与维护者。  
 如果你是 AI / 自动化协作者，请先读 [../context/PROJECT_CONTEXT.md](../context/PROJECT_CONTEXT.md)。
 
@@ -661,7 +675,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 瓶位状态由后端负责，包含 `bottle_count`、`pulses_per_bottle`、`current_bottle`、`next_bottle`、`bottle_token`、`bottle_ready` 和 `bottle_error`，动作可包含 `from_bottle`、`target_bottle`。只有 `home_bottle` 观察到回零过程、目标0和稳定停止后建立瓶位信任；换瓶准确到达目标并停止后才更新瓶号。启动、重连、复位、读取异常、意外坐标变化、高级运动或显式停止撤销信任，瓶号返回null，不能仅从坐标取模恢复。前端在状态过期或无效时隐藏瓶号，不自行计算，也不持久化瓶位以便重启续跑。
 
-手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。引导式自动接样在批次上层编排中复用这些控制器能力，不增加公开 YAML 转盘动作。
+手动请求通过现有实验注册锁、恢复锁及占用保护；停止先撤销尚未下发的运动请求，随后在同一设备锁内发停止和确认。HTTP 调用被取消时仍等待底层同步任务退出，不能提前释放这次操作的保护。活动转盘、未知结果或连接后的过期读数会阻止普通实验、引导式批次及微波托管启动；全局停止和清理包括转盘。引导式自动接样在批次上层编排中复用这些控制器能力，搭建式的三个公开转盘动作见下文；两类编排共用瓶位执行部分。
 
 手动写控制的恢复检查包含引导批次持久化的 `recovery_required` 和 `cleanup_required`；未解除返回409，记录不可读返回503，GET和STOP不受该恢复检查阻断。停止已确认后出现坐标变化会撤销 `stop_confirmed/homed` 并设置稳定性阻断，新的两次独立稳定停止读数可解除这一阻断，但不能清除未知运动或失败STOP留下的必须停止标志。
 

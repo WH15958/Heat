@@ -83,6 +83,11 @@
               :stroke-width="20"
               style="margin: 10px 0"
             />
+            <p v-for="item in turntableProgress" :key="item.id" role="status">
+              接样转盘 {{ item.id }} · 当前瓶位：{{ item.state.read_ok && item.state.bottle_ready ? `${item.state.current_bottle}号` : '未确认' }}
+              <span v-if="item.state.target_bottle != null"> · 目标：{{ item.state.target_bottle }}号</span>
+              · 停止：{{ item.state.read_ok && item.state.stop_confirmed ? '已确认' : '未确认' }}
+            </p>
           </div>
 
           <div class="steps-list">
@@ -214,6 +219,7 @@ interface ExperimentProgress {
   total_steps: number
   step_id: string
   elapsed: number
+  activity?: { devices?: Record<string, { read_ok?: boolean; bottle_ready?: boolean; current_bottle?: number | null; target_bottle?: number | null; stop_confirmed?: boolean }> } | null
 }
 
 interface LogEntry {
@@ -238,6 +244,8 @@ let selectionRequest = 0, startRequest = 0, progressRequest = 0
 const experimentUrl = (filename: string) => `/api/experiments/${encodeURIComponent(filename)}`
 const experimentsLoading = ref(false)
 const progress = ref<ExperimentProgress | null>(null)
+const turntableProgress = computed(() => Object.entries(progress.value?.activity?.devices || {})
+  .filter(([, state]) => typeof state.bottle_ready === 'boolean').map(([id, state]) => ({ id, state })))
 const starting = ref(false)
 const pausing = ref(false)
 const resuming = ref(false)
@@ -398,6 +406,7 @@ function normalizeProgress(data: any, fallback: ExperimentProgress | null = prog
     total_steps: totalSteps,
     step_id: data?.step_id ?? fallback?.step_id ?? '',
     elapsed: Number.isFinite(elapsedRaw) ? elapsedRaw : 0,
+    activity: data && 'activity' in data ? data.activity : (data?.step_id === fallback?.step_id ? fallback?.activity : null),
   }
 }
 

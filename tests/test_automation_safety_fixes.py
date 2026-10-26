@@ -263,7 +263,8 @@ def fake_clock(monkeypatch, stall=0):
     clock = Clock(stall)
     monkeypatch.setattr(execution, 'time', clock)  # No wall clock available to the waits.
     monkeypatch.setattr(execution, 'asyncio', SimpleNamespace(
-        sleep=clock.sleep, to_thread=asyncio.to_thread, get_event_loop=asyncio.get_event_loop))
+        sleep=clock.sleep, to_thread=asyncio.to_thread, get_event_loop=asyncio.get_event_loop,
+        create_task=asyncio.create_task, shield=asyncio.shield, CancelledError=asyncio.CancelledError))
     return clock
 
 

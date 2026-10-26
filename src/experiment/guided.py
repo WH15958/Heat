@@ -601,16 +601,8 @@ class GuidedBatch:
         return (self._batch_paused_at if self._batch_paused_at is not None else now) - self._batch_paused_total
 
     async def pumps_stopped(self):
-        status = await asyncio.to_thread(self.dm.read_pump_status, "pump1")
-        for channel in ("3", "4"):
-            data = status.get("channels", {}).get(channel, {})
-            if (data.get("read_ok") is not True or data.get("running") is not False
-                    or data.get("run_status") != "STOP"):
-                raise RuntimeError(f"转盘运动前蠕动泵通道 {channel} 未确认停止")
-        for did in ("syringe_pump1", "syringe_pump2"):
-            state = await asyncio.to_thread(self.dm.syringe(did).read)
-            if state.get("read_ok") is not True or state.get("busy") is not False:
-                raise RuntimeError(f"转盘运动前 {did} 未确认停止")
+        from src.experiment.turntable_sequence import verify_collection_pumps
+        await verify_collection_pumps(self.dm)
 
     async def waste_route(self):
         while True:
@@ -624,9 +616,8 @@ class GuidedBatch:
             raise RuntimeError("转盘运动前未确认三通阀处于 NC 废液位")
 
     async def verify_waste_route(self):
-        status = await asyncio.to_thread(self.dm.valve_operation, "valve1", "status")
-        if status.get("read_ok") is not True or status.get("relay_energized") is not True:
-            raise RuntimeError("转盘运动前废液阀位读取失败或已改变")
+        from src.experiment.turntable_sequence import verify_collection_valve
+        await verify_collection_valve(self.dm)
 
     async def move_turntable(self, *, home, target, step_id, label):
         while True:
