@@ -44,6 +44,11 @@ export function editSource(source: string, change: (doc: Document) => void) {
 
 export function setValue(doc: Document, path: Path, value: unknown) {
   if (value === undefined || value === '') { doc.deleteIn(path); return }
+  // YAML 1.1 setIn creates !!omap for absent parents; recipe objects must be maps.
+  for (let i = 1; i < path.length; i++) {
+    const parent = path.slice(0, i)
+    if (!doc.hasIn(parent)) doc.setIn(parent, doc.createNode(typeof path[i] === 'number' ? [] : {}))
+  }
   doc.setIn(path, value)
 }
 

@@ -65,7 +65,7 @@ export function generateSource(source: string, axes: Axis[], values: number[], b
   if (axes.length !== values.length || values.some(v => !Number.isFinite(v))) throw new Error('条件与变量不匹配')
   return editSource(source, doc => {
     axes.forEach((axis, i) => axis.paths.forEach(path => doc.setIn(path, values[i])))
-    if (!doc.get('metadata')) doc.set('metadata', {})
+    if (!doc.get('metadata')) doc.set('metadata', doc.createNode({}))
     doc.setIn(['metadata', 'batch_id'], batch)
     doc.setIn(['metadata', 'condition_id'], `condition_${index + 1}`)
     doc.setIn(['metadata', 'sample_index'], index + 1)

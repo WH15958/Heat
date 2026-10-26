@@ -7,6 +7,7 @@ from typing import List
 from src.devices.microwave import MicrowaveSegment
 from src.protocols.microwave_params import MicrowaveMode
 from src.protocols.pump_params import PumpDirection, PumpRunMode
+from src.web.device_io import call_device
 
 from src.experiment.parameter_models import (
     SetTemperatureRequest, StartPumpRequest, StopPumpRequest,
@@ -145,8 +146,7 @@ async def refresh_device_bindings(request: Request):
     """重新扫描本机串口并刷新设备绑定解析结果。"""
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, dm.refresh_bindings)
+        return await call_device(dm.refresh_bindings)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -163,8 +163,7 @@ async def connect_heater(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.connect_heater, device_id)
+        result = await call_device(dm.connect_heater, device_id)
         return {"success": result, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -186,8 +185,7 @@ async def disconnect_heater(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.disconnect_heater, device_id)
+        result = await call_device(dm.disconnect_heater, device_id)
         if not result:
             detail = dm.get_last_command_error(device_id)
             raise HTTPException(
@@ -239,8 +237,7 @@ async def set_temperature(
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.set_temperature, device_id, body.temperature)
+        result = await call_device(dm.set_temperature, device_id, body.temperature)
         return {"success": result, "temperature": body.temperature}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -260,8 +257,7 @@ async def start_heater(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.start_heater, device_id)
+        result = await call_device(dm.start_heater, device_id)
         return {"success": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -281,8 +277,7 @@ async def stop_heater(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.stop_heater, device_id)
+        result = await call_device(dm.stop_heater, device_id)
         return {"success": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -295,8 +290,7 @@ async def connect_microwave(device_id: str, request: Request):
     """连接微波仪"""
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.connect_microwave, device_id)
+        result = await call_device(dm.connect_microwave, device_id)
         _raise_if_false(result, "connect")
         return {"success": True, "device_id": device_id}
     except ValueError as e:
@@ -314,8 +308,7 @@ async def disconnect_microwave(device_id: str, request: Request):
     """断开微波仪"""
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.disconnect_microwave, device_id)
+        result = await call_device(dm.disconnect_microwave, device_id)
         _raise_if_false(result, "disconnect")
         return {"success": True, "device_id": device_id}
     except ValueError as e:
@@ -349,9 +342,8 @@ async def configure_microwave_manual(
     dm = get_dm(request)
     try:
         segments = _microwave_segments(body, allow_power_fields=True)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, dm.configure_microwave_manual, device_id, segments
+        result = await call_device(
+            dm.configure_microwave_manual, device_id, segments
         )
         _raise_if_false(result, "configure manual", dm, device_id)
         return {"success": True, "device_id": device_id}
@@ -371,9 +363,8 @@ async def configure_microwave_auto_power(
     dm = get_dm(request)
     try:
         segments = _microwave_segments(body, allow_power_fields=False)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, dm.configure_microwave_auto_power, device_id, segments
+        result = await call_device(
+            dm.configure_microwave_auto_power, device_id, segments
         )
         _raise_if_false(result, "configure auto_power", dm, device_id)
         return {"success": True, "device_id": device_id}
@@ -393,9 +384,8 @@ async def configure_microwave_constant_rate(
     dm = get_dm(request)
     try:
         segments = _microwave_segments(body, allow_power_fields=False)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, dm.configure_microwave_constant_rate, device_id, segments
+        result = await call_device(
+            dm.configure_microwave_constant_rate, device_id, segments
         )
         _raise_if_false(result, "configure constant_rate", dm, device_id)
         return {"success": True, "device_id": device_id}
@@ -418,8 +408,7 @@ async def start_microwave(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Unsupported microwave mode: {body.mode}")
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(
+        result = await call_device(partial(
             dm.start_microwave, device_id, mode, cleanup_on_failure=True))
         _raise_if_false(result, "start", dm, device_id)
         return {"success": True, "device_id": device_id, "mode": mode.value}
@@ -437,8 +426,7 @@ async def stop_microwave(device_id: str, request: Request):
     """停止微波仪输出"""
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.stop_microwave, device_id)
+        result = await call_device(dm.stop_microwave, device_id)
         _raise_if_false(result, "stop", dm, device_id)
         return {"success": True, "device_id": device_id}
     except ValueError as e:
@@ -461,8 +449,7 @@ async def connect_pump(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.connect_pump, device_id)
+        result = await call_device(dm.connect_pump, device_id)
         return {"success": result, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -484,8 +471,7 @@ async def disconnect_pump(device_id: str, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.disconnect_pump, device_id)
+        result = await call_device(dm.disconnect_pump, device_id)
         return {"success": result, "device_id": device_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -537,7 +523,6 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
             "QUANTITY_SPEED": PumpRunMode.QUANTITY_SPEED,
         }
         run_mode = mode_map[body.mode]
-        loop = asyncio.get_event_loop()
         run_time = body.run_time if run_mode in (
             PumpRunMode.TIME_QUANTITY,
             PumpRunMode.TIME_SPEED,
@@ -546,8 +531,8 @@ async def start_pump(device_id: str, body: StartPumpRequest, request: Request):
             PumpRunMode.TIME_QUANTITY,
             PumpRunMode.QUANTITY_SPEED,
         ) else None
-        result = await loop.run_in_executor(
-            None, dm.start_pump_channel, device_id, body.channel,
+        result = await call_device(
+            dm.start_pump_channel, device_id, body.channel,
             body.flow_rate, direction, run_mode, run_time, dispense_volume,
             body.tube_model, body.flow_unit, body.time_unit, body.volume_unit,
             body.repeat_count, body.interval_time, body.interval_time_unit,
@@ -582,8 +567,7 @@ async def stop_pump(device_id: str, body: StopPumpRequest, request: Request):
     """
     dm = get_dm(request)
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, dm.stop_pump_channel, device_id, body.channel)
+        result = await call_device(dm.stop_pump_channel, device_id, body.channel)
         return {"success": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

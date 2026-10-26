@@ -62,3 +62,30 @@ test('deleting can be undone by restoring previous source snapshot', () => {
   assert.equal(history[0], original)
   assert.ok(isSeq(inspectSource(history[0]!).doc!.get('steps', true)))
 })
+
+test('editing omitted parameter and wait maps produces ordinary YAML mappings', () => {
+  let source = 'name: imported\nsteps:\n  - id: a\n    type: log\n'
+  for (const [path, value] of [
+    [['steps', 0, 'params', 'message'], 'hello'],
+    [['steps', 0, 'wait', 'type'], 'duration'],
+    [['steps', 0, 'wait', 'seconds'], 2],
+    [['steps', 0, 'params', 'settings', 'speed_hz'], 100],
+  ] as const) {
+    source = editSource(source, doc => setValue(doc, [...path], value))
+    assert.equal(inspectSource(source).editable, true, source)
+    assert.ok(!source.includes('!!omap'))
+  }
+  const step = parseDocument(source).toJS().steps[0]
+  assert.deepEqual(step.params, { message: 'hello', settings: { speed_hz: 100 } })
+  assert.deepEqual(step.wait, { type: 'duration', seconds: 2 })
+})
+
+test('adding the first microwave segment to omitted params stays editable', () => {
+  const changed = editSource('name: imported\nsteps: [{id: a, type: microwave.configure_auto}]\n', doc => {
+    const path = ['steps', 0, 'params', 'segments']
+    setValue(doc, path, doc.createNode([]))
+    doc.addIn(path, { segment: 1 })
+  })
+  assert.equal(inspectSource(changed).editable, true)
+  assert.deepEqual(parseDocument(changed).toJS().steps[0].params.segments, [{ segment: 1 }])
+})

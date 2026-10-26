@@ -44,7 +44,15 @@ def read_record(batch_id):
 
 
 def records():
-    return [read_record(path.stem) for path in guided.BATCH_DIR.glob("guided_*.json")]
+    try:
+        try:
+            paths = list(guided.BATCH_DIR.iterdir())
+        except FileNotFoundError:
+            paths = []
+        return [read_record(path.stem) for path in paths
+                if path.name.startswith('guided_') and path.suffix == '.json']
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(503, "引导批次记录不可读，请检查存储，禁止启动") from exc
 
 
 def require_guided_recovered():

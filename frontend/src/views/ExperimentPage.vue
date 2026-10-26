@@ -1,6 +1,9 @@
 <template>
   <div class="experiment-page">
     <ExperimentGuide />
+    <el-alert v-if="progressError" :title="progressError" type="warning" :closable="false" show-icon>
+      <el-button @click="pollProgress">刷新状态</el-button>
+    </el-alert>
     <el-alert v-if="recoveryError" :title="recoveryError" type="error" :closable="false" show-icon />
     <el-alert v-for="record in recoveryRecords" :key="record.recovery_id" type="error" :closable="false" show-icon
       :title="`普通实验锁定：${record.filename}`">
@@ -51,13 +54,13 @@
                   inactive-text=""
                   style="margin-right: 12px"
                 />
-                <el-button type="success" @click="startExperiment" :disabled="selectionLoading || isRunning || isPaused || cleanupPending || recoveryBlocked" :loading="starting">
+                <el-button type="success" @click="startExperiment" :disabled="selectionLoading || isRunning || isPaused || cleanupPending || recoveryBlocked || !!progressError" :loading="starting">
                   启动实验
                 </el-button>
                 <el-button type="warning" @click="pauseExperiment" :disabled="!isRunning" :loading="pausing">
                   暂停
                 </el-button>
-                <el-button type="primary" @click="resumeExperiment" :disabled="!isPaused" :loading="resuming">
+                <el-button type="primary" @click="resumeExperiment" :disabled="!isPaused || !!progressError" :loading="resuming">
                   恢复
                 </el-button>
                 <el-button type="danger" @click="stopExperiment" :disabled="!isRunning && !isPaused && !cleanupPending" :loading="stopping">
@@ -84,9 +87,9 @@
               style="margin: 10px 0"
             />
             <p v-for="item in turntableProgress" :key="item.id" role="status">
-              接样转盘 {{ item.id }} · 当前瓶位：{{ item.state.read_ok && item.state.bottle_ready ? `${item.state.current_bottle}号` : '未确认' }}
+              接样转盘 {{ item.id }} · 当前瓶位：{{ !progressError && item.state.read_ok && item.state.bottle_ready ? `${item.state.current_bottle}号` : '未确认' }}
               <span v-if="item.state.target_bottle != null"> · 目标：{{ item.state.target_bottle }}号</span>
-              · 停止：{{ item.state.read_ok && item.state.stop_confirmed ? '已确认' : '未确认' }}
+              · 停止：{{ !progressError && item.state.read_ok && item.state.stop_confirmed ? '已确认' : '未确认' }}
             </p>
           </div>
 
@@ -241,9 +244,11 @@ const selectedExp = ref<ExperimentDetail | null>(null)
 const selectedFilename = ref('')
 const selectionLoading = ref(false)
 let selectionRequest = 0, startRequest = 0, progressRequest = 0
+let progressInFlight: { filename: string; selection: number } | null = null
 const experimentUrl = (filename: string) => `/api/experiments/${encodeURIComponent(filename)}`
 const experimentsLoading = ref(false)
 const progress = ref<ExperimentProgress | null>(null)
+const progressError = ref('')
 const turntableProgress = computed(() => Object.entries(progress.value?.activity?.devices || {})
   .filter(([, state]) => typeof state.bottle_ready === 'boolean').map(([id, state]) => ({ id, state })))
 const starting = ref(false)
@@ -318,6 +323,7 @@ const metadataSummary = computed(() => {
 })
 
 const stateLabel = computed(() => {
+  if (progressError.value) return '状态未确认'
   const map: Record<string, string> = {
     idle: '空闲', running: '运行中', paused: '已暂停',
     completed: '已完成', failed: '失败', stopped: '已停止',
@@ -326,6 +332,7 @@ const stateLabel = computed(() => {
 })
 
 const stateTagType = computed(() => {
+  if (progressError.value) return 'warning'
   const map: Record<string, string> = {
     idle: 'info', running: 'success', paused: 'warning',
     completed: 'success', failed: 'danger', stopped: 'info',
@@ -441,6 +448,8 @@ function handleWsMessage(event: MessageEvent) {
   try {
     const msg = JSON.parse(event.data)
     if (msg.type === 'experiment_progress' && msg.filename === selectedFilename.value) {
+      ++progressRequest // Discard REST snapshots requested before this event.
+      progressError.value = ''
       progress.value = normalizeProgress(msg)
       if (terminalStates.has(progress.value.state) && !cleanupPending.value) stopPolling()
       else startPolling()
@@ -471,6 +480,7 @@ function handleWsMessage(event: MessageEvent) {
       } else if (evt === 'run_resumed') {
         addLog('info', '实验恢复', `Run: ${data.run_id}`)
       } else if (evt === 'run_finished') {
+        ++progressRequest
         const persistenceFailed = data.persistence_status === 'error'
         const level = persistenceFailed ? 'error' : data.status === 'completed' ? 'success' : data.status === 'failed' ? 'error' : 'warning'
         const label = persistenceFailed
@@ -567,6 +577,7 @@ async function selectExperiment(filename: string) {
   selectedFilename.value = ''
   selectedExp.value = null
   progress.value = null
+  progressError.value = ''
   currentRunId.value = ''
   currentSampleId.value = ''
   currentMetadata.value = {}
@@ -584,7 +595,7 @@ async function selectExperiment(filename: string) {
 }
 
 async function startExperiment() {
-  if (starting.value || selectionLoading.value || !selectedExp.value || !selectedFilename.value) return
+  if (starting.value || selectionLoading.value || progressError.value || !selectedExp.value || !selectedFilename.value) return
   const filename = selectedFilename.value, experiment = selectedExp.value
   const selection = selectionRequest, request = ++startRequest
   const stillSelected = () => !wsClosed && !selectionLoading.value && request === startRequest
@@ -600,7 +611,7 @@ async function startExperiment() {
         { confirmButtonText: '启动', cancelButtonText: '取消', type: 'info' },
       )
     } catch { return }
-    if (!stillSelected() || recoveryBlocked.value) return
+    if (!stillSelected() || recoveryBlocked.value || progressError.value) return
     const res = await axios.post(`${experimentUrl(filename)}/start`, {
       save_log: saveLog.value,
     })
@@ -633,6 +644,7 @@ async function pauseExperiment() {
 }
 
 async function resumeExperiment() {
+  if (progressError.value) return
   resuming.value = true
   try {
     await axios.post(`${experimentUrl(selectedFilename.value)}/resume`)
@@ -672,10 +684,14 @@ async function stopExperiment() {
 
 async function pollProgress() {
   if (!selectedFilename.value) return
+  if (progressInFlight?.filename === selectedFilename.value && progressInFlight.selection === selectionRequest) return
   const filename = selectedFilename.value, selection = selectionRequest, request = ++progressRequest
+  const inFlight = { filename, selection }
+  progressInFlight = inFlight
   try {
-    const res = await axios.get(`${experimentUrl(filename)}/progress`)
+    const res = await axios.get(`${experimentUrl(filename)}/progress`, { timeout: 6000 })
     if (wsClosed || selection !== selectionRequest || filename !== selectedFilename.value || request !== progressRequest) return
+    progressError.value = ''
     const nextProgress = normalizeProgress(res.data)
     if (nextProgress.state === 'idle' && progress.value && terminalStates.has(progress.value.state)) {
       progress.value.cleanup_pending = false
@@ -687,7 +703,11 @@ async function pollProgress() {
     if (terminalStates.has(progress.value.state) && !cleanupPending.value) stopPolling()
     else if (cleanupPending.value && !pollTimer) startPolling()
   } catch (e) {
-    // ignore
+    if (!wsClosed && selection === selectionRequest && filename === selectedFilename.value && request === progressRequest) {
+      progressError.value = '实验状态读取失败，当前状态未确认；上次记录不代表设备已停止，请刷新后再启动或恢复。'
+    }
+  } finally {
+    if (progressInFlight === inFlight) progressInFlight = null
   }
 }
 

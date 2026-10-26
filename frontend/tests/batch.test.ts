@@ -14,6 +14,13 @@ test('microwave minutes must represent whole seconds without truncation', () => 
 
 const source = readFileSync(new URL('../../experiments/syringe_dual_water.yaml', import.meta.url), 'utf8')
 const axes = (): Axis[] => variablesFrom(source).map(v => ({ ...v, mode: 'fixed', start: v.value, end: v.value, interval: 1, list: String(v.value) }))
+
+test('batch generation accepts omitted or null optional metadata', () => {
+  for (const metadata of ['', 'metadata: null\n']) {
+    const generated = parse(generateSource(`name: test\n${metadata}steps: []\n`, [], [], 'audit', 0))
+    assert.deepEqual(generated.metadata, { batch_id: 'audit', condition_id: 'condition_1', sample_index: 1 })
+  }
+})
 test('real template round trip keeps actions and fixed parameters', () => {
   const a = axes()
   assert.equal(a.length, 4)

@@ -100,7 +100,13 @@ def write_record(record):
 
 def stored_records(live):
     records = []
-    for path in PROGRAM_DIR.glob("mwprogram_*.json"):
+    try:
+        paths = list(PROGRAM_DIR.iterdir())
+    except FileNotFoundError:
+        paths = []
+    for path in paths:
+        if not path.name.startswith("mwprogram_") or path.suffix != '.json':
+            continue
         record = json.loads(path.read_text(encoding="utf-8"))
         if record["program_id"] not in live and (record["state"] not in TERMINAL or record.get("cleanup_required")):
             record.update(state="interrupted", recovery_required=True)

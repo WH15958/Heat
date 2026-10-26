@@ -475,7 +475,8 @@ def test_empty_device_backend_lives_independently_and_commits_confirmed_exit(tmp
                 status = request(home, 'backend', 'status', timeout=0.5)
                 if status['state'] == 'ready':
                     break
-            except (FileNotFoundError, ConnectionRefusedError):
+            except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+                # This is a read-only readiness probe within the existing deadline.
                 pass
             time.sleep(0.05)
         assert status and status['state'] == 'ready'
@@ -511,6 +512,9 @@ def test_empty_device_backend_lives_independently_and_commits_confirmed_exit(tmp
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     current = request(home, 'backend', 'status')
+                    if current['state'] == 'ready':
+                        # The initial shutdown may have arrived during startup.
+                        request(home, 'backend', 'shutdown', instance_id=current['instance_id'])
                     if current['state'] == 'stopped':
                         request(home, 'backend', 'commit_exit', instance_id=current['instance_id'])
                         break
