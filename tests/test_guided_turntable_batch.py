@@ -301,6 +301,7 @@ def test_pause_during_indexing_finishes_motion_then_waits_without_replay():
         await until(lambda: ('turntable_next', 2) in dm.calls)
         await batch.pause()
         await until(lambda: dm.turntable('turntable1').summary()['current_bottle'] == 2)
+        await until(lambda: batch.state.value == 'paused')
         assert batch.state.value == 'paused'
         assert len(batch.record['groups']) == 1
         writes = list(dm.calls)

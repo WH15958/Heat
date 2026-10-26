@@ -114,6 +114,9 @@ class ExperimentEngine:
         self._on_complete = callback
 
     def load_steps(self, steps: List[ExperimentStep], name: str = "", filename: str = "", metadata: dict = None):
+        from src.experiment.actions import validate_turntable_step
+        for step in steps:
+            validate_turntable_step(step)
         if any(s.wait.type == WaitType.MICROWAVE_MONITORED_HOLD and
                (not s.enabled or s.on_error != "stop") for s in steps):
             raise ValueError("微波保护保温必须启用且失败停止")
@@ -151,8 +154,13 @@ class ExperimentEngine:
             try:
                 await self._executor.reserve_valves(self._steps)
                 await self._executor.reserve_syringes(self._steps)
-            except Exception:
-                await self._executor.release_valves()
+                await self._executor.reserve_turntables(self._steps)
+            except (Exception, asyncio.CancelledError):
+                if self._executor._turntables:
+                    self._cleanup_result = await self._executor.stop_active_devices(source="normal_cleanup")
+                else:
+                    self._executor.release_unused_syringes()
+                    await self._executor.release_valves()
                 raise
         try:
             self._exp_logger.start_run(
@@ -163,8 +171,11 @@ class ExperimentEngine:
             )
         except Exception:
             if isinstance(self._executor, StepExecutor):
-                self._executor.release_unused_syringes()
-                await self._executor.release_valves()
+                if self._executor._turntables:
+                    self._cleanup_result = await self._executor.stop_active_devices(source="normal_cleanup")
+                else:
+                    self._executor.release_unused_syringes()
+                    await self._executor.release_valves()
             raise
         self._state = ExperimentState.RUNNING
         if isinstance(self._executor, StepExecutor):
@@ -312,6 +323,9 @@ class ExperimentEngine:
         cancel_valves = getattr(self._executor, "cancel_pending_valve_operations", None)
         if callable(cancel_valves):
             cancel_valves()
+        cancel_turntables = getattr(self._executor, "cancel_pending_turntable_operations", None)
+        if callable(cancel_turntables):
+            cancel_turntables()
 
     async def stop(self):
         self.request_stop()

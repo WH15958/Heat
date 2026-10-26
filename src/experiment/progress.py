@@ -58,6 +58,11 @@ class ActivityProgress:
         if "read_ok" not in data and "status_confirmed" in data:
             self.devices[device_id]["read_ok"] = data["status_confirmed"] is True
         self.devices[device_id]["result"] = (data.get("action") or {}).get("result")
+        if "bottle_ready" in data:
+            self.devices[device_id].update({key: data.get(key) for key in (
+                "current_bottle", "bottle_ready", "position", "stop_confirmed",
+                "operation", "from_bottle", "target_position")})
+            self.devices[device_id]["target_bottle"] = (data.get("action") or {}).get("target_bottle")
 
     def snapshot(self):
         if self.frozen is not None:

@@ -11,6 +11,7 @@ from src.experiment.actions import (
     WaitCondition,
     WaitType,
     validate_flow_duration,
+    validate_turntable_step,
 )
 
 EXPERIMENTS_DIR = data_path("experiments")
@@ -73,6 +74,7 @@ ACTION_MAP = {
 
 ACTION_MAP.update({a.value: a for a in ActionType if a.value.startswith("syringe_pump.")})
 ACTION_MAP.update({a.value: a for a in (ActionType.SYRINGE_PAIR_DISPENSE,)})
+ACTION_MAP.update({a.value: a for a in ActionType if a.value.startswith("turntable.")})
 
 WAIT_MAP = {
     "syringe_pump_complete": WaitType.SYRINGE_PUMP_COMPLETE,
@@ -127,6 +129,8 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
     step_ids = set()
     pump_repeat_counts = {}
     syringe_ids = None
+    turntable_bottles = {}
+    turntable_configs = None
     for s in data.get("steps", []):
         if not isinstance(s, dict):
             raise ValueError("Invalid experiment step: expected object")
@@ -383,6 +387,28 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
             on_error=on_error,
         )
         validate_flow_duration(step)
+        validate_turntable_step(step)
+        if action_type.value.startswith("turntable."):
+            did = params["device_id"]
+            if validate_devices:
+                if turntable_configs is None:
+                    from src.utils.config import ConfigManager
+                    turntable_configs = {c.device_id: c for c in ConfigManager().load().turntables if c.enabled}
+                if did not in turntable_configs:
+                    raise ValueError(f"转盘 {did} 未配置或未启用")
+            if enabled:
+                if action_type == ActionType.TURNTABLE_HOME:
+                    turntable_bottles[did] = 1
+                elif action_type == ActionType.TURNTABLE_STOP:
+                    turntable_bottles.pop(did, None)
+                else:
+                    if did not in turntable_bottles:
+                        raise ValueError(f"步骤 {step_id}：下一瓶前须在本次配方中回原点")
+                    turntable_bottles[did] += 1
+                    if validate_devices and turntable_bottles[did] > turntable_configs[did].bottle_count:
+                        raise ValueError(f"步骤 {step_id}：已到最后瓶位，不允许循环换瓶")
+        elif enabled and action_type == ActionType.EMERGENCY_STOP:
+            turntable_bottles.clear()
         steps.append(step)
 
     return {

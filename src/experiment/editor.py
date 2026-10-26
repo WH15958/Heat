@@ -131,7 +131,8 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
             seen_ids = set()
             for index, step in enumerate(data['steps']):
                 try:
-                    parse_experiment_data({**data, 'steps': [step]}, filename, validate_devices=False)
+                    probe_steps = data['steps'][:index + 1] if isinstance(step, dict) and str(step.get('type', '')).startswith('turntable.') else [step]
+                    parse_experiment_data({**data, 'steps': probe_steps}, filename, validate_devices=False)
                     current_id = step['id']
                     if current_id in seen_ids:
                         raise ValueError('Duplicate step id')
@@ -168,10 +169,24 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
                 'microwave': {d.device_id for d in config.microwaves if d.enabled},
                 'syringe_pump': {d.device_id for d in config.syringe_pumps if d.enabled},
                 'valve': {d.device_id for d in config.valves if d.enabled},
+                'turntable': {d.device_id for d in config.turntables if d.enabled},
             }
+            bottle_counts = {d.device_id: d.bottle_count for d in config.turntables if d.enabled}
+            bottle_sequence = {}
             for index, step in enumerate(data['steps']):
                 group = step['type'].split('.')[0]
                 device_id = step.get('params', {}).get('device_id')
+                if step.get('enabled', True):
+                    if step['type'] == 'turntable.home_bottle':
+                        bottle_sequence[device_id] = 1
+                    elif step['type'] == 'turntable.stop':
+                        bottle_sequence.pop(device_id, None)
+                    elif step['type'] == 'emergency_stop':
+                        bottle_sequence.clear()
+                    elif step['type'] == 'turntable.next_bottle':
+                        bottle_sequence[device_id] += 1  # Parser has checked the prior home.
+                        if device_id in bottle_counts and bottle_sequence[device_id] > bottle_counts[device_id]:
+                            errors.append(issue('已到最后瓶位，不允许循环换瓶', ('steps', index), step['id']))
                 if group in device_groups and device_id and device_id not in device_groups[group]:
                     warnings.append(issue(f'未知或未启用的设备：{device_id}', ('steps', index, 'params', 'device_id'), step['id']))
                 wait = step.get('wait', {})

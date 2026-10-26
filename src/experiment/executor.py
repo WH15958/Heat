@@ -7,7 +7,9 @@ from src.experiment.actions import (
     ActionType,
     WaitType,
     validate_flow_duration,
+    validate_turntable_step,
 )
+from src.experiment.recipe_turntable import RecipeTurntable, turntable_steps, check_turntable_connections
 from src.experiment.progress import ActivityProgress
 from src.devices.microwave import MicrowaveSegment
 from src.devices.syringe_pump import is_initialization_pending
@@ -45,6 +47,7 @@ class StepExecutor:
         self._syringe_owner = object()
         self._reserved_valves = set()
         self._valve_owner = object()
+        self._turntables = {}
         self._last_error = None
         self._current_step = None
         self.last_device_result = None
@@ -93,10 +96,14 @@ class StepExecutor:
 
     async def reserve_valves(self, steps):
         ids = {s.params["device_id"] for s in steps if s.enabled and s.type == ActionType.VALVE_SWITCH}
+        if any(s.type != ActionType.TURNTABLE_STOP for s in turntable_steps(steps)):
+            ids.add("valve1")
         try:
             for device_id in sorted(ids):
-                await asyncio.to_thread(self._dm.claim_valve, device_id, self._valve_owner)
-                self._reserved_valves.add(device_id)
+                def claim(did=device_id):
+                    self._dm.claim_valve(did, self._valve_owner)
+                    self._reserved_valves.add(did)
+                await self._reserve_resource(claim)
         except Exception:
             await self.release_valves()
             raise
@@ -113,6 +120,8 @@ class StepExecutor:
 
     async def reserve_syringes(self, steps):
         ids = set()
+        if any(s.type != ActionType.TURNTABLE_STOP for s in turntable_steps(steps)):
+            ids.update(("syringe_pump1", "syringe_pump2"))
         for step in steps:
             if not step.enabled:
                 continue
@@ -124,10 +133,29 @@ class StepExecutor:
                 ids.add(step.wait.device_id)
         try:
             for device_id in sorted(ids):
-                await asyncio.to_thread(self._dm.syringe(device_id).claim, self._syringe_owner)
-                self._reserved_syringes.add(device_id)
+                def claim(did=device_id):
+                    self._dm.syringe(did).claim(self._syringe_owner)
+                    self._reserved_syringes.add(did)
+                await self._reserve_resource(claim)
         except Exception:
             self.release_unused_syringes()
+            raise
+
+    async def _reserve_resource(self, claim):
+        # Track a completed synchronous claim even if startup is cancelled.
+        task = asyncio.create_task(asyncio.to_thread(claim))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
             raise
 
     def release_unused_syringes(self):
@@ -136,6 +164,51 @@ class StepExecutor:
         for device_id in self._reserved_syringes - self._active_syringes:
             self._dm.syringe(device_id).release(self._syringe_owner)
         self._reserved_syringes.intersection_update(self._active_syringes)
+
+    async def reserve_turntables(self, steps):
+        check_turntable_connections(self._dm, steps)
+        selected = turntable_steps(steps)
+        for did in sorted({s.params["device_id"] for s in selected}):
+            def changed(state, device_id=did):
+                self.activity.device(device_id, state)
+            helper = RecipeTurntable(self._dm, self._should_stop, changed, device_id=did)
+            self._turntables[did] = helper
+            calibrated = any(s.params["device_id"] == did and s.type != ActionType.TURNTABLE_STOP for s in selected)
+            await helper.claim(require_calibration=calibrated)
+
+    def cancel_pending_turntable_operations(self):
+        for helper in self._turntables.values():
+            helper.invalidate_pending()
+
+    async def _execute_turntable(self, step):
+        validate_turntable_step(step)
+        helper = self._turntables.get(step.params["device_id"])
+        if helper is None:
+            raise RuntimeError("转盘尚未被本次配方占用")
+        before = helper.bottle
+        target = (1 if step.type == ActionType.TURNTABLE_HOME else
+                  before + 1 if step.type == ActionType.TURNTABLE_NEXT and before is not None else None)
+        details = {"operation": step.type.value, "from_bottle": before,
+                   "target_position": (target - 1) * helper.control.config.pulses_per_bottle if target else None}
+        helper._changed = lambda state: self.activity.device(helper.device_id, {**state, **details})
+        try:
+            if step.type != ActionType.TURNTABLE_STOP:
+                if step.type == ActionType.TURNTABLE_HOME:
+                    helper.rearm_home()
+                while True:
+                    if await self._wait_for_resume() is None:
+                        return False
+                    pause_generation = self._pause_generation
+                    await helper.verify_liquid_route()
+                    if pause_generation == self._pause_generation and not self._is_paused():
+                        break
+            state = await helper.execute_action(step.type)
+            self.activity.device(helper.device_id, {**state, **details})
+            return True
+        finally:
+            state = await helper._call(helper.control.summary)
+            self.last_device_result = {**state, **details, "device_type": "turntable",
+                                       "to_bottle": helper.bottle}
 
     @property
     def last_error(self):
@@ -269,7 +342,10 @@ class StepExecutor:
             if self._should_stop():
                 return False
 
-            if step.type == ActionType.SYRINGE_PAIR_DISPENSE:
+            if step.type.value.startswith("turntable."):
+                if not await self._execute_turntable(step):
+                    return False
+            elif step.type == ActionType.SYRINGE_PAIR_DISPENSE:
                 if not await self._dispense_pair(step):
                     return False
             elif step.type.value.startswith("syringe_pump."):
@@ -511,6 +587,8 @@ class StepExecutor:
                 pass
 
             elif step.type == ActionType.EMERGENCY_STOP:
+                for helper in self._turntables.values():
+                    helper.bottle = None
                 self._pump_start_confirmed.clear()
                 result = await loop.run_in_executor(None, self._dm.emergency_stop_all)
                 if not result:
@@ -614,7 +692,18 @@ class StepExecutor:
         self._pump_start_confirmed.clear()
         loop = asyncio.get_running_loop()
         success = True
-        self.release_unused_syringes()
+        for did, helper in list(self._turntables.items()):
+            try:
+                if await helper.cleanup(normal=source == "normal_cleanup"):
+                    del self._turntables[did]
+                else:
+                    success = False
+                    self._last_error = helper.last_error or "转盘停止或释放未确认"
+            except Exception as exc:
+                self._last_error = str(exc)
+                success = False
+        if success:
+            self.release_unused_syringes()
 
         for device_id in list(self._active_syringes):
             control = self._dm.syringe(device_id)
@@ -625,10 +714,10 @@ class StepExecutor:
                          and state.get("action", {}).get("result") in ("completed", "sent_unverified"))
                 stopped = clean or await asyncio.to_thread(control.stop)
                 if stopped:
-                    if self.release_resources_on_cleanup:
+                    if self.release_resources_on_cleanup and not self._turntables:
                         control.release(self._syringe_owner)
                     self._active_syringes.discard(device_id)
-                    if self.release_resources_on_cleanup:
+                    if self.release_resources_on_cleanup and not self._turntables:
                         self._reserved_syringes.discard(device_id)
                 else:
                     success = False

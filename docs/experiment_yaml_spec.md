@@ -1,5 +1,66 @@
 # Heat 实验 YAML 规范
 
+## 搭建式转盘动作（2026-10-26）
+
+| 动作 | 必填参数 | 完成条件 |
+| --- | --- | --- |
+| `turntable.home_bottle` | `device_id: turntable1` | 机械回原点，确认1号瓶及停止 |
+| `turntable.next_bottle` | `device_id: turntable1` | 本次运行已回原点，下一瓶目标坐标及停止均确认 |
+| `turntable.stop` | `device_id: turntable1` | 停止请求及新鲜停止确认，不检查液路 |
+
+不接受速度、任意瓶号或脉冲参数；仅允许 `wait: {type: none}`（可省略）和 `on_error: stop`（可省略）。速度及超时取设备配置，本机换瓶4000、回原点1000脉冲/秒。每瓶12000脉冲，编号顺时针递增，转台沿已标定正向移动。12号后报错，禁止回绕；再次显式回原点可回1号。禁用的回原点不建立基准，停止及急停会清除本次基准；下一瓶不能沿用手动或上次执行结果。
+
+回原点/下一瓶前要求新鲜读回 pump1 通道3/4停止、syringe_pump1/2空闲及 valve1 NC废液位。任何缺失、断连、读取失败或条件不满足均中止；不自动切阀、停泵或等待滴液。每个动作自身等待终态，失败不可跳过。暂停监督已发运动至结束，恢复不重放；实验停止取消未发动作、停机确认，异常保留恢复锁。结束不自动回原点。
+
+以下仅示范编排顺序，独立液路用日志占位；不执行进料或收液，也不是完整实验SOP。滴液5秒只是示例，必须换成现场确认值。正式配方须在占位位置插入实际泵阀步骤，且换瓶前再停泵、切NC。转盘动作不生成额外样品、不证明收液完成。
+
+```yaml
+name: 转盘步骤顺序示例
+steps:
+  - id: stop_ch3
+    type: pump.stop_channel
+    params: {device_id: pump1, channel: 3}
+  - id: stop_ch4
+    type: pump.stop_channel
+    params: {device_id: pump1, channel: 4}
+  - id: stop_syringe1
+    type: syringe_pump.stop
+    params: {device_id: syringe_pump1}
+  - id: stop_syringe2
+    type: syringe_pump.stop
+    params: {device_id: syringe_pump2}
+  - id: waste_before_home
+    type: valve.switch
+    params: {device_id: valve1, position: NC}
+  - id: home
+    type: turntable.home_bottle
+    params: {device_id: turntable1}
+  - id: independent_liquid_steps
+    type: log
+    params: {message: "此处替换为经确认的独立液路步骤；本例不收液"}
+  - id: stop_before_index3
+    type: pump.stop_channel
+    params: {device_id: pump1, channel: 3}
+  - id: stop_before_index4
+    type: pump.stop_channel
+    params: {device_id: pump1, channel: 4}
+  - id: stop_before_index_syringe1
+    type: syringe_pump.stop
+    params: {device_id: syringe_pump1}
+  - id: stop_before_index_syringe2
+    type: syringe_pump.stop
+    params: {device_id: syringe_pump2}
+  - id: waste_before_index
+    type: valve.switch
+    params: {device_id: valve1, position: NC}
+  - id: drip
+    type: wait
+    wait: {type: duration, seconds: 5}
+  - id: next_bottle
+    type: turntable.next_bottle
+    params: {device_id: turntable1}
+```
+
 适用人群：需要编写、审核或扩展实验 YAML 的使用者与开发者。
 
 ---
@@ -913,7 +974,7 @@ interval_time: 0
 
 引导式正式组 metadata 增加 `bottle_number`（组号对应的瓶位）、`collection_device_id: turntable1` 和 `collection_status`（pending、collecting、collected 或 possibly_partial）。运行时更新收取状态；停止或故障可能留下部分产物，不得仅凭组号或瓶号判为完整收取。旧日志及旧样品关联不回填。
 
-转盘准备回零、清洗后滴液等待与换瓶、整批结束停机回零均由外层 `GuidedBatch/GuidedTurntable` 编排，完整批次 plan 的 `collection` 保存该策略；本轮没有新增公开转盘 YAML 动作或等待类型。导出的单组 YAML 只包含组内液路与反应步骤，瓶号 metadata 是追踪信息，不会驱动转盘，也不保证批次换瓶联锁。需要自动接样时必须通过引导式完整批次运行，不能把单组 YAML 当作完整批次执行。
+转盘准备回零、清洗后滴液等待与换瓶、整批结束停机回零均由外层 `GuidedBatch/GuidedTurntable` 编排，完整批次 plan 的 `collection` 保存该策略；搭建式另有下文三个独立转盘动作，不新增等待类型。导出的单组 YAML 只包含组内液路与反应步骤，瓶号 metadata 是追踪信息，不会驱动转盘，也不保证批次换瓶联锁。需要完整自动接样流程时使用引导式完整批次，或自行编排包含下文转盘动作及全部液路、滴液等待步骤的搭建式配方，不能把导出的单组 YAML 当作完整批次执行。
 
 
 ### 流量模式的编排定时排液

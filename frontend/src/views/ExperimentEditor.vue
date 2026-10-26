@@ -82,13 +82,13 @@
           <p class="hint">未填字段保留引擎默认值；已有别名参数可在高级 YAML 中核对。</p>
         </details>
         <details open><summary>步骤后的等待</summary>
-          <select :value="step.wait?.type || 'none'" @change="changeWaitType(inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
+          <select :disabled="step.type.startsWith('turntable.')" :value="step.wait?.type || 'none'" @change="changeWaitType(inputText($event))"><option v-for="option in waitOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select>
           <ParameterFields :fields="waitFields(step.wait?.type)" :values="step.wait || {}" :devices="devicesFor(waitGroup(step.wait?.type))" @change="(k, v) => set(['steps', selected, 'wait', k], v)" />
           <template v-if="['heater_pair_stable','heater_pair_reached'].includes(step.wait?.type || '')">
             <div v-for="i in 2" :key="i"><strong>加热器 {{ i }}</strong><ParameterFields :fields="heaterStableTargetFields" :values="step.wait?.targets?.[i-1] || {}" :devices="devicesFor('heater')" @change="(k, v) => set(['steps', selected, 'wait', 'targets', i-1, k], v)" /></div>
           </template>
         </details>
-        <label>步骤失败时<select :value="step.on_error || 'stop'" @change="set(['steps', selected, 'on_error'], inputText($event))"><option value="stop">停止实验</option><option value="skip">跳过并继续</option></select></label>
+        <label>步骤失败时<select :disabled="step.type.startsWith('turntable.')" :value="step.on_error || 'stop'" @change="set(['steps', selected, 'on_error'], inputText($event))"><option value="stop">停止实验</option><option value="skip">跳过并继续</option></select></label>
         <el-button @click="openAdvanced(['steps', selected], '步骤完整 YAML（含额外字段）')">高级 YAML</el-button>
       </aside>
       <aside class="inspector" v-else><p>选择步骤以编辑参数</p></aside>
@@ -188,8 +188,27 @@ function summary(item: Step) {
 const localErrors = computed(() => {
   if (!inspection.value.editable) return []
   const ids = new Set<string>()
+  const bottleSequence = new Map<string, number>()
   return steps.value.flatMap((s, i) => {
     const errors = fieldErrors(parameterFields(s), s.params || {}).concat(fieldErrors(waitFields(s.wait?.type), s.wait || {}))
+    if (s.type.startsWith('turntable.')) {
+      if (Object.keys(s.params || {}).some(k => k !== 'device_id')) errors.push('转盘步骤只接受设备参数')
+      if ((s.wait?.type || 'none') !== 'none' || (s.on_error || 'stop') !== 'stop') errors.push('转盘步骤必须不附加等待且失败停止')
+      const did = s.params?.device_id
+      if (s.enabled !== false && typeof did === 'string') {
+        if (s.type === 'turntable.home_bottle') bottleSequence.set(did, 1)
+        else if (s.type === 'turntable.stop') bottleSequence.delete(did)
+        else if (s.type === 'turntable.next_bottle') {
+          const bottle = bottleSequence.get(did)
+          if (bottle == null) errors.push('下一瓶前须在本次配方中回原点')
+          else {
+            bottleSequence.set(did, bottle + 1)
+            const count = registry.value.turntables?.[did]?.bottle_count
+            if (Number.isInteger(count) && bottle + 1 > count) errors.push('已到最后瓶位，不允许循环换瓶')
+          }
+        }
+      }
+    } else if (s.enabled !== false && s.type === 'emergency_stop') bottleSequence.clear()
     if (['heater_pair_stable','heater_pair_reached'].includes(s.wait?.type || '')) {
       for (let i = 0; i < 2; i++) errors.push(...fieldErrors(heaterStableTargetFields, s.wait?.targets?.[i] || {}))
     }
