@@ -170,7 +170,7 @@ function addSegment() {
   const number = [1, 2, 3, 4, 5].find(n => !used.has(n))
   mutate(doc => {
     const path: Path = ['steps', selected.value, 'params', 'segments']
-    if (!doc.hasIn(path)) doc.setIn(path, [])
+    if (!doc.hasIn(path)) setValue(doc, path, doc.createNode([]))
     doc.addIn(path, { segment: number })
   })
 }

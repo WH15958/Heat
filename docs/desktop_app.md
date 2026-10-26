@@ -6,7 +6,7 @@
 
 ## 安装与首次导入
 
-1. 获取已完成构建及文件一致性核对的 `Heat-Setup-0.1.4-x64.exe`。安装目标默认为当前用户的 `%LOCALAPPDATA%\Programs\Heat`，使用者无需另装 Python、Node.js 或 npm。
+1. 获取已完成构建及文件一致性核对的 `Heat-Setup-0.1.5-x64.exe`。安装目标默认为当前用户的 `%LOCALAPPDATA%\Programs\Heat`，使用者无需另装 Python、Node.js 或 npm。
 2. 安装包包含 Microsoft WebView2 x64 离线安装程序；检测到已有运行时时直接使用，否则离线安装并检查结果。安装失败须先处理错误，不能跳过运行时检查。设备所需的 USB 串口驱动仍须按对应设备说明准备。
 3. 首次启动前，在原 Web 服务窗口按 `Ctrl+C` 正常退出，等待实验停止、设备清理及记录保存完成。仅关闭浏览器不会停止原后端。桌面后台使用本机 `127.0.0.1:8000`；旧服务或其他程序占用 8000 时，应先解决占用，不能靠结束不明进程绕过检查。
 4. 启动 Heat，按导入向导选择原项目根目录，其中必须包含有效的 `config/system_config.yaml`。源目录和桌面目标不能相同或互相包含。导入前建议另留完整备份；向导只读取原文件，不移动或改写原项目。
@@ -83,7 +83,7 @@ WebView2 输入须通过微软有效数字签名、产品信息、x64 文件名�
 | 产物 | 位置 |
 | --- | --- |
 | 程序目录，含 `Heat.exe`、`HeatBackend.exe` 和共享依赖 | `output/desktop/dist/Heat` |
-| 当前版本安装器 | `output/desktop/release/Heat-Setup-0.1.4-x64.exe` |
+| 当前版本安装器 | `output/desktop/release/Heat-Setup-0.1.5-x64.exe` |
 | 版本、依赖与 SHA-256 发行清单 | `output/desktop/release-manifest.json` |
 
 发布检查按明确资源清单收集静态页面和代码依赖，拒绝夹带 `config/`、`data/`、`output/`、`logs/`、`reports/`、`experiments/` 等现场目录。不得通过打包整个工作树解决缺资源问题。构建产物保持在被 Git 忽略的 `output/`，不进入源码提交。
@@ -98,7 +98,11 @@ python -c "import src.web.app; import src.web.api.experiments; import src.web.ap
 
 桌面依赖、构建脚本或退出协调变更须按影响范围补软件检查；文档摘要变更只做内容和 diff 检查。完整分支、提交与推送规则仍遵循 [testing_and_merge_flow.md](testing_and_merge_flow.md)。
 
-### 当前构建 0.1.4（2026-10-26）
+### 当前构建 0.1.5（2026-10-26）
+
+纳入[本轮全项目审查修复](archive/reviews/project-review-2026-10-26.md)：手动请求取消时保留控制锁至工作线程结束，恢复目录不可读时阻止启动，损坏样品 CSV 保留原文件，实验页拒绝过时进度并提示状态未确认，修复省略参数和 metadata 的配方编辑/生成。升级保留桌面工作区，不改变设备配置、历史或恢复记录。软件回归与发行核验结果见[0.1.5 更新记录](archive/reviews/desktop-release-0.1.5-2026-10-26.md)。
+
+### 历史构建 0.1.4（2026-10-26）
 
 按用户最新授权，将当前项目源码及重新构建的前端纳入安装包，包含 CL-01A 转盘手动控制、引导式接样及搭建式的回原点/下一瓶/停止积木。搭建式要求本次运行先回原点、末瓶不循环，每次运动前检查停泵及NC废液位；停止未知时保留占用和恢复锁。升级不会将仓库配置自动覆盖到桌面工作区，已有工作区仍须核对转盘绑定与标定配置。
 

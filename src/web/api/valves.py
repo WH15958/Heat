@@ -1,9 +1,8 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, StrictBool
 
 from src.web.api.devices import protect_guided_devices
+from src.web.device_io import call_device
 
 router = APIRouter(prefix="/valve", tags=["valve"], dependencies=[Depends(protect_guided_devices)])
 
@@ -17,7 +16,7 @@ async def operation(request, device_id, action, energized=None):
     if device_id not in dm.valves:
         raise HTTPException(404, "阀门不存在")
     try:
-        status = await asyncio.to_thread(dm.valve_operation, device_id, action, energized)
+        status = await call_device(dm.valve_operation, device_id, action, energized)
         return {"success": True, **status}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

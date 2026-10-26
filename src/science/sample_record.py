@@ -38,21 +38,32 @@ def _ensure_dir():
         raise
 
 
-def _existing_run_ids() -> set:
+def _read_sample_rows():
     if not SAMPLES_CSV.exists():
-        return set()
-    ids = set()
-    try:
-        with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rid = row.get("run_id", "").strip()
-                if rid:
-                    ids.add(rid)
-    except Exception as e:
-        logger.warning(f"Failed to read existing sample ids from {SAMPLES_CSV}: {e}")
-        pass
-    return ids
+        return list(SAMPLE_HEADERS), []
+    with open(SAMPLES_CSV, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f, strict=True)
+        try:
+            fields = reader.fieldnames
+        except (csv.Error, UnicodeError) as exc:
+            raise OSError("samples.csv 表头损坏；原文件已保留") from exc
+        if fields is None:
+            return list(SAMPLE_HEADERS), []
+        if (not {'sample_id', 'run_id'}.issubset(fields) or any(not field for field in fields)
+                or len(set(fields)) != len(fields)):
+            raise OSError("samples.csv 表头损坏；原文件已保留")
+        try:
+            rows = list(reader)
+        except (csv.Error, UnicodeError) as exc:
+            raise OSError("samples.csv 格式损坏；原文件已保留") from exc
+        if any(None in row or any(value is None for value in row.values()) for row in rows):
+            raise OSError("samples.csv 行列数量不一致；原文件已保留")
+        return fields, rows
+
+
+def _existing_run_ids() -> set:
+    _, rows = _read_sample_rows()
+    return {row['run_id'].strip() for row in rows if row['run_id'].strip()}
 
 
 def existing_sample_ids(*, strict: bool = False) -> set:
@@ -60,12 +71,17 @@ def existing_sample_ids(*, strict: bool = False) -> set:
         return set()
     ids = set()
     try:
-        with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                sid = row.get("sample_id", "").strip()
-                if sid:
-                    ids.add(sid)
+        if strict:
+            _, rows = _read_sample_rows()
+            return {row['sample_id'].strip() for row in rows if row['sample_id'].strip()}
+        else:
+            # Keep the legacy best-effort inspection mode; writes and ID
+            # allocation always use the validated reader above.
+            with open(SAMPLES_CSV, 'r', encoding='utf-8-sig', newline='') as f:
+                for row in csv.DictReader(f):
+                    sample_id = row.get('sample_id', '').strip()
+                    if sample_id:
+                        ids.add(sample_id)
     except Exception as e:
         logger.warning(f"Failed to read existing sample ids from {SAMPLES_CSV}: {e}")
         if strict:
@@ -80,16 +96,9 @@ def _remove_sample_records_for_run_ids_unlocked(run_ids: Iterable[str]) -> int:
 
     temp_path = SAMPLES_CSV.with_suffix(SAMPLES_CSV.suffix + ".tmp")
     try:
-        with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames or SAMPLE_HEADERS
-            kept_rows = []
-            removed = 0
-            for row in reader:
-                if row.get("run_id", "").strip() in run_ids:
-                    removed += 1
-                else:
-                    kept_rows.append(row)
+        fieldnames, rows = _read_sample_rows()
+        kept_rows = [row for row in rows if row['run_id'].strip() not in run_ids]
+        removed = len(rows) - len(kept_rows)
 
         with open(temp_path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -131,16 +140,20 @@ def _write_sample_record_unlocked(
         logger.error("Cannot write sample record: run_id is empty")
         return False
 
-    _ensure_dir()
-
-    existing_ids = _existing_run_ids()
+    try:
+        _ensure_dir()
+        fieldnames, existing_rows = _read_sample_rows()
+    except Exception as exc:
+        logger.error(f"Cannot read sample history; original file preserved: {exc}")
+        return False
+    existing_ids = {row['run_id'].strip() for row in existing_rows}
     if run_id in existing_ids:
         logger.warning(f"Sample record already exists for run_id={run_id}, skipping")
         return False
 
     sample_id = metadata.get("sample_id", "")
     if sample_id:
-        sample_id_set = existing_sample_ids()
+        sample_id_set = {row['sample_id'].strip() for row in existing_rows}
         if sample_id in sample_id_set:
             logger.warning(
                 f"sample_id={sample_id} already exists in {SAMPLES_CSV}. "
@@ -158,11 +171,6 @@ def _write_sample_record_unlocked(
 
     temp_path = SAMPLES_CSV.with_suffix(SAMPLES_CSV.suffix + ".tmp")
     try:
-        existing_rows = []
-        if SAMPLES_CSV.exists() and os.path.getsize(SAMPLES_CSV) > 0:
-            with open(SAMPLES_CSV, "r", encoding="utf-8", newline="") as f:
-                existing_rows = list(csv.DictReader(f))
-
         row = {
             "sample_id": sample_id,
             "batch_id": batch_id,
@@ -179,10 +187,11 @@ def _write_sample_record_unlocked(
             "error_flag": str(error_flag).lower(),
         }
         with open(temp_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=SAMPLE_HEADERS)
+            fieldnames = list(dict.fromkeys([*fieldnames, *SAMPLE_HEADERS]))
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for existing_row in existing_rows:
-                writer.writerow({key: existing_row.get(key, "") for key in SAMPLE_HEADERS})
+                writer.writerow({key: existing_row.get(key, "") for key in fieldnames})
             writer.writerow(row)
             f.flush()
             os.fsync(f.fileno())

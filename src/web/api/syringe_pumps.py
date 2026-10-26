@@ -2,6 +2,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from src.devices.syringe_commands import SyringeCommand
 from src.web.api.devices import protect_guided_devices
+from src.web.device_io import call_device
 
 router = APIRouter(prefix="/syringe_pump", tags=["syringe_pump"], dependencies=[Depends(protect_guided_devices)])
 
@@ -15,7 +16,7 @@ def controller(request, device_id):
 
 async def call(function, *args):
     try:
-        return await asyncio.to_thread(function, *args)
+        return await call_device(function, *args)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except RuntimeError as exc:
