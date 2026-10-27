@@ -126,6 +126,9 @@ def test_missing_or_ambiguous_location_never_falls_back_to_other_ch340(monkeypat
 
 
 class Wire:
+    def flush(self):
+        pass
+
     def __init__(self, **kwargs):
         self.port = None
         self.is_open = False

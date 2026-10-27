@@ -5,6 +5,69 @@ import pytest
 import serial
 
 
+def test_realtime_reads_independent_families_without_serial_delay():
+    """A slow pump must not prevent the syringe reader from starting."""
+    from types import SimpleNamespace
+    from src.web.api.ws import build_realtime_payload
+
+    both_started = threading.Barrier(2, timeout=2)
+    calls = []
+
+    def read_pump(did):
+        both_started.wait()
+        calls.append(did)
+        return {"read_ok": True}
+
+    def read_syringe():
+        both_started.wait()
+        calls.append("syringe1")
+        return {"read_ok": True, "busy": False}
+
+    def read_turntable():
+        # Its own timestamp must not age while the slower families finish.
+        assert sorted(calls) == ["pump1", "syringe1"]
+        return {"read_ok": True}
+
+    dm = SimpleNamespace(
+        get_all_heaters=lambda: {}, get_all_microwaves=lambda: {},
+        get_all_pumps=lambda: {"pump1": SimpleNamespace(is_connected=lambda: True)},
+        read_pump_status=read_pump, valves={},
+        turntables={"turntable1": SimpleNamespace(read=read_turntable)},
+        syringe_pumps={"syringe1": SimpleNamespace(read=read_syringe)},
+    )
+    result = asyncio.run(build_realtime_payload(dm))
+    assert sorted(calls) == ["pump1", "syringe1"]
+    assert result["pumps"]["pump1"]["read_ok"]
+    assert result["syringe_pumps"]["syringe1"]["read_ok"]
+    assert result["turntables"]["turntable1"]["read_ok"]
+
+
+def test_realtime_syringe_failure_stays_unknown_while_other_family_succeeds():
+    from types import SimpleNamespace
+    from src.web.api.ws import build_realtime_payload
+
+    def failed():
+        raise TimeoutError("simulated communication timeout")
+
+    controller = SimpleNamespace(
+        read=failed,
+        config=SimpleNamespace(name="A", capacity_ml=10,
+            connection=SimpleNamespace(port="FAKE", binding=SimpleNamespace(serial_number=""))),
+        device=SimpleNamespace(is_connected=lambda: True,
+            unknown=lambda error: {"read_ok": False, "error": error}),
+    )
+    dm = SimpleNamespace(
+        get_all_heaters=lambda: {}, get_all_microwaves=lambda: {},
+        get_all_pumps=lambda: {"pump1": SimpleNamespace(is_connected=lambda: True)},
+        read_pump_status=lambda did: {"read_ok": True}, valves={}, turntables={},
+        syringe_pumps={"syringe1": controller},
+    )
+    result = asyncio.run(build_realtime_payload(dm))
+    assert result["pumps"]["pump1"]["read_ok"]
+    assert result["syringe_pumps"]["syringe1"]["read_ok"] is False
+    assert "timeout" in result["syringe_pumps"]["syringe1"]["error"]
+
+
 def test_device_read_coordinator_reuses_timed_out_read():
     from src.web.api.ws import DeviceReadCoordinator
 

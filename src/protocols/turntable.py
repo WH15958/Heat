@@ -4,6 +4,7 @@ Commands have no documented acknowledgement. Status is an unframed eight-byte
 reply; its speed word is exposed raw because its physical conversion is unknown.
 """
 import time
+import logging
 
 from src.devices.turntable_commands import TurntableCommand
 
@@ -17,12 +18,15 @@ WORK_STATES = {
 }
 INPUT_BITS = {"positive_limit": 2, "home": 3, "negative_limit": 4, "input4": 5}
 STATUS_FRAME = bytes.fromhex("55 aa 0c 00 00 00 00 00 00 c3")
+logger = logging.getLogger(__name__)
 
 
 class TurntableProtocol:
     def __init__(self, serial_handle, timeout=1.0):
         self.serial = serial_handle
         self.timeout = timeout
+        self._last_command = None
+        self._last_command_at = None
 
     @staticmethod
     def frame(request):
@@ -42,12 +46,17 @@ class TurntableProtocol:
     def _write(self, frame):
         if self.serial.write(frame) != len(frame):
             raise IOError("Incomplete CL-01A write; command outcome unknown")
+        self.serial.flush()
 
     def send_command(self, request):
         # No ACK is documented, so successful write only means sent, not executed.
-        self._write(self.frame(request))
+        frame = self.frame(request)
+        self._write(frame)
+        self._last_command = frame.hex(" ")
+        self._last_command_at = time.monotonic()
 
     def read_status(self):
+        started = time.monotonic()
         self.serial.reset_input_buffer()
         self._write(STATUS_FRAME)
         deadline = time.monotonic() + self.timeout
@@ -55,7 +64,12 @@ class TurntableProtocol:
         while len(reply) < 8 and time.monotonic() < deadline:
             reply.extend(self.serial.read(8 - len(reply)))
         if len(reply) != 8:
-            raise TimeoutError("No complete eight-byte CL-01A status response")
+            elapsed = time.monotonic() - started
+            since_command = None if self._last_command_at is None else started - self._last_command_at
+            logger.warning("CL-01A status timeout: port=%s received=%s/8 raw=%s elapsed=%.3fs last_command=%s command_age=%s",
+                           getattr(self.serial, "port", None), len(reply), reply.hex(" "), elapsed,
+                           self._last_command, since_command)
+            raise TimeoutError(f"No complete eight-byte CL-01A status response (received {len(reply)}/8 bytes, elapsed {elapsed:.3f}s)")
         if getattr(self.serial, "in_waiting", 0):
             raise IOError("Unexpected trailing CL-01A status bytes")
         return self.decode_status(bytes(reply))

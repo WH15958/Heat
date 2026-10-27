@@ -296,6 +296,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 
 完整程序注册在共享 `_engines`，与普通/引导实验互斥，运行和清理期间保留占用，阻止手动写控制和断开；手动停止及全局急停先禁止后续步骤。托管不暴露暂停/恢复，通用实验暂停/恢复端点对此返回409，避免冻结电脑计时而固件仍加热。原子记录位于 `output/microwave_programs/mwprogram_<request_id>.json`，启动意图必须先落盘，每步先保存进度；存储失败停止并保留锁，日志保存失败也显式报告。重启后未完成或待清理记录视为中断，锁住实验和手动运动控制；可连接、读取、停止后人工确认解除，解除记录保存失败仍锁定。页面/WS生命周期只读，服务正常关闭等待托管停机；进程崩溃无法保证立即停机，长硬件计时不能替代独立联锁。
 
+- 实时采样在 Web 层并行读取加热器、蠕动泵、微波、阀和注射泵，各类内部仍顺序读取；转盘保持本轮最后读取，避免其他慢读消耗其独立 `read_at` 的6秒有效期；复用 `DeviceReadCoordinator` 的在途读取及现有设备/串口锁，避免整轮耗时逐类累加导致正常状态跨过前端6秒控制有效期。仍等待本轮结果后推送，不通过重复旧帧续期；真实慢读、超时或断线仍可能触发过期保护。驱动保持同步，采样不下发控制动作。
 - WebSocket：实时 payload 包含 `microwaves`；各类设备读取超时（包括 Python 3.10 中不同的 `asyncio.TimeoutError` 与内置 `TimeoutError`）写入 `{"error": "read_timeout"}`，其他读取失败写入 `{"error": "read_failed"}`；WebSocket connect/disconnect 不控制硬件生命周期。
 - 泵实时 payload 的每个通道包含 `running` 和 `read_ok`。历史 `flow_rate` 是设备设定/报告值，只有读取有效且确认运行的区间才表示软件确认的输运区间，不等价于外部流量计实测。
 
@@ -561,6 +562,8 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 
 ### 引导式转盘编排
+
+引导式 `/api/guided/start` 和 `/api/guided/prime` 在启动入口读取已连接转盘的新鲜状态，新建批次在其他设备预检完成后、登记执行前再读取一次。读取复用 `DeviceReadCoordinator` 的在途查询及设备锁，然后执行原有内存空闲检查和停止代次校验；不通过扩大 6 秒有效期绕过检查。读取失败、超时、非停止状态或未确认停机均拒绝启动；这些检查只读取，不自动连接、回零或停止设备。
 
 `GuidedRequest.turntable_drip_seconds` 为必填数值，范围 0–3600 秒，允许显式 0，不提供默认标定值；`bottles_confirmed` 默认为 false，preview 可为 false，start/prime 必须为 true。preview、预充启动及正式启动均检查固定 turntable1 已配置且启用、瓶位与回零/定位功能有效，并核对总组数不超过 bottle_count；缺字段的旧计划仅只读展示，不自动补值或复用预充资格。滴液时间进入参数签名及本机草稿，现场确认不进入草稿且修改参数后清除。
 

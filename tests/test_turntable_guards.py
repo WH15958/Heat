@@ -234,6 +234,64 @@ def test_turntable_guard_rechecks_after_preflight_before_registration(kind, monk
     runner.start.assert_not_awaited()
 
 
+@pytest.mark.parametrize('path', ['/api/guided/start', '/api/guided/prime'])
+@pytest.mark.parametrize('phase', ['initial', 'after-preflight'])
+@pytest.mark.parametrize('failure', [None, 'read', 'busy', 'reset', 'stop-unconfirmed', 'timeout', 'emergency'])
+def test_guided_start_refreshes_stale_turntable_without_bypassing_guards(path, phase, failure, monkeypatch):
+    from src.web.api.ws import DeviceReadCoordinator
+
+    dm = DeviceManager()
+    control = TurntableController(TurntableConfig(), device=FakeDevice())
+    control.read()
+    control._read_at -= 10
+    dm.turntables['turntable1'] = control
+    app = app_with_manager(dm)
+    coordinator = DeviceReadCoordinator()
+    app.state.device_read_coordinator = coordinator
+    def inject_failure():
+        if failure == 'read':
+            control.device.reads.append(OSError('serial read failed'))
+        elif failure in ('busy', 'reset'):
+            control.device.work_state = 4 if failure == 'busy' else 0
+        elif failure == 'stop-unconfirmed':
+            control._requires_stop = True
+        elif failure == 'timeout':
+            coordinator.read = AsyncMock(side_effect=asyncio.TimeoutError())
+        elif failure == 'emergency':
+            read = control.read
+
+            def read_then_stop():
+                result = read()
+                experiments._stop_generation += 1
+                return result
+
+            control.read = read_then_stop
+
+    if phase == 'initial':
+        inject_failure()
+    runner = SimpleNamespace(dm=dm, batch_id='guided_' + 'e' * 32, cleanup_pending=False,
+                             start=AsyncMock(), snapshot=lambda: {'state': 'running'})
+
+    async def slow_preflight(*args, **kwargs):
+        # Other device reads can consume more than the six-second validity window.
+        control._read_at -= 10
+        if phase == 'after-preflight':
+            inject_failure()
+
+    monkeypatch.setattr(guided_core, 'GuidedBatch', Mock(return_value=runner))
+    monkeypatch.setattr(guided_core, 'preflight', slow_preflight)
+    response = asyncio.run(post(app, path, guided_spec().model_dump()))
+    assert not control.device.commands
+    if failure is None:
+        assert response.status_code == 200, response.text
+        runner.start.assert_awaited_once_with(prime_only=path.endswith('/prime'))
+        assert control.device.read_count == 3
+    else:
+        assert response.status_code == 409, response.text
+        runner.start.assert_not_awaited()
+        assert not experiments._engines and not guided._batches
+
+
 def test_ready_batch_rechecks_after_preflight_before_beginning(monkeypatch):
     dm = guarded_manager()
     started = []
@@ -250,6 +308,27 @@ def test_ready_batch_rechecks_after_preflight_before_beginning(monkeypatch):
     assert response.status_code == 409
     assert not started and not experiments._engines
     assert dm.require_turntables_idle.call_count == 2
+
+
+def test_ready_batch_refreshes_stale_turntable_before_beginning():
+    dm = DeviceManager()
+    control = TurntableController(TurntableConfig(), device=FakeDevice())
+    control.read()
+    control._read_at -= 10
+    dm.turntables['turntable1'] = control
+    started = []
+
+    async def begin(spec, before_start):
+        before_start()
+        started.append(True)
+
+    batch_id = 'guided_' + 'b' * 32
+    guided._batches[batch_id] = SimpleNamespace(begin_experiments=begin, snapshot=lambda: {'state': 'running'})
+    response = asyncio.run(post(app_with_manager(dm), '/api/guided/start',
+                               guided_spec(priming_batch_id=batch_id).model_dump()))
+    assert response.status_code == 200, response.text
+    assert started == [True]
+    assert not control.device.commands
 
 
 def test_existing_microwave_request_is_returned_without_guard_or_replay(monkeypatch):

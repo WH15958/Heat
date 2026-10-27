@@ -13,6 +13,10 @@ class Wire:
         self.writes = []
         self.reads = 0
         self.write_count = write_count
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
 
     @property
     def in_waiting(self):
@@ -46,6 +50,7 @@ def test_exact_frames_without_ack_or_read(command, frame):
     assert protocol.send_command(command) is None
     assert wire.writes == [bytes.fromhex(frame)]
     assert wire.reads == 0
+    assert wire.flushes == 1
 
 
 def test_duration_is_host_only():
@@ -53,6 +58,50 @@ def test_duration_is_host_only():
     assert TurntableCommand.model_validate(command).duration_seconds == 10
     assert TurntableProtocol.frame({**command, "duration_seconds": 1}) == TurntableProtocol.frame(
         {**command, "duration_seconds": 60})
+
+
+def test_flush_failure_never_retries_motion():
+    wire = Wire()
+    def fail():
+        raise OSError('transmit failed')
+    wire.flush = fail
+    with pytest.raises(OSError, match='transmit failed'):
+        TurntableProtocol(wire).send_command({'action': 'home', 'direction': 'negative', 'speed': 1000})
+    assert len(wire.writes) == 1 and wire.reads == 0
+
+
+def test_buffered_motion_finishes_transmission_before_status_query():
+    class BufferedWire(Wire):
+        pending = False
+
+        def write(self, data):
+            assert not self.pending, 'Previous frame has not finished transmission'
+            self.pending = True
+            return super().write(data)
+
+        def flush(self):
+            super().flush()
+            self.pending = False
+
+    wire = BufferedWire()
+    protocol = TurntableProtocol(wire)
+    protocol.send_command({'action': 'home', 'direction': 'negative', 'speed': 1000})
+    wire.response = bytes.fromhex('00 00 00 00 00 00 fc 08')
+    assert protocol.read_status()['state_name'] == 'homing'
+    assert len(wire.writes) == 2 and wire.flushes == 2
+
+
+@pytest.mark.parametrize('reply', [b'', b'\x12\x34'])
+def test_timeout_records_partial_response_without_replaying_command(reply, caplog):
+    wire = Wire()
+    protocol = TurntableProtocol(wire, .001)
+    protocol.send_command({'action': 'home', 'direction': 'negative', 'speed': 1000})
+    wire.response = reply
+    with pytest.raises(TimeoutError, match=f'received {len(reply)}/8'):
+        protocol.read_status()
+    assert len(wire.writes) == 2 and wire.writes[-1] == STATUS_FRAME
+    assert f'received={len(reply)}/8' in caplog.text
+    assert 'last_command=55 aa 0b' in caplog.text
 
 
 @pytest.mark.parametrize("state,name,busy", [
