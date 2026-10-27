@@ -124,6 +124,74 @@ for (const kind of ['valve', 'initialize', 'store'] as const) {
   }
 }
 
+for (const change of ['refresh', 'connection', 'port', 'owner'] as const) {
+  test(`valve confirmation handles ${change} during a status refresh`, async () => {
+    const prompt = deferred(), writes: any[] = []
+    const props = vue.reactive({ valveId: 'fake', state: { connected: true, read_ok: true,
+      connection_port: 'FAKE', experiment_owned: false, relay_energized: false } })
+    const p = view('components/ValveControl.vue', {
+      '../api/devices': { devicesApi: { valveOperation: async (...args: any[]) => {
+        writes.push(plain(args)); return { data: { success: true } }
+      } } },
+      'element-plus': { ElMessage: { success() {} }, ElMessageBox: { confirm: () => prompt.promise } },
+    }, {}, props)
+    try {
+      const action = p.state.switchPosition(true)
+      props.state = { ...props.state }
+      await vue.nextTick()
+      assert.deepEqual(writes, [])
+      const original = { ...props.state }
+      if (change === 'connection') props.state.connected = false
+      if (change === 'port') props.state.connection_port = 'OTHER'
+      if (change === 'owner') props.state.experiment_owned = true
+      props.state = original
+      prompt.resolve(); await action
+      assert.deepEqual(writes, change === 'refresh' ? [['fake', 'switch', true]] : [])
+    } finally { p.dispose() }
+  })
+}
+
+for (const kind of ['initialize', 'store'] as const) {
+  for (const change of ['refresh', 'device', 'connection', 'port', 'owner', 'busy', 'read-failure', 'parameters'] as const) {
+    test(`syringe ${kind} confirmation handles ${change} during a status refresh`, async () => {
+      const prompt = deferred(), writes: any[] = []
+      const props = vue.reactive({ state: { device_id: 'fake', name: 'fake', capacity_ml: 2.5,
+        connected: true, read_ok: true, busy: false, position_trusted: kind === 'store',
+        fault_code: kind === 'store' ? 0 : 7, connection_port: 'FAKE', owner: null as string | null } })
+      const p = view('components/SyringePumpControl.vue', {
+        '../api/syringePumps': { syringeResult: {}, syringeApi: {
+          command: async (id: string, body: any) => { writes.push([id, plain(body)]); return { data: { result: 'accepted' } } },
+          read: async () => ({ data: props.state }),
+        } },
+        'element-plus': { ElMessage: { info() {} }, ElMessageBox: { confirm: () => prompt.promise } },
+      }, {}, props)
+      try {
+        const action = kind === 'initialize' ? p.state.initialize() : p.state.storeProgram()
+        props.state = { ...props.state }
+        await vue.nextTick()
+        assert.deepEqual(writes, []) // A status update alone must never issue a command.
+        const original = { ...props.state }
+        if (change === 'device') props.state.device_id = 'other'
+        if (change === 'connection') props.state.connected = false
+        if (change === 'port') props.state.connection_port = 'OTHER'
+        if (change === 'owner') props.state.owner = 'experiment'
+        // A changed control context must revoke confirmation even if it later returns.
+        if (['device', 'connection', 'port', 'owner'].includes(change)) props.state = original
+        if (change === 'busy') props.state.busy = true
+        if (change === 'read-failure') props.state.read_ok = false
+        if (change === 'parameters') p.state.timeout.value++
+        prompt.resolve(); await action
+        if (change === 'refresh') {
+          assert.equal(writes.length, 1)
+          assert.equal(writes[0][0], 'fake')
+          assert.equal(writes[0][1].action, kind === 'initialize' ? 'initialize' : 'program_store')
+          assert.equal(writes[0][1].confirm, true)
+        } else assert.deepEqual(writes, [])
+      } finally { p.dispose() }
+    })
+  }
+}
+
 test('syringe stop revokes a pending initialization and only sends stop', async () => {
   const prompt = deferred(), writes: any[] = []
   const state = { device_id: 'fake', name: 'fake', capacity_ml: 2.5, connected: true, read_ok: true, busy: false, position_trusted: true, fault_code: 0 }

@@ -47,7 +47,7 @@ const emit = defineEmits<{ update: [id: string, state: ValveState] }>()
 const busy = ref(false)
 const error = ref('')
 const confirmations = usePendingConfirmation()
-watch(() => [props.state.connected, props.state.connection_port, props.state.experiment_owned], () => confirmations.cancel(), { flush: 'sync' })
+watch([() => props.state.connected, () => props.state.connection_port, () => props.state.experiment_owned], () => confirmations.cancel(), { flush: 'sync' })
 const position = computed(() => !props.state.read_ok || props.state.relay_energized === null
   ? '未知（请刷新）' : props.state.relay_energized ? '吸合 · NC（通电）' : '关闭 · NO（断电）')
 
