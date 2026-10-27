@@ -27,6 +27,9 @@ def manager(monkeypatch, tmp_path):
 
 
 class FakeSerial:
+    def flush(self):
+        pass
+
     def __init__(self, **kwargs):
         self.options = kwargs
         self.port = None

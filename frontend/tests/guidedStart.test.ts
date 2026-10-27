@@ -16,6 +16,19 @@ const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', impo
 const script = compileScript(parse(source).descriptor, { id: 'guided-start-test' }).content
 const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
+test('failed batch distinguishes recovery lock from incomplete device cleanup', () => {
+  const p = page()
+  try {
+    p.state.batch.value = {state:'failed', cleanup_pending:true, cleanup_required:false, recovery_required:true}
+    assert.match(p.state.operationDescription.value, /现场检查并解除恢复锁定/)
+    assert.doesNotMatch(p.state.operationDescription.value, /清理未确认/)
+    p.state.batch.value.cleanup_required = true
+    assert.match(p.state.operationDescription.value, /清理未确认/)
+    p.state.batch.value.cleanup_in_progress = true
+    assert.match(p.state.operationDescription.value, /等待设备停止和资源释放/)
+  } finally { p.dispose() }
+})
+
 function page(fill = true, fresh = false, storage = new Map<string,string>()) {
   const route = { query: fresh ? {new: '1'} : {} as any }
   let getOverride: (() => Promise<any>) | undefined

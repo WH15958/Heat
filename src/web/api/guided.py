@@ -11,9 +11,30 @@ from src.experiment import guided
 from src.web.api.experiments import (_engines, _get_active_engine, _source_lock,
                                      control_generation, check_control_generation,
                                      require_turntables_idle)
+from src.web.device_io import call_device
 
 router = APIRouter(prefix="/guided", tags=["guided"])
 _batches = {}
+
+
+async def require_fresh_turntables_idle(request):
+    dm = request.app.state.device_manager
+    coordinator = getattr(request.app.state, "device_read_coordinator", None)
+    for did, control in getattr(dm, "turntables", {}).items():
+        if not control.device.is_connected():
+            continue
+        try:
+            if coordinator:
+                state = await coordinator.read(("turntable", did), control.read, 5.0)
+            else:
+                state = await call_device(control.read)
+        except (OSError, RuntimeError, asyncio.TimeoutError) as exc:
+            raise HTTPException(409, f"转盘 {did}: 状态读取失败或超时") from exc
+        if not state.get("read_ok"):
+            raise HTTPException(409, f"转盘 {did}: 状态读取失败")
+        if state.get("busy") is not False or state.get("work_state") != 0x20:
+            raise HTTPException(409, f"转盘 {did}: 未确认停止")
+    require_turntables_idle(dm)
 
 
 class RecoveryConfirmation(BaseModel):
@@ -114,7 +135,8 @@ async def start(spec: guided.GuidedRequest, request: Request):
         if not spec.priming_batch_id:
             return await create_batch(spec, request, prime_only=False)
         batch = active_batch(spec.priming_batch_id)
-        require_turntables_idle(request.app.state.device_manager)
+        await require_fresh_turntables_idle(request)
+        check_control_generation(generation)
 
         def before_start():
             check_control_generation(generation)
@@ -151,12 +173,13 @@ async def create_batch(spec, request, *, prime_only):
         raise HTTPException(409, "已有实验正在执行或停机尚未确认")
     if any(r.get("recovery_required") for r in records()):
         raise HTTPException(409, "存在服务中断批次，请先现场确认设备停止并解除中断锁定")
-    require_turntables_idle(request.app.state.device_manager)
+    await require_fresh_turntables_idle(request)
+    check_control_generation(generation)
     try:
         batch = await asyncio.to_thread(guided.GuidedBatch, request.app.state.device_manager, spec)
         await guided.preflight(batch.dm, spec, before_initialization=True)
+        await require_fresh_turntables_idle(request)
         check_control_generation(generation)
-        require_turntables_idle(request.app.state.device_manager)
         _batches[batch.batch_id] = batch
         _engines[batch.batch_id] = batch
         await batch.start(prime_only=prime_only)

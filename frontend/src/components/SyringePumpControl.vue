@@ -143,7 +143,7 @@ const props = defineProps<{ state: SyringeState }>()
 const emit = defineEmits<{ update: [state: SyringeState] }>()
 const pending = ref(false)
 const confirmations = usePendingConfirmation()
-watch(() => [props.state.device_id, props.state.connected, props.state.connection_port, props.state.owner], () => confirmations.cancel(), { flush: 'sync' })
+watch([() => props.state.device_id, () => props.state.connected, () => props.state.connection_port, () => props.state.owner], () => confirmations.cancel(), { flush: 'sync' })
 const activeTab = ref('operate')
 const basicSections = ref<string[]>([]), advancedSections = ref<string[]>([])
 const defaultInitCode = props.state.capacity_ml >= 2.5 ? 0 : props.state.capacity_ml >= 0.5 ? 1 : 2

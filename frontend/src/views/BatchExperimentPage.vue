@@ -267,7 +267,7 @@ const statusNow=ref(Date.now())
 const stale=computed(()=>staleStatus(lastRefresh.value,statusNow.value,refreshError.value))
 const stageLabels:Record<string,string>={pending:'未开始',running:'进行中',completed:'已完成',paused:'已暂停',failed:'失败',stopped:'已结束',stopping:'正在停止',cleanup:'正在清理'}
 const operationTitle=computed(()=>finalizationFailed.value?'实验组已完成，收尾回零失败':batch.value.cleanup_in_progress?'正在清理设备':terminalRun.value?'已结束 · '+(activity.value?.title||batch.value.progress?.step_label||'本批实验'):batch.value.stop_requested?'正在停止本批次':activity.value?.title||currentStepLabel.value)
-const operationDescription=computed(()=>batch.value.cleanup_in_progress?'等待设备停止和资源释放确认。':terminalRun.value?(batch.value.cleanup_pending?'清理未确认，请检查恢复事项。':'最后一次动作与读数保留如下。'):batch.value.stop_requested?'停止请求已发出，等待设备与记录处理完成。':activity.value?.description||'以下显示已确认的步骤信息。')
+const operationDescription=computed(()=>batch.value.cleanup_in_progress?'等待设备停止和资源释放确认。':terminalRun.value?(batch.value.cleanup_required?'清理未确认，请检查恢复事项。':batch.value.recovery_required?'批次已中止，仍需现场检查并解除恢复锁定。':batch.value.cleanup_pending?'仍有待处理事项，请检查恢复状态。':'最后一次动作与读数保留如下。'):batch.value.stop_requested?'停止请求已发出，等待设备与记录处理完成。':activity.value?.description||'以下显示已确认的步骤信息。')
 const deviceLabel=(id:string)=>({heater1:'前驱体 A 加热器',heater2:'前驱体 B 加热器',syringe_pump1:'注射泵 A',syringe_pump2:'注射泵 B',microwave1:'微波反应仪',pump1:'蠕动泵',valve1:'三通阀',turntable1:'产物收集转盘'} as Record<string,string>)[id]||id
 const seconds=(value:any)=>typeof value==='number'&&Number.isFinite(value)?Math.floor(value)+' 秒':'未知'
 const pendingControl=ref(''),controlFeedback=ref(''),controlUncertain=ref(false)

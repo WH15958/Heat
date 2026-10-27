@@ -225,133 +225,151 @@ async def build_realtime_payload(
     payload = {"type": "realtime", "heaters": {}, "pumps": {}, "microwaves": {}}
     read_coordinator = read_coordinator or DeviceReadCoordinator()
 
-    heaters = dm.get_all_heaters()
-    for did, heater in heaters.items():
-        if heater.is_connected():
-            try:
-                data = await read_coordinator.read(
-                    ("heater", did),
-                    heater.read_data,
-                    DEVICE_READ_TIMEOUT,
-                )
-                payload["heaters"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": heater.config.connection_params.get("port"),
-                    "pv": data.pv,
-                    "sv": data.sv,
-                    "mv": data.mv,
-                    "alarms": data.alarms,
-                    "run_status": data.run_status.name,
-                }, dm.get_heater_binding(did))
-            except (asyncio.TimeoutError, TimeoutError):
-                logger.warning(f"Heater {did} read timeout")
-                payload["heaters"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": heater.config.connection_params.get("port"),
-                    "error": "read_timeout",
-                }, dm.get_heater_binding(did))
-            except Exception as e:
-                logger.warning(f"Heater {did} read failed: {e}")
-                payload["heaters"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": heater.config.connection_params.get("port"),
-                    "error": "read_failed",
-                }, dm.get_heater_binding(did))
+    # Independent device families own separate serial resources. Keep reads
+    # within each family ordered, and retain the coordinator and driver locks.
+    async def read_heaters():
+        heaters = dm.get_all_heaters()
+        for did, heater in heaters.items():
+            if heater.is_connected():
+                try:
+                    data = await read_coordinator.read(
+                        ("heater", did),
+                        heater.read_data,
+                        DEVICE_READ_TIMEOUT,
+                    )
+                    payload["heaters"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": heater.config.connection_params.get("port"),
+                        "pv": data.pv,
+                        "sv": data.sv,
+                        "mv": data.mv,
+                        "alarms": data.alarms,
+                        "run_status": data.run_status.name,
+                    }, dm.get_heater_binding(did))
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning(f"Heater {did} read timeout")
+                    payload["heaters"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": heater.config.connection_params.get("port"),
+                        "error": "read_timeout",
+                    }, dm.get_heater_binding(did))
+                except Exception as e:
+                    logger.warning(f"Heater {did} read failed: {e}")
+                    payload["heaters"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": heater.config.connection_params.get("port"),
+                        "error": "read_failed",
+                    }, dm.get_heater_binding(did))
 
-    pumps = dm.get_all_pumps()
-    for did, pump in pumps.items():
-        if pump.is_connected():
-            try:
-                status = await read_coordinator.read(
-                    ("pump", did),
-                    lambda did=did: dm.read_pump_status(did),
-                    PUMP_READ_TIMEOUT,
-                )
-                payload["pumps"][did] = status
-            except (asyncio.TimeoutError, TimeoutError):
-                logger.warning(f"Pump {did} read timeout")
-                payload["pumps"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": pump.config.connection_params.get("port"),
-                    "error": "read_timeout",
-                }, dm.get_pump_binding(did))
-            except Exception as e:
-                logger.warning(f"Pump {did} read failed: {e}")
-                payload["pumps"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": pump.config.connection_params.get("port"),
-                    "error": "read_failed",
-                }, dm.get_pump_binding(did))
+    async def read_pumps():
+        pumps = dm.get_all_pumps()
+        for did, pump in pumps.items():
+            if pump.is_connected():
+                try:
+                    status = await read_coordinator.read(
+                        ("pump", did),
+                        lambda did=did: dm.read_pump_status(did),
+                        PUMP_READ_TIMEOUT,
+                    )
+                    payload["pumps"][did] = status
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning(f"Pump {did} read timeout")
+                    payload["pumps"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": pump.config.connection_params.get("port"),
+                        "error": "read_timeout",
+                    }, dm.get_pump_binding(did))
+                except Exception as e:
+                    logger.warning(f"Pump {did} read failed: {e}")
+                    payload["pumps"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": pump.config.connection_params.get("port"),
+                        "error": "read_failed",
+                    }, dm.get_pump_binding(did))
 
-    microwaves = dm.get_all_microwaves()
-    for did, microwave in microwaves.items():
-        if microwave.is_connected():
-            try:
-                status = await read_coordinator.read(
-                    ("microwave", did),
-                    lambda did=did: dm.read_microwave_data(did),
-                    MICROWAVE_READ_TIMEOUT,
-                )
-                payload["microwaves"][did] = status
-            except (asyncio.TimeoutError, TimeoutError):
-                logger.warning(f"Microwave {did} read timeout")
-                payload["microwaves"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": microwave.config.connection_params.get("port"),
-                    "error": "read_timeout",
-                }, dm.get_microwave_binding(did))
-            except Exception as e:
-                logger.warning(f"Microwave {did} read failed: {e}")
-                payload["microwaves"][did] = _with_binding({
-                    "device_id": did,
-                    "connection_port": microwave.config.connection_params.get("port"),
-                    "error": "read_failed",
-                }, dm.get_microwave_binding(did))
+    async def read_microwaves():
+        microwaves = dm.get_all_microwaves()
+        for did, microwave in microwaves.items():
+            if microwave.is_connected():
+                try:
+                    status = await read_coordinator.read(
+                        ("microwave", did),
+                        lambda did=did: dm.read_microwave_data(did),
+                        MICROWAVE_READ_TIMEOUT,
+                    )
+                    payload["microwaves"][did] = status
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning(f"Microwave {did} read timeout")
+                    payload["microwaves"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": microwave.config.connection_params.get("port"),
+                        "error": "read_timeout",
+                    }, dm.get_microwave_binding(did))
+                except Exception as e:
+                    logger.warning(f"Microwave {did} read failed: {e}")
+                    payload["microwaves"][did] = _with_binding({
+                        "device_id": did,
+                        "connection_port": microwave.config.connection_params.get("port"),
+                        "error": "read_failed",
+                    }, dm.get_microwave_binding(did))
 
-    payload["valves"] = {}
-    for did, valve in getattr(dm, "valves", {}).items():
-        if not valve.is_connected():
-            continue
-        try:
-            payload["valves"][did] = await read_coordinator.read(
-                ("valve", did), lambda did=did: dm.valve_operation(did, "status"), 5.0)
-        except Exception as exc:
-            # Do not synchronously wait for a reader that timed out holding a lock.
-            payload["valves"][did] = {
-                "connected": valve.is_connected(), "read_ok": False,
-                "relay_energized": None, "physical_route_confirmed": False,
-                "connection_port": valve.config.connection_params.get("port"),
-                "error": str(exc),
-            }
-    payload["syringe_pumps"] = {}
-    for did, controller in getattr(dm, "syringe_pumps", {}).items():
-        try:
-            payload["syringe_pumps"][did] = await read_coordinator.read(
-                ("syringe_pump", did), controller.read, 10.0)
-        except Exception as exc:
-            # A timed-out reader can still hold the controller lock. Do not
-            # synchronously wait for that lock on the event loop.
-            payload["syringe_pumps"][did] = {
-                "device_id": did, "name": controller.config.name,
-                "connected": controller.device.is_connected(),
-                "configured": bool(controller.config.connection.port or controller.config.connection.binding.serial_number),
-                "capacity_ml": controller.config.capacity_ml,
-                **controller.device.unknown(str(exc)),
-            }
-    payload["turntables"] = {}
-    for did, controller in getattr(dm, "turntables", {}).items():
-        try:
-            payload["turntables"][did] = await read_coordinator.read(
-                ("turntable", did), controller.read, 5.0)
-        except Exception as exc:
-            # A timed-out reader may still own the I/O lock; do not wait on it.
-            payload["turntables"][did] = {
-                "device_id": did, "name": controller.config.name,
-                "connected": controller.device.is_connected(),
-                **controller.device.unknown(str(exc)),
-                "stop_confirmed": False, "homed": False,
-                **controller.snapshot_version(),
-            }
+    async def read_valves():
+        payload["valves"] = {}
+        for did, valve in getattr(dm, "valves", {}).items():
+            if not valve.is_connected():
+                continue
+            try:
+                payload["valves"][did] = await read_coordinator.read(
+                    ("valve", did), lambda did=did: dm.valve_operation(did, "status"), 5.0)
+            except Exception as exc:
+                # Do not synchronously wait for a reader that timed out holding a lock.
+                payload["valves"][did] = {
+                    "connected": valve.is_connected(), "read_ok": False,
+                    "relay_energized": None, "physical_route_confirmed": False,
+                    "connection_port": valve.config.connection_params.get("port"),
+                    "error": str(exc),
+                }
+
+    async def read_syringe_pumps():
+        payload["syringe_pumps"] = {}
+        for did, controller in getattr(dm, "syringe_pumps", {}).items():
+            try:
+                payload["syringe_pumps"][did] = await read_coordinator.read(
+                    ("syringe_pump", did), controller.read, 10.0)
+            except Exception as exc:
+                # A timed-out reader can still hold the controller lock. Do not
+                # synchronously wait for that lock on the event loop.
+                payload["syringe_pumps"][did] = {
+                    "device_id": did, "name": controller.config.name,
+                    "connected": controller.device.is_connected(),
+                    "configured": bool(controller.config.connection.port or controller.config.connection.binding.serial_number),
+                    "capacity_ml": controller.config.capacity_ml,
+                    **controller.device.unknown(str(exc)),
+                }
+
+    async def read_turntables():
+        payload["turntables"] = {}
+        for did, controller in getattr(dm, "turntables", {}).items():
+            try:
+                payload["turntables"][did] = await read_coordinator.read(
+                    ("turntable", did), controller.read, 5.0)
+            except Exception as exc:
+                # A timed-out reader may still own the I/O lock; do not wait on it.
+                payload["turntables"][did] = {
+                    "device_id": did, "name": controller.config.name,
+                    "connected": controller.device.is_connected(),
+                    **controller.device.unknown(str(exc)),
+                    "stop_confirmed": False, "homed": False,
+                    **controller.snapshot_version(),
+                }
+
+    await asyncio.gather(
+        read_heaters(), read_pumps(), read_microwaves(),
+        read_valves(), read_syringe_pumps(),
+    )
+    # Turntable controls expire from their own read_at, not the frame timestamp.
+    # Keep this read last so unrelated slow readers do not age it before delivery.
+    await read_turntables()
     payload["sampled_at_ms"] = int(time.time() * 1000)
     return payload
 
