@@ -61,7 +61,7 @@
         <p><small>产物转盘：{{ turntableConfigError || `已配置 ${bottleCount} 个瓶位` }}。机械原点对应 1 号瓶；本批最多 {{ bottleCount || '—' }} 组，不循环复用。</small></p>
         <p v-if="batch.request?.product_port==='NC'" class="notice compact-notice">历史批次仅供查阅；新批次须按 NO 收产物、NC 排废液重新确认并预充。</p>
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label></div>
-        <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+        <p><small>建议流量 15 mL/min，抽液 200 秒（3 分 20 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
         <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
       </section>
@@ -72,7 +72,7 @@
         </div>
         <div class="form-group"><h4>清洗排液 · 通道四</h4>
           <div class="grid compact-fields"><label v-for="item in fixed.slice(6)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label><label>排液流量<span class="readonly-value">{{ Number.isFinite(setting('drainFlow')) ? setting('drainFlow') : '待填写' }} mL/min</span><small>沿用产物收集设置</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 200 秒（3 分 20 秒）。</small></p>
         </div>
         <div class="notice compact-notice">切 NC → 进液 → 停留 → 排液，按次数重复。</div>
         <div class="form-group"><h4>清洗后的自动换瓶</h4><p>清洗结束后，确认泵停止且阀在 NC，再等待残余滴液，最后切换下一瓶；最后一组在收尾回零前同样等待。</p><label class="direction-field">滴液等待时间<span class="number-unit"><input data-field="turntableDripSeconds" :aria-invalid="!!fieldErrors.turntableDripSeconds" v-model.number="turntableDripSeconds" type="number" min="0" max="3600" step="any" placeholder="按现场标定填写" /><span>秒</span></span><small v-if="fieldErrors.turntableDripSeconds" class="field-error" role="alert">{{ fieldErrors.turntableDripSeconds }}</small></label><p><small>按实际管路标定，允许明确填写 0；等待时间不证明管内已排空。</small></p></div>
@@ -85,7 +85,7 @@
           <label class="preheat-field">到温后等待时间<span class="number-unit"><input data-field="primeHeatMinutes" :aria-invalid="!!fieldErrors.primeHeatMinutes" v-model.number="primeHeatMinutes" type="number" min="0" max="1440" step="any" placeholder="请输入" /><span>分钟</span></span><small v-if="fieldErrors.primeHeatMinutes" class="field-error" role="alert">{{ fieldErrors.primeHeatMinutes }}</small></label>
           <p><small>两路实测温度均达到或超过各自目标后立即计时，无需稳定30秒，暂停不计时；到温等待最多60分钟。填0表示到温后不额外等待。</small></p>
           <div class="grid compact-fields"><label v-for="p in priming.slice(0,5)" :key="p.key">{{ p.label }}<span class="number-unit"><input :data-field="p.key" :aria-invalid="!!fieldErrors[p.key]" v-model.number="p.value" type="number" :step="p.key==='prime_cycles'?1:'any'" placeholder="请输入" /><span>{{ p.unit }}</span></span><small v-if="fieldErrors[p.key]" class="field-error" role="alert">{{ fieldErrors[p.key] }}</small></label></div>
-          <p><small>建议流量 15 mL/min，抽液 5 分钟（300 秒）。</small></p>
+          <p><small>建议流量 15 mL/min，抽液 200 秒（3 分 20 秒）。</small></p>
           <p v-if="Number.isFinite(primeTotal)&&primeTotal>0"><small>预充耗液 / 废液 {{ primeTotal }} mL · 出口 {{ wastePort }}</small></p>
         </div>
         <details class="form-group" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open">
@@ -97,7 +97,7 @@
         <p v-if="primeReady">已有本批次预充结果，开始自动实验时将沿用，不重复初始化或预充。修改参数或维护设备前请先停止批次。</p>
         <details><summary>预充流程预览</summary><pre>{{ previewPrime }}</pre></details>
       </section>
-      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ i+1 }} 号瓶</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先机械回零至 1 号瓶，再执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 45℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤45℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。最后一组结束后停机并机械回零。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
+      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ i+1 }} 号瓶</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先机械回零至 1 号瓶，再执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 45℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤45℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。最后一组结束后停机并机械回零。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
     </main><aside class="batch-sidebar">
       <h3>本批实验</h3>
       <template v-if="validatedKey===requestKey&&!plan.error">
@@ -136,6 +136,7 @@ import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
 import axios from 'axios'
 import {usePendingConfirmation} from '../composables/pendingConfirmation'
+import {guidedHistoryDraft} from '../experiment/guidedHistory'
 const confirmations=usePendingConfirmation()
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
@@ -144,7 +145,7 @@ import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,for
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
-const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±3℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；反应液在目标 ±3℃ 内连续稳定 30 秒后开始定时保温，之后温度偏离不暂停计时，仍持续检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
+const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；反应液在目标 ±5℃ 内连续稳定 15 秒后开始定时保温，之后温度偏离不暂停计时，仍持续检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
 const stageAxes=computed(()=>axes.value.slice(stage.value*2,stage.value*2+2))
 const deviceSummary=computed(()=>stage.value===0?'加热器一：前驱体 A　｜　加热器二：前驱体 B':stage.value===1?'注射泵一：前驱体 A　｜　注射泵二：前驱体 B':'微波仪一：反应温区')
 const roles=[{key:'heaterA',label:'前驱体 A 加热器',group:'heaters',description:'前驱体储液加热'},{key:'heaterB',label:'前驱体 B 加热器',group:'heaters',description:'独立温区'},{key:'pumpA',label:'前驱体 A 注射泵',group:'syringe_pumps',description:'进样量与速度独立设置'},{key:'pumpB',label:'前驱体 B 注射泵',group:'syringe_pumps',description:'同时进料、各自完成'},{key:'reaction',label:'微波反应装置',group:'microwaves',description:'测得物料到温后计时'},{key:'liquid',label:'清洗与排液蠕动泵',group:'pumps',description:'不同通道负责进液和排液'},{key:'turntable',label:'产物收集转盘',group:'turntables',description:'每组使用独立产物瓶'}]
@@ -491,6 +492,19 @@ function restoreDraft(){
   const raw=typeof window!=='undefined'?window.localStorage.getItem(draftKey):null
   if(!raw)return
   const d=JSON.parse(raw)
+  if(d.version===1&&d.kind==='guided-history'){
+   const {request}=guidedHistoryDraft(d.request,d.sourceName)
+   restoreParameters(request)
+   // Missing legacy fields remain blank instead of deriving a new drain duration.
+   priming.value.forEach(p=>{p.value=request[p.key]??null})
+   experimentName.value='';stage.value=0
+   plumbingConfirmed.value=primingConfirmed.value=initializationConfirmed.value=bottlesConfirmed.value=false
+   validatedKey.value='';previewYaml.value=[];previewPrime.value='';report.value=''
+   draftRestored=true
+   draftNotice.value=`已复用「${d.sourceName||'历史批次'}」的条件。请填写新名称，核对参数和可用容量；新批次使用当前到温规则，需重新校验、确认并初始化与预充。`
+   saveDraft()
+   return
+  }
   const number=(v:unknown)=>v===null||v===''||(typeof v==='number'&&Number.isFinite(v))
   if(d.version!==1||typeof d.experimentName!=='string'||!Number.isInteger(d.stage)||d.stage<0||d.stage>6||!Array.isArray(d.axes)||d.axes.length!==6)throw new Error('invalid')
   for(const [key,fields] of [['axes',axes.value],['fixed',fixed.value],['priming',priming.value]] as const){

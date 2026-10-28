@@ -116,7 +116,7 @@ def test_pause_during_read_never_completes_stability(monkeypatch):
 def test_generated_wait_and_parser_contract():
     data = guided.recipe(spec().rows()[0], spec(), 'test', 0)
     step = next(s for s in data['steps'] if s['id'] == 'heat_both_stable')
-    assert step['wait']['tolerance'] == 3
+    assert step['wait']['tolerance'] == 5
     assert step['wait']['seconds'] == 30
     assert step['wait']['timeout'] == 3600
     assert validate_source(yaml.safe_dump(data))['valid']
@@ -134,6 +134,18 @@ def test_generated_wait_and_parser_contract():
     unknown['wait']['targets'][0]['device_id'] = 'unknown'
     result = validate_source(yaml.safe_dump(dict(steps=[unknown])))
     assert result['valid'] and any('unknown' in w['message'] for w in result['warnings'])
+
+
+@pytest.mark.parametrize('delta,success', [(-5, True), (5, True), (5.01, False)])
+def test_generated_heater_gate_accepts_five_degrees_for_thirty_seconds(monkeypatch, delta, success):
+    data = guided.recipe(spec().rows()[0], spec(), 'test', 0)
+    condition = next(s.wait for s in parser.parse_experiment_data(data)['steps'] if s.id == 'heat_both_stable')
+    condition.timeout = 31
+    clock = fake_clock(monkeypatch)
+    executor = execution.StepExecutor(Mock(read_heater_data=lambda did: dict(pv=30 + delta)))
+    assert asyncio.run(executor._wait_condition(condition)) is success
+    assert 30 <= clock.now < 32.1
+    assert executor.activity.snapshot()['stable_required_seconds'] == 30
 
 
 @pytest.fixture

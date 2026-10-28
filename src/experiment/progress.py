@@ -114,7 +114,7 @@ def guided_activity(step, observation):
             if len(parts) == 4 and parts[1] in ("1", "2"):
                 activity.update(title=f"注射泵 {'A' if parts[1]=='1' else 'B'} · 第 {parts[2]} 次预充", description="正在吸取前驱体，等待泵完成。" if parts[3] == "aspirate" else "正在排出前驱体，等待泵完成。")
     elif sid.startswith("heat_"):
-        activity.update(stage="stabilizing", title="等待前驱体稳定到温" if sid == "heat_both_stable" else "调整前驱体加热", description="按本组目标温度检查 A/B；两路同时在目标 ±3℃ 内连续 30 秒后允许吸液与进料。")
+        activity.update(stage="stabilizing", title="等待前驱体稳定到温" if sid == "heat_both_stable" else "调整前驱体加热", description="按本组目标温度检查 A/B；两路稳定到温后允许吸液与进料。")
     elif sid.startswith("aspirate_") or sid == "feed_both":
         activity.update(stage="feeding", title="两路前驱体正在进料" if sid == "feed_both" else "注射泵正在吸液", description="两泵同时开始、各自完成；两路均完成后才启动微波。" if sid == "feed_both" else "按本组设定剂量吸液，等待注射泵完成。")
         if sid == "feed_both":
@@ -125,9 +125,9 @@ def guided_activity(step, observation):
         if sid == "hold" and observation.get("qualified_seconds") is not None:
             activity["description"] = "目标 ±3℃ 内累计有效保温，越界暂停累计、回温后继续；最多额外等待10分钟。前驱体持续保温。"
         elif sid == "hold" and observation.get("hold_mode") == "timed":
-            activity.update(title="微波反应定时保温", description="反应液已在目标 ±3℃ 内连续稳定30秒，按设定时长保温；温度偏离仅提示，计时继续。前驱体持续保温。")
+            activity.update(title="微波反应定时保温", description="反应液已满足稳定到温条件，按设定时长保温；温度偏离仅提示，计时继续。前驱体持续保温。")
         elif sid == "microwave_start" and step.wait.seconds > 0:
-            activity.update(title="等待微波反应液稳定到温", description="目标 ±3℃ 内连续稳定30秒后开始保温计时；越界或实际暂停后重新累计稳定时间。")
+            activity.update(title="等待微波反应液稳定到温", description=f"目标 ±{step.wait.tolerance:g}℃ 内连续稳定{step.wait.seconds:g}秒后开始保温计时；越界或实际暂停后重新累计稳定时间。")
     elif sid.startswith("clean_"):
         parts = sid.split("_")
         cycle = int(parts[1]) + 1

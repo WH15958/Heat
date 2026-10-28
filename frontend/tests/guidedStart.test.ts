@@ -10,6 +10,7 @@ import * as drain from '../src/experiment/drainEstimate'
 import * as priming from '../src/experiment/priming'
 import * as progress from '../src/experiment/guidedProgress'
 import * as confirmations from '../src/composables/pendingConfirmation'
+import * as history from '../src/experiment/guidedHistory'
 
 // Exercise the real page handlers and reactivity without hardware or a server.
 const source = readFileSync(new URL('../src/views/BatchExperimentPage.vue', import.meta.url), 'utf8')
@@ -50,6 +51,7 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
     '../experiment/priming': priming,
     '../experiment/guidedProgress': progress,
     '../composables/pendingConfirmation': confirmations,
+    '../experiment/guidedHistory': history,
   }
   const exports = {} as any
   runInNewContext(compiled, { exports, window:{localStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value),removeItem:(key:string)=>storage.delete(key)}}, document:{querySelector:()=>null}, require: (name: string) => {
@@ -620,6 +622,32 @@ test('draft survives navigation/remount without restoring execution confirmation
 test('corrupt draft is reported and retained, never treated as execution evidence',()=>{
  const storage=new Map([['heat.guided-draft.v1','{broken']]),p=page(false,true,storage)
  p.state.restoreDraft();assert.match(p.state.draftNotice.value,/无法恢复/);assert.equal(storage.get('heat.guided-draft.v1'),'{broken');assert.equal(p.state.validatedKey.value,'');p.dispose()
+})
+
+test('history conditions become an editable persistent new draft without prior execution eligibility',async()=>{
+ const source=page(),request=JSON.parse(source.state.requestKey.value)
+ request.axes[4]=[70,80,90];request.experiment_name='旧实验';request.priming_batch_id='old';request.initialization_confirmed=true
+ const storage=new Map([['heat.guided-draft.v1',JSON.stringify(history.guidedHistoryDraft(request,'旧实验'))]])
+ const p=page(false,true,storage),s=p.state
+ try{
+  s.restoreDraft();await vue.nextTick()
+  assert.equal(s.experimentName.value,'');assert.equal(s.axes.value[4].mode,'list');assert.equal(s.axes.value[4].list,'70,80,90')
+  assert.equal(s.requestBody.value.prime_drain_seconds,request.prime_drain_seconds)
+  assert.equal(s.requestBody.value.product_drain_seconds,request.product_drain_seconds)
+  assert.equal(s.requestBody.value.priming_batch_id,undefined);assert.equal(s.primeReady.value,false)
+  assert.equal(s.validatedKey.value,'');assert.equal(s.initializationConfirmed.value,false);assert.equal(s.bottlesConfirmed.value,false)
+  assert.equal(p.calls.length,0);assert.match(s.draftNotice.value,/当前到温规则/)
+  s.experimentName.value='新的实验';s.axes.value[4].list='75,85';s.saveDraft()
+  const restored=page(false,true,storage)
+  try{restored.state.restoreDraft();assert.equal(restored.state.experimentName.value,'新的实验');assert.equal(restored.state.axes.value[4].list,'75,85')}finally{restored.dispose()}
+ }finally{source.dispose();p.dispose()}
+})
+
+test('history reuse leaves missing legacy drain parameters blank instead of estimating',()=>{
+ const request={axes:[[30],[30],[2],[2],[80],[10]],repeats:1}
+ const storage=new Map([['heat.guided-draft.v1',JSON.stringify(history.guidedHistoryDraft(request,'旧实验'))]])
+ const p=page(false,true,storage)
+ try{p.state.restoreDraft();assert.equal(p.state.primeValue('prime_drain_seconds'),NaN);assert.equal(p.state.requestBody.value.prime_drain_seconds,null);assert.equal(p.state.fixed.value.find((f:any)=>f.key==='cleanTime').value,null)}finally{p.dispose()}
 })
 test('successful explicit start clears draft and keeps progress route selected',async()=>{
  const storage=new Map<string,string>(),p=page(true,true,storage)

@@ -448,8 +448,8 @@ steps:
     type: microwave_temperature_reached
     device_id: microwave1
     target_temperature: 40
-    tolerance: 3
-    seconds: 30
+    tolerance: 5
+    seconds: 15
     timeout: 300
 
 - id: mw_hold_by_heat_timer_structure_only
@@ -462,7 +462,7 @@ steps:
     device_id: microwave1
     seconds: 300
     target_temperature: 40
-    tolerance: 3
+    tolerance: 5
     hold_mode: timed
     timeout: 300
 
@@ -563,12 +563,12 @@ steps:
         target_temperature: 30
       - device_id: heater2
         target_temperature: 30
-    tolerance: 3
+    tolerance: 5
     seconds: 30
     timeout: 600
 ```
 
-引导式每组使用 ±3℃、连续30秒，约每秒读取一次两路温度；任一路越界或暂停后重新计时。稳定时长与总超时使用单调时钟，总超时扣除实际暂停。读取失败、非有限或无效温度及超时均停止实验，停止请求可中断等待。原 `temperature_reached` 单设备等待语义不变。
+引导式每组使用 ±5℃、连续30秒，约每秒读取一次两路温度；任一路越界或暂停后重新计时。稳定时长与总超时使用单调时钟，总超时扣除实际暂停。读取失败、非有限或无效温度及超时均停止实验，停止请求可中断等待。原 `temperature_reached` 单设备等待语义不变。
 
 ### 双路加热器到温等待 `heater_pair_reached`
 
@@ -624,7 +624,7 @@ steps:
 说明：
 
 - 判断逻辑基于 `DeviceManager.read_microwave_data()` 返回的 `material_temperature`
-- `seconds > 0` 时，越界或实际暂停后重新累计连续稳定时间；总到温超时包含稳定时间。新引导式及托管流程使用目标±3℃、连续30秒。
+- `seconds > 0` 时，越界或实际暂停后重新累计连续稳定时间；总到温超时包含稳定时间。新引导式及托管流程使用目标±5℃、连续15秒。
 - 超时会导致步骤失败
 - stop 会中断该等待
 
@@ -935,7 +935,7 @@ interval_time: 0
 
 `hold_mode` 可填 `qualified`（默认）或 `timed`。`qualified` 保留旧目标YAML的有效保温：相邻两次有效采样均在目标容差内才累计区间，越界暂停累计、回温后继续，暂停后不跨暂停连接采样。`timed` 按设定时长普通计时，温度偏离仍提示和记录，不冻结、不清零计时；它不改变仪器温控，也不取消故障与控制状态监督。无目标旧YAML继续纯计时监督。
 
-新生成的引导式和托管流程先用 `microwave_temperature_reached` 在目标±3℃连续稳定30秒（seconds=30）；越界或实际暂停后重置稳定窗口，连续稳定包含在原到温超时内。通过后采用 `hold_mode: timed`，不再增加600秒回温等待。例如：
+新生成的引导式和托管流程先用 `microwave_temperature_reached` 在目标±5℃连续稳定15秒（seconds=15）；越界或实际暂停后重置稳定窗口，连续稳定包含在原到温超时内。通过后采用 `hold_mode: timed`，不再增加600秒回温等待。例如：
 
 ```yaml
 - id: hold
@@ -946,12 +946,12 @@ interval_time: 0
     device_id: microwave1
     seconds: 600
     target_temperature: 60
-    tolerance: 3
+    tolerance: 5
     hold_mode: timed
     timeout: 600
 ```
 
-填写目标时必须明确填写 `tolerance` 和 `timeout`，数值须有效非负，超时须为正且不小于 `seconds`；timed 示例将 timeout 设为 seconds，零秒保温使用正数timeout（新流程取1秒），仍先核验有效状态。默认qualified不会自动套用新稳定等待或改成普通计时；旧YAML须显式改写才能切换策略。实际暂停不计入两种保温计时及超时。`metadata.microwave_hold_policy` 记录新流程的稳定容差、30秒稳定要求、定时方式及计时后温漂继续规则；旧历史不改写。
+填写目标时必须明确填写 `tolerance` 和 `timeout`，数值须有效非负，超时须为正且不小于 `seconds`；timed 示例将 timeout 设为 seconds，零秒保温使用正数timeout（新流程取1秒），仍先核验有效状态。默认qualified不会自动套用新稳定等待或改成普通计时；旧YAML须显式改写才能切换策略。实际暂停不计入两种保温计时及超时。`metadata.microwave_hold_policy` 记录新流程的稳定容差、15秒稳定要求、定时方式及计时后温漂继续规则；旧历史不改写。
 
 新流程设备计时须覆盖升温和连续稳定等待、普通保温及保护余量。引导式五个自动功率段使用同一目标及 `ceil(heating_timeout) + 保温秒数 + 60` 秒保护时长；托管模式采用同一规则，超出99小时59分59秒在写入前拒绝。搭建式不自动扩展硬件段，由编排者配置。`microwave.start` 先读取并确认空闲、无输出、无故障，单独选择模式后复查空闲及本次参数块，再复查空闲并发送START；启动确认后还会有限读回同一参数块和运行状态。不一致或读回失败不能开始保温，且不自动重新写入或重启。读取及写入边界检查停止请求，失败进入引擎清理；新增等待字段可选，旧YAML默认语义保留。读回一致仅证明已知参数区一致，不能证明未公开的本机运行方案；只写模式位和未知模式原码不能用于确认实际执行模式。
 
@@ -965,7 +965,7 @@ interval_time: 0
 
 引导式 recipe 不在反应前停前驱体加热器；外层 GuidedBatch 在成功组间保留加热器，到整批结束/失败/停止时全停机。独立运行导出的单组 YAML 使用普通引擎，完成时仍清理全部活动设备，不能仅凭 YAML 推断有跨组保温。搭建式的阀位及 heater.stop 编排保持自由。
 
-引导式批次的预充 YAML 在两泵初始化后，使用 `heater.set_temperature`、`heater.start`、`heater_pair_reached` 按第一组目标加热，两路实测温度均达到或超过各自目标后通过；不要求 ±3℃ 连续30秒。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组仍使用 `heater_pair_stable` 再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
+引导式批次的预充 YAML 在两泵初始化后，使用 `heater.set_temperature`、`heater.start`、`heater_pair_reached` 按第一组目标加热，两路实测温度均达到或超过各自目标后通过；不要求连续稳定等待。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组仍使用 `heater_pair_stable` 再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
 
 引导式预充在两路 heater.start 和 `prime_heat_both_reached` 到温等待通过后立即执行 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，温度波动不暂停或重置计时，结束后执行预充吸排；前置双路到温等待默认超时3600秒。旧 YAML 等待类型和默认值保持原语义，历史流程快照不改写。
 

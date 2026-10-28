@@ -292,7 +292,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 
 电脑托管 API 前缀为 `/api/microwave-program/{device_id}`：`POST /preview` 仅编译校验；`POST /start` 接收 `request_id`（32位小写十六进制）、`mode`、`stages`（1–5个 `{temperature, hold_seconds, power_percent}`）、可选 `heating_timeout`（默认600，1–3600秒）及显式 `hardware_confirmed=true`；`GET /current` 返回状态、逻辑段、阶段、错误和恢复/清理锁；`POST /stop` 停止本服务中的执行；`POST /acknowledge-interrupted` 要求 `{devices_stopped_confirmed: true}`，只解除现场确认后的锁，不重放。重复标识和相同请求返回原记录，参数不同返回409；旧标识即使完成、停止或解除锁定也不能再次执行。连接、有限非负温度、无故障、控制位清除和输出停止均需后端只读检查，不自动连接。
 
-`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段编译 configure/start/monitored_hold/stop 四步，start 的到温等待要求目标±3℃连续稳定30秒，之后按设定时长普通计时保温。稳定期间越界或实际暂停重置稳定窗口；计时保温期间温度偏离仅提示记录，不冻结或清零计时。确认停止后切换下一目标。五个硬件段为同一目标及 `ceil(heating_timeout) + hold_seconds + 60` 秒保护时长，连续稳定包含在 heating_timeout 内，最大99时59分59秒，超出则写入前拒绝。启动后复核本次已知参数块，读回一致不能证明未公开的运行方案。段间停机，方案映射及计时重置仍须实机验收；原始REST/YAML不自动改用此计时策略。
+`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段编译 configure/start/monitored_hold/stop 四步，start 的到温等待要求目标±5℃连续稳定15秒，之后按设定时长普通计时保温。稳定期间越界或实际暂停重置稳定窗口；计时保温期间温度偏离仅提示记录，不冻结或清零计时。确认停止后切换下一目标。五个硬件段为同一目标及 `ceil(heating_timeout) + hold_seconds + 60` 秒保护时长，连续稳定包含在 heating_timeout 内，最大99时59分59秒，超出则写入前拒绝。启动后复核本次已知参数块，读回一致不能证明未公开的运行方案。段间停机，方案映射及计时重置仍须实机验收；原始REST/YAML不自动改用此计时策略。
 
 完整程序注册在共享 `_engines`，与普通/引导实验互斥，运行和清理期间保留占用，阻止手动写控制和断开；手动停止及全局急停先禁止后续步骤。托管不暴露暂停/恢复，通用实验暂停/恢复端点对此返回409，避免冻结电脑计时而固件仍加热。原子记录位于 `output/microwave_programs/mwprogram_<request_id>.json`，启动意图必须先落盘，每步先保存进度；存储失败停止并保留锁，日志保存失败也显式报告。重启后未完成或待清理记录视为中断，锁住实验和手动运动控制；可连接、读取、停止后人工确认解除，解除记录保存失败仍锁定。页面/WS生命周期只读，服务正常关闭等待托管停机；进程崩溃无法保证立即停机，长硬件计时不能替代独立联锁。
 
@@ -593,7 +593,7 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 ### 自动化保护等待与计时
 
-`StepExecutor` 在编排层执行 `microwave_monitored_hold`：复用已有每秒读取。`WaitCondition.hold_mode` 允许 qualified（默认）和 timed；qualified 保留旧目标YAML按相邻有效且达标样本累计的语义，越界不累计，实际暂停后重新建立采样边界；timed 按单调时钟普通计时，温度偏离只提示和记录。无目标旧YAML仍为纯计时监督。`microwave_temperature_reached.seconds` 表示连续稳定秒数，默认0兼容旧YAML；越界或实际暂停后重置稳定窗口，总到温超时包含稳定时间。新引导式和托管编译为目标±3℃稳定30秒后timed保温，温度调节和硬件控制判断不变。控制退出、状态未知、无效温度或故障始终先于完成判断；单次读取或采样间隔超过 `1 + 3 * microwave.config.timeout` 秒失败，默认7秒。保温计时及超时扣除实际暂停，引导式反应中的待处理暂停请求不扣时。失败返回False并进入既有清理与恢复锁。
+`StepExecutor` 在编排层执行 `microwave_monitored_hold`：复用已有每秒读取。`WaitCondition.hold_mode` 允许 qualified（默认）和 timed；qualified 保留旧目标YAML按相邻有效且达标样本累计的语义，越界不累计，实际暂停后重新建立采样边界；timed 按单调时钟普通计时，温度偏离只提示和记录。无目标旧YAML仍为纯计时监督。`microwave_temperature_reached.seconds` 表示连续稳定秒数，默认0兼容旧YAML；越界或实际暂停后重置稳定窗口，总到温超时包含稳定时间。新引导式和托管编译为目标±5℃稳定15秒后timed保温，温度调节和硬件控制判断不变。控制退出、状态未知、无效温度或故障始终先于完成判断；单次读取或采样间隔超过 `1 + 3 * microwave.config.timeout` 秒失败，默认7秒。保温计时及超时扣除实际暂停，引导式反应中的待处理暂停请求不扣时。失败返回False并进入既有清理与恢复锁。
 
 状态响应只增加可选字段：引导式 `progress.activity` 与托管 `activity` 含 `hold_mode`、`qualified_seconds`、`hold_in_band`、`hold_timeout_seconds`。timed 下 `qualified_seconds=null`，`elapsed_seconds`/`duration_seconds`/`remaining_seconds` 是普通保温计时，`hold_in_band` 仅作提示；qualified 的剩余按有效时间计算。稳定到温由已有稳定窗口读数展示，页面不自行累计。步骤结果保存 `hold_summary`，新流程metadata中的 `microwave_hold_policy` 保存稳定容差、30秒稳定要求及计时后温漂继续策略；旧记录缺字段按原有效保温信息展示，不改写历史。
 

@@ -354,7 +354,7 @@ class GuidedTests(unittest.TestCase):
         formal = guided.recipe(request.rows()[0], request, "heated", 0)["steps"]
         formal_wait = next(s["wait"] for s in formal if s["id"] == "heat_both_stable")
         self.assertEqual((formal_wait["type"], formal_wait["tolerance"], formal_wait["seconds"]),
-                         ("heater_pair_stable", 3, 30))
+                         ("heater_pair_stable", 5, 30))
         self.assertLess([s["id"] for s in formal].index("heat_both_stable"),
                         [s["id"] for s in formal].index("aspirate_0"))
 
