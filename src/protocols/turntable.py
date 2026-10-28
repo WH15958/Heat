@@ -18,6 +18,8 @@ WORK_STATES = {
 }
 INPUT_BITS = {"positive_limit": 2, "home": 3, "negative_limit": 4, "input4": 5}
 STATUS_FRAME = bytes.fromhex("55 aa 0c 00 00 00 00 00 00 c3")
+# Initial host-side processing gap, pending lab verification; not a manual value.
+STATUS_QUERY_GAP_SECONDS = 0.1
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +29,8 @@ class TurntableProtocol:
         self.timeout = timeout
         self._last_command = None
         self._last_command_at = None
+        self._next_query_at = 0.0
+        self._first_status_after_command = False
 
     @staticmethod
     def frame(request):
@@ -44,9 +48,12 @@ class TurntableProtocol:
         return b"\x55\xaa" + bytes([opcode]) + payload + b"\xc3"
 
     def _write(self, frame):
-        if self.serial.write(frame) != len(frame):
-            raise IOError("Incomplete CL-01A write; command outcome unknown")
-        self.serial.flush()
+        try:
+            if self.serial.write(frame) != len(frame):
+                raise IOError("Incomplete CL-01A write; command outcome unknown")
+            self.serial.flush()
+        finally:
+            self._next_query_at = time.monotonic() + STATUS_QUERY_GAP_SECONDS
 
     def send_command(self, request):
         # No ACK is documented, so successful write only means sent, not executed.
@@ -54,25 +61,52 @@ class TurntableProtocol:
         self._write(frame)
         self._last_command = frame.hex(" ")
         self._last_command_at = time.monotonic()
+        self._first_status_after_command = True
+
+    def _log_status(self, level, event, reply, started, queried_at, trailing, error=None):
+        command_age = (None if self._last_command_at is None
+                       else f"{queried_at - self._last_command_at:.3f}")
+        logger.log(level, "CL-01A status %s: port=%s received=%s/8 raw=%s trailing=%s "
+                   "elapsed=%.3fs query_delay=%.3fs response_elapsed=%.3fs "
+                   "last_command=%s command_age=%s error=%s",
+                   event, getattr(self.serial, "port", None), len(reply), reply.hex(" "), trailing,
+                   time.monotonic() - started, queried_at - started, time.monotonic() - queried_at,
+                   self._last_command, command_age, error)
 
     def read_status(self):
         started = time.monotonic()
-        self.serial.reset_input_buffer()
-        self._write(STATUS_FRAME)
-        deadline = time.monotonic() + self.timeout
+        # All callers share the existing device lock. Pace queries here so Web
+        # monitoring cannot bypass the gap after a motion or another response.
+        # Commands (especially STOP) never wait for this query-only gap.
+        delay = self._next_query_at - started
+        if delay > 0:
+            time.sleep(delay)
+        queried_at = time.monotonic()
         reply = bytearray()
-        while len(reply) < 8 and time.monotonic() < deadline:
-            reply.extend(self.serial.read(8 - len(reply)))
-        if len(reply) != 8:
-            elapsed = time.monotonic() - started
-            since_command = None if self._last_command_at is None else started - self._last_command_at
-            logger.warning("CL-01A status timeout: port=%s received=%s/8 raw=%s elapsed=%.3fs last_command=%s command_age=%s",
-                           getattr(self.serial, "port", None), len(reply), reply.hex(" "), elapsed,
-                           self._last_command, since_command)
-            raise TimeoutError(f"No complete eight-byte CL-01A status response (received {len(reply)}/8 bytes, elapsed {elapsed:.3f}s)")
-        if getattr(self.serial, "in_waiting", 0):
-            raise IOError("Unexpected trailing CL-01A status bytes")
-        return self.decode_status(bytes(reply))
+        trailing = 0
+        try:
+            self.serial.reset_input_buffer()
+            self._write(STATUS_FRAME)
+            deadline = time.monotonic() + self.timeout
+            while len(reply) < 8 and time.monotonic() < deadline:
+                reply.extend(self.serial.read(8 - len(reply)))
+            if len(reply) != 8:
+                elapsed = time.monotonic() - started
+                raise TimeoutError(f"No complete eight-byte CL-01A status response (received {len(reply)}/8 bytes, elapsed {elapsed:.3f}s)")
+            trailing = getattr(self.serial, "in_waiting", 0)
+            if trailing:
+                raise IOError("Unexpected trailing CL-01A status bytes")
+            status = self.decode_status(bytes(reply))
+            self._log_status(logging.INFO if self._first_status_after_command else logging.DEBUG,
+                             "received", reply, started, queried_at, trailing)
+            return status
+        except OSError as exc:
+            self._log_status(logging.WARNING, "timeout" if isinstance(exc, TimeoutError) else "failed",
+                             reply, started, queried_at, trailing, exc)
+            raise
+        finally:
+            self._first_status_after_command = False
+            self._next_query_at = time.monotonic() + STATUS_QUERY_GAP_SECONDS
 
     @staticmethod
     def decode_status(reply):
