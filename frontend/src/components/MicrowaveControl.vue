@@ -88,7 +88,7 @@
         <el-button :disabled="settingsDisabled || microwave.usedSegments >= 5" @click="addSegment">添加一段</el-button>
         <span class="unit-label">最多 5 段</span>
       </el-form-item>
-      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：目标 ±3℃ 内连续稳定 30 秒后定时保温，之后温度偏离不暂停计时，段间确认停机。运行期间请保持服务运行并现场看护。" />
+      <el-alert class="program-notice" type="info" :closable="false" title="电脑托管：目标 ±5℃ 内连续稳定 15 秒后定时保温，之后温度偏离不暂停计时，段间确认停机。运行期间请保持服务运行并现场看护。" />
       <div class="segments-table" :class="{ 'multiple-segments': microwave.usedSegments > 1 }">
       <section v-for="segment in activeSegments" :key="segment.segment" class="program-segment">
         <div class="segment-heading">

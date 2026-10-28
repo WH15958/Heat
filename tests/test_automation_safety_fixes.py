@@ -375,7 +375,7 @@ def test_guided_covers_all_hardware_slots_with_guard_time(minutes, timeout, part
         assert hold.wait.timeout == max(1, round(minutes * 60))
         heating = next(s for s in steps if s.id == 'microwave_start').wait
         assert heating.timeout == timeout
-        assert (heating.tolerance, heating.seconds) == (3, 30)
+        assert (heating.tolerance, heating.seconds) == (5, 15)
 
 
 def test_guided_failed_fourth_slot_configuration_prevents_start(monkeypatch):

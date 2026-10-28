@@ -40,6 +40,35 @@ def run_step(executor, condition):
         ActionType.WAIT, wait=condition)))
 
 
+@pytest.mark.parametrize('source', ['guided', 'program'])
+@pytest.mark.parametrize('profile', ['lower', 'upper', 'outside', 'reset', 'late'])
+def test_generated_microwave_gate_uses_five_degrees_and_fifteen_seconds(monkeypatch, source, profile):
+    from src.experiment import guided, microwave_program
+    from test_guided import spec
+
+    if source == 'guided':
+        request = spec(axes=[[30], [30], [0.1], [0.2], [80], [0]], heating_timeout=30)
+        steps = parse_experiment_data(guided.recipe(request.rows()[0], request, 'test', 0))['steps']
+        condition = next(s.wait for s in steps if s.id == 'microwave_start')
+    else:
+        request = microwave_program.ProgramRequest(request_id='a'*32, mode='auto_power',
+            stages=[dict(temperature=80, hold_seconds=0)], heating_timeout=30)
+        condition = microwave_program.compile_steps('microwave1', request)[1].wait
+    clock = fake_clock(monkeypatch)
+    def read(device_id):
+        temperature = 75 if profile == 'lower' else 85
+        if profile == 'outside' or (profile == 'reset' and 10 <= clock.now < 11):
+            temperature = 85.01
+        if profile == 'late' and clock.now < 20:
+            temperature = 70
+        return state(temperature)
+    executor = execution.StepExecutor(SimpleNamespace(read_microwave_data=read))
+    assert run_step(executor, condition) is (profile not in ('outside', 'late'))
+    expected = 26 if profile == 'reset' else 30 if profile in ('outside', 'late') else 15
+    assert expected <= clock.now < expected + 1
+    assert executor.activity_snapshot['stable_required_seconds'] == 15
+
+
 @pytest.mark.parametrize('temperature', [57, 60, 63])
 def test_stable_entry_requires_full_30_seconds_at_inclusive_boundaries(monkeypatch, temperature):
     clock = fake_clock(monkeypatch)

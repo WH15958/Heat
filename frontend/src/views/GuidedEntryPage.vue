@@ -19,9 +19,10 @@
           <el-alert v-if="finalizationFailed" title="实验组已完成，收尾回零失败；已完成样品记录保留，请检查恢复事项。" type="warning" :closable="false" />
           <el-alert v-if="detail.persistence_status==='error'" title="批次保存失败，请检查记录恢复，不能视为完整归档。" type="error" :closable="false" />
           <el-alert v-if="detailError" :title="detailError" type="warning" :closable="false" />
-          <div class="detail-actions"><el-button :loading="exporting" :disabled="detailLoading" @click="exportAll">导出整批记录</el-button><el-button @click="router.push({path:'/history',query:{batch_id:detail.batch_id}})">查看记录详情与曲线</el-button></div>
+          <div class="detail-actions"><el-button type="primary" :loading="reusing" :disabled="loading||!!error||detailLoading||attention||!hasGuidedAxes(reuseRequest)" @click="reuseConditions">复用本批条件新建</el-button><el-button :loading="exporting" :disabled="detailLoading" @click="exportAll">导出整批记录</el-button><el-button @click="router.push({path:'/history',query:{batch_id:detail.batch_id}})">查看记录详情与曲线</el-button></div>
           <h4>本批预充</h4><p>{{ label(detail.priming?.status || 'pending') }} · A {{ detail.priming?.completed_cycles?.[0] || 0 }} 次 / B {{ detail.priming?.completed_cycles?.[1] || 0 }} 次</p><p>记录编号：{{ detail.priming?.run_id || '未生成（可查看下方已关联记录）' }}</p>
-          <h4>各组实验</h4><div class="table-scroll"><table><thead><tr><th>组号</th><th>状态</th><th>产物瓶</th><th>收取状态</th><th>样品编号</th><th>记录编号</th></tr></thead><tbody><tr v-for="g in groups" :key="g.index"><td>{{ g.index }}</td><td>{{ label(g.state) }}</td><td>{{ g.bottle_number==null ? '未记录' : turntableBottleLabel(g.bottle_number) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<p v-if="g.collection_error">{{ g.collection_error }}</p></td><td>{{ g.sample_id || '—' }}</td><td>{{ g.run_id || '尚未生成' }}</td></tr></tbody></table></div>
+          <h4>各组实验</h4><p class="condition-note">以下为设定条件；实际温度与执行过程请查看记录详情与曲线。未执行组展示计划条件。</p><div class="table-scroll"><table><thead><tr><th>组号</th><th>状态</th><th>实验条件</th><th>产物瓶</th><th>收取状态</th><th>样品编号</th><th>记录编号</th></tr></thead><tbody><tr v-for="g in groups" :key="g.index"><td>{{ g.index }}</td><td>{{ label(g.state) }}</td><td class="group-conditions"><small>{{ g.conditionSource }}</small><template v-if="g.parameters"><div>前驱体 A：{{ g.parameters[0] }} ℃ · 进样 {{ g.parameters[2] }} mL</div><div>前驱体 B：{{ g.parameters[1] }} ℃ · 进样 {{ g.parameters[3] }} mL</div><div>微波：{{ g.parameters[4] }} ℃ · 保温 {{ g.parameters[5] }} 分钟</div></template></td><td>{{ g.bottle_number==null ? '未记录' : turntableBottleLabel(g.bottle_number) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<p v-if="g.collection_error">{{ g.collection_error }}</p></td><td>{{ g.sample_id || '—' }}</td><td>{{ g.run_id || '尚未生成' }}</td></tr></tbody></table></div>
+          <details v-if="reuseRequest"><summary>本批共用的进料、收集与清洗条件</summary><dl class="common-conditions"><template v-for="field in commonFields" :key="field.key"><dt>{{ field.label }}</dt><dd>{{ reuseRequest[field.key] ?? '未记录' }}<template v-if="reuseRequest[field.key]!=null"> {{ field.unit }}</template></dd></template></dl></details>
           <details v-if="detail.turntable"><summary>转盘与收尾记录</summary><p>最后确认瓶位：{{ turntableBottleLabel(detail.turntable.current_bottle) }} · 目标：{{ turntableBottleLabel(detail.turntable.target_bottle) }}</p><p>收尾：{{ label(detail.finalization?.status || 'pending') }} {{ detail.finalization?.error || '' }}</p><pre>{{ JSON.stringify(detail.turntable_events || [],null,2) }}</pre></details>
           <h4>已关联执行记录（含预充）</h4><p v-if="!related.length">尚未找到执行日志；批次参数与检查点仍保留。</p><ul><li v-for="run in related" :key="run.run_id">{{ run.experiment_name || run.run_id }} · {{ label(run.status) }} · {{ run.run_id }}</li></ul>
           <details><summary>完整批次参数</summary><pre>{{ JSON.stringify(detail.request, null, 2) }}</pre></details>
@@ -39,13 +40,24 @@ import axios from 'axios'
 import { ElMessageBox } from 'element-plus'
 import BatchExperimentPage from './BatchExperimentPage.vue'
 import { batchExport, batchRunIds, collectionStatusLabel, turntableBottleLabel } from '../experiment/guidedProgress'
+import { guidedHistoryDraft, guidedHistoryGroups, hasGuidedAxes } from '../experiment/guidedHistory'
 const route=useRoute(),router=useRouter()
 const setup=computed(()=>route.query.new==='1'||route.query.resume==='1')
 const history=computed(()=>route.query.view==='history')
 const records=ref<any[]>([]),current=ref<any>({}),detail=ref<any>(null),savedPlan=ref<any>(null),related=ref<any[]>([])
 const loading=ref(false),detailLoading=ref(false),exporting=ref(false),error=ref(''),detailError=ref(''),hasDraft=ref(false)
+const reusing=ref(false)
 const attention=computed(()=>['running','paused'].includes(current.value.state)||!!(current.value.recovery_required||current.value.cleanup_pending||current.value.cleanup_required||current.value.persistence_status==='error'))
-const groups=computed(()=>Array.from({length:detail.value?.total_groups||0},(_,i)=>detail.value.groups?.find((g:any)=>g.index===i+1)||{index:i+1,state:'pending'}))
+const groups=computed(()=>guidedHistoryGroups(detail.value,savedPlan.value))
+const reuseRequest=computed(()=>detail.value?.request??(savedPlan.value?.batch_id===detail.value?.batch_id?savedPlan.value?.request:null))
+const commonFields=[
+ {key:'speed_a',label:'A 进样速度',unit:'脉冲/秒'},{key:'speed_b',label:'B 进样速度',unit:'脉冲/秒'},
+ {key:'drain_flow',label:'产物 / 清洗排液流量',unit:'mL/min'},
+ {key:'product_drain_seconds',label:'产物排液时间',unit:'秒'},{key:'clean_drain_seconds',label:'清洗排液时间',unit:'秒'},
+ {key:'clean_volume',label:'每次清洗进液量',unit:'mL'},{key:'clean_flow',label:'清洗进液流量',unit:'mL/min'},
+ {key:'clean_dwell',label:'清洗停留时间',unit:'秒'},{key:'clean_cycles',label:'清洗次数',unit:'次'},
+ {key:'turntable_drip_seconds',label:'收集结束后滴液等待',unit:'秒'},
+]
 const finalizationFailed=computed(()=>detail.value?.finalization?.status==='failed'&&groups.value.length>0&&groups.value.every((g:any)=>g.state==='completed'))
 const labels:Record<string,string>={idle:'未开始',pending:'未执行',running:'运行中',paused:'暂停',completed:'已完成',failed:'失败',stopped:'已停止',interrupted:'中断待确认',ready:'准备就绪'}
 const label=(state:string)=>labels[state]||state||'未知'
@@ -58,6 +70,21 @@ async function create(){
  if(hasDraft.value){try{await ElMessageBox.confirm('将清除本机未完成草稿，开始空白实验。已执行批次记录不受影响。','替换草稿',{type:'warning',confirmButtonText:'新建空白实验',cancelButtonText:'保留草稿'})}catch{return}}
  try{localStorage.removeItem('heat.guided-draft.v1')}catch{error.value='无法清除本机草稿，请检查浏览器存储。';return}
  continueDraft()
+}
+async function reuseConditions(){
+ if(reusing.value||loading.value||error.value||detailLoading.value||attention.value||!detail.value)return
+ const id=detail.value.batch_id,token=sequence
+ reusing.value=true;detailError.value=''
+ try{
+  const draft=guidedHistoryDraft(reuseRequest.value,detail.value.experiment_name||reuseRequest.value?.experiment_name||id)
+  if(localStorage.getItem('heat.guided-draft.v1'))await ElMessageBox.confirm('将用本批条件替换本机未完成草稿，旧实验记录保留。','复用历史条件',{type:'warning',confirmButtonText:'替换并填写新实验',cancelButtonText:'保留草稿'})
+  const {data}=await axios.get('/api/guided/current')
+  if(token!==sequence||detail.value?.batch_id!==id||setup.value)return
+  current.value=data
+  if(attention.value){detailError.value='请先处理当前批次或恢复事项，再复用历史条件。';return}
+  localStorage.setItem('heat.guided-draft.v1',JSON.stringify(draft))
+  continueDraft()
+ }catch(e){if(e!=='cancel'&&e!=='close')detailError.value='条件复用失败：'+String((e as Error).message||e)}finally{reusing.value=false}
 }
 let sequence=0
 async function selectBatch(id:string){
@@ -104,5 +131,6 @@ onMounted(()=>{if(!setup.value)void load()})
 onUnmounted(()=>{sequence++})
 </script>
 <style scoped>
+.group-conditions{min-width:260px;line-height:1.8}.group-conditions small{display:block;color:#607a91;margin-bottom:4px}.condition-note{font-size:13px}.common-conditions{display:grid;grid-template-columns:minmax(180px,1fr) minmax(100px,1fr);gap:10px;font-size:13px}.common-conditions dt,.common-conditions dd{margin:0;padding:4px 0}
 .guided-entry{color:#294763;max-width:1400px;margin:auto}header,.history-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}h2{font-size:28px;margin:0}p{line-height:1.8;color:#607a91}.entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin-top:28px}.entry-grid section,.batch-detail,.attention{background:white;border:1px solid #d7e6f4;border-radius:16px;padding:28px}.entry-icon{font-size:32px;color:#1688e8}.entry-grid small{display:block;margin-top:16px;color:#607a91}.attention{margin:20px 0;border-color:#e8b963}.history-heading{margin-top:24px}.history-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:24px}.history-layout nav{display:flex;flex-direction:column;gap:12px}.history-layout nav button{text-align:left;border:1px solid #d7e6f4;border-radius:10px;padding:16px;background:white;color:#294763;cursor:pointer;display:flex;flex-direction:column;gap:8px;overflow-wrap:anywhere}.history-layout nav button.selected{border-color:#1688e8;background:#edf6ff}.batch-detail{min-width:0}.batch-detail>small{overflow-wrap:anywhere}.detail-actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}.table-scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:10px;text-align:left;border-bottom:1px solid #e3ebf3;overflow-wrap:anywhere}details{margin-top:20px}summary{cursor:pointer}pre{max-height:400px;overflow:auto;background:#f4f8fc;padding:16px;font-size:12px}li{font-size:13px;overflow-wrap:anywhere;margin:10px 0}@media(max-width:800px){.entry-grid,.history-layout{grid-template-columns:1fr}.entry-grid section,.batch-detail{padding:20px}}
 </style>

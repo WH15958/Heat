@@ -12,6 +12,7 @@ import * as priming from '../src/experiment/priming'
 import * as progress from '../src/experiment/guidedProgress'
 import * as document from '../src/experiment/document'
 import * as confirmations from '../src/composables/pendingConfirmation'
+import * as history from '../src/experiment/guidedHistory'
 
 const heaterRegistry = { heaters: { heater1: { connected: true, min_temperature: 0, max_temperature: 200 } } }
 function control(api: any, globals: any = {}) {
@@ -209,7 +210,7 @@ test('syringe stop revokes a pending initialization and only sends stop', async 
 test('guided confirmation after leaving sends no hardware start or stop', async () => {
   const prompt = deferred(), writes: any[] = []
   const p = view('views/BatchExperimentPage.vue', {
-    '../experiment/batch': batch, '../experiment/drainEstimate': drain, '../experiment/priming': priming, '../experiment/guidedProgress': progress,
+    '../experiment/batch': batch, '../experiment/drainEstimate': drain, '../experiment/priming': priming, '../experiment/guidedProgress': progress, '../experiment/guidedHistory': history,
     axios: { post: async (...args: any[]) => { writes.push(args); return { data: {} } } },
     'element-plus': { ElMessageBox: { confirm: () => prompt.promise } },
   }, { document: { querySelector: () => null } })

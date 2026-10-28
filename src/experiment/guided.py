@@ -233,7 +233,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         add(f"heat_{n}_start", "heater.start", dict(device_id=did))
     add("heat_both_stable", "wait", wait=dict(type="heater_pair_stable",
         targets=[dict(device_id=f"heater{n+1}", target_temperature=row[n]) for n in (0, 1)],
-        tolerance=3, seconds=30, timeout=spec.precursor_timeout))
+        tolerance=5, seconds=30, timeout=spec.precursor_timeout))
     feeds = []
     for n, speed in enumerate((spec.speed_a, spec.speed_b)):
         feed = dict(device_id=f"syringe_pump{n+1}", volume=row[n+2], unit="mL",
@@ -252,9 +252,9 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
                   for n in range(1, 6)]))
     add("microwave_start", "microwave.start", dict(device_id="microwave1", mode="auto_power"),
         dict(type="microwave_temperature_reached", device_id="microwave1",
-             target_temperature=row[4], tolerance=3, seconds=30, timeout=spec.heating_timeout))
+             target_temperature=row[4], tolerance=5, seconds=15, timeout=spec.heating_timeout))
     add("hold", "wait", wait=dict(type="microwave_monitored_hold", device_id="microwave1", seconds=seconds,
-        target_temperature=row[4], tolerance=3, hold_mode="timed", timeout=max(1, seconds)))
+        target_temperature=row[4], tolerance=5, hold_mode="timed", timeout=max(1, seconds)))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
     cool = dict(type="microwave_temperature_below", device_id="microwave1",
                 target_temperature=45, timeout=spec.cooling_timeout)
@@ -275,7 +275,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         guided_parameters=row, product_port=spec.product_port,
         bottle_number=index+1, collection_device_id="turntable1",
         collection_status="pending",
-        microwave_hold_policy=dict(hold_mode="timed", tolerance=3, stable_seconds=30, excursion="continue_timing"),
+        microwave_hold_policy=dict(hold_mode="timed", tolerance=5, stable_seconds=15, excursion="continue_timing"),
         theoretical_product_volume_ml=row[2]+row[3],
         product_drain_seconds=spec.product_drain_seconds, clean_drain_seconds=spec.clean_drain_seconds,
         recipe_file=f"output/guided_batches/plans/{batch_id}.json", recipe_group=index+1))
@@ -510,7 +510,7 @@ class GuidedBatch:
             result["progress"]["activity"] = guided_activity(self.executor._activity_step, p.activity)
         if p:
             labels = {"feed_both": "两路前驱体进料", "microwave_config": "设置微波反应温度",
-                "heat_both_stable": "两路温度同时在目标 ±3℃ 内持续 30 秒",
+                "heat_both_stable": "两路温度同时在目标 ±5℃ 内持续 30 秒",
                 "microwave_start": "微波升温", "hold": "反应保温", "microwave_stop": "停止微波",
                 "cool_before_collection": "等待降温至45℃",
                 "recheck_temperature": "收取前复查温度", "product_route": "切向产物出口",

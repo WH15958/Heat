@@ -226,7 +226,7 @@ def test_supported_stage_counts_and_custom_guard(count):
     assert steps[0].params['segments'][0]['minutes'] == 3
     assert steps[0].params['segments'][0]['seconds'] == 40
     assert steps[1].wait.timeout == 37
-    assert (steps[1].wait.tolerance, steps[1].wait.seconds) == (3, 30)
+    assert (steps[1].wait.tolerance, steps[1].wait.seconds) == (5, 15)
     assert steps[2].wait.seconds == 123
     assert steps[2].wait.hold_mode == 'timed'
     assert steps[2].wait.timeout == 123
