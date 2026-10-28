@@ -1,4 +1,6 @@
 """CL-01A framing tests use fake byte streams; no hardware access."""
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -35,6 +37,148 @@ class Wire:
         fragment = bytes(self.buffer[:1])
         del self.buffer[:1]
         return fragment
+
+
+@pytest.fixture
+def paced_wire(monkeypatch):
+    from src.protocols import turntable
+
+    clock = SimpleNamespace(now=10.0, sleeps=[])
+
+    def sleep(seconds):
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+
+    monkeypatch.setattr(turntable, 'time', SimpleNamespace(
+        monotonic=lambda: clock.now, sleep=sleep))
+
+    class PacedWire(Wire):
+        # Model a controller that drops a query while processing the previous
+        # exchange. This reproduces a timing risk, not the proven hardware cause.
+        is_open = True
+        port = 'TEST'
+
+        def __init__(self):
+            super().__init__(bytes.fromhex('00 00 00 00 00 00 fc 20'))
+            self.ready_at = clock.now
+            self.sent_at = []
+
+        def write(self, data):
+            self.writes.append(data)
+            self.sent_at.append(clock.now)
+            if data == STATUS_FRAME and clock.now + 1e-9 >= self.ready_at:
+                self.buffer.extend(self.response)
+            self.ready_at = clock.now + .1
+            return len(data)
+
+        def read(self, count):
+            clock.now += .005
+            result = super().read(count)
+            if not self.buffer:
+                self.ready_at = clock.now + .1
+            return result
+
+    return clock, PacedWire()
+
+
+@pytest.mark.parametrize('command', [
+    {'action': 'move_absolute', 'position': 12000, 'speed': 4000},
+    {'action': 'home', 'direction': 'negative', 'speed': 1000},
+    {'action': 'stop'},
+])
+def test_first_query_waits_for_command_processing_without_replay(paced_wire, command, caplog):
+    clock, wire = paced_wire
+    protocol = TurntableProtocol(wire, .2)
+    protocol.send_command(command)
+    caplog.set_level('INFO', logger='src.protocols.turntable')
+    assert protocol.read_status()['work_state'] == 0x20
+    assert wire.sent_at[1] - wire.sent_at[0] == pytest.approx(.1)
+    assert wire.writes == [protocol.frame(command), STATUS_FRAME]
+    assert 'command_age=0.100' in caplog.text
+    assert 'raw=00 00 00 00 00 00 fc 20' in caplog.text
+
+
+def test_consecutive_queries_wait_after_response_completion(paced_wire):
+    clock, wire = paced_wire
+    protocol = TurntableProtocol(wire, .2)
+    protocol.read_status()
+    finished = clock.now
+    protocol.read_status()
+    assert wire.sent_at[-1] - finished == pytest.approx(.1)
+    # An already idle link should not acquire an extra fixed delay.
+    clock.now += .2
+    sleeps = list(clock.sleeps)
+    protocol.read_status()
+    assert clock.sleeps == sleeps
+
+
+def test_stop_write_bypasses_query_spacing(paced_wire):
+    clock, wire = paced_wire
+    protocol = TurntableProtocol(wire, .2)
+    protocol.send_command({'action': 'move_absolute', 'position': 12000, 'speed': 4000})
+    sent = clock.now
+    protocol.send_command({'action': 'stop'})
+    assert clock.now == sent and clock.sleeps == []
+    assert [frame[2] for frame in wire.writes] == [0x07, 0x02]
+
+
+def test_failed_query_also_leaves_processing_gap(paced_wire):
+    clock, wire = paced_wire
+    protocol = TurntableProtocol(wire, .2)
+    wire.response = bytes.fromhex('00 00 20 3e 00 00 fc 10')
+    with pytest.raises(OSError, match='Undefined'):
+        protocol.read_status()
+    finished = clock.now
+    wire.response = bytes.fromhex('00 00 20 3e 00 00 fc 20')
+    assert protocol.read_status()['position'] == 8254
+    assert wire.sent_at[-1] - finished == pytest.approx(.1)
+
+
+@pytest.mark.parametrize('response,error', [
+    (b'', 'received 0/8'),
+    (bytes.fromhex('00 00 20 3e'), 'received 4/8'),
+    (bytes.fromhex('00 00 20 3e 00 00 fc 10'), 'Undefined'),
+    (bytes.fromhex('00 00 20 3e 00 00 fc 20 ff'), 'trailing'),
+])
+def test_paced_query_errors_keep_strict_validation_and_raw_diagnostics(paced_wire, response, error, caplog):
+    clock, wire = paced_wire
+    wire.response = response
+    protocol = TurntableProtocol(wire, .2)
+    protocol.send_command({'action': 'move_absolute', 'position': 12000, 'speed': 4000})
+    started = clock.now
+    with pytest.raises(OSError, match=error):
+        protocol.read_status()
+    assert clock.now - started <= .305
+    assert len(wire.writes) == 2
+    assert f'raw={response[:8].hex(" ")}' in caplog.text
+    assert 'command_age=0.100' in caplog.text
+
+
+def test_controller_still_stops_after_no_response_and_does_not_complete_bottle(paced_wire, monkeypatch):
+    from src.protocols import turntable
+    from src.web import turntable_control
+    from src.devices.turntable import TurntableDevice
+    from src.utils.config import TurntableConfig
+
+    clock, wire = paced_wire
+    monkeypatch.setattr(turntable_control, 'time', turntable.time)
+    config = TurntableConfig(position_encoding_verified=True, home_enabled=True, bottle_count=12)
+    device = TurntableDevice(config)
+    device.handle = wire
+    device.protocol = TurntableProtocol(wire, .2)
+    control = turntable_control.TurntableController(config, device=device)
+    control.read()
+    control.command({'action': 'move_absolute', 'position': 12000, 'speed': 4000})
+    wire.response = b''
+    state = control.read()
+    assert state['read_ok'] is False and state['action']['result'] == 'unknown'
+    assert state['bottle_ready'] is False
+    wire.response = bytes.fromhex('00 00 20 3e 00 00 fc 20')  # position 8254
+    control.enforce_timeout()
+    state = control.summary()
+    assert state['stop_confirmed'] is True and state['position'] == 8254
+    assert state['action']['result'] == 'failed' and state['bottle_ready'] is False
+    assert [frame[2] for frame in wire.writes if frame != STATUS_FRAME] == [0x07, 0x02]
 
 
 @pytest.mark.parametrize("command,frame", [
