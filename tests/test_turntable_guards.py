@@ -282,7 +282,7 @@ def test_guided_start_refreshes_stale_turntable_without_bypassing_guards(path, p
     monkeypatch.setattr(guided_core, 'preflight', slow_preflight)
     response = asyncio.run(post(app, path, guided_spec().model_dump()))
     assert not control.device.commands
-    if failure is None:
+    if failure in (None, 'reset'):
         assert response.status_code == 200, response.text
         runner.start.assert_awaited_once_with(prime_only=path.endswith('/prime'))
         assert control.device.read_count == 3
@@ -290,6 +290,24 @@ def test_guided_start_refreshes_stale_turntable_without_bypassing_guards(path, p
         assert response.status_code == 409, response.text
         runner.start.assert_not_awaited()
         assert not experiments._engines and not guided._batches
+
+
+@pytest.mark.parametrize('blocking', ['owned', 'pending', 'stop_failed'])
+def test_startup_reset_never_bypasses_previous_motion_or_ownership(blocking):
+    dm = DeviceManager()
+    control = TurntableController(TurntableConfig(), device=FakeDevice())
+    control.device.work_state = 0
+    control.read()
+    if blocking == 'owned':
+        control.owner = object()
+    elif blocking == 'pending':
+        control.action = {'result': 'unknown', 'action': 'home'}
+    else:
+        control._requires_stop = True
+    dm.turntables['turntable1'] = control
+    response = asyncio.run(post(app_with_manager(dm), '/api/guided/start', guided_spec().model_dump()))
+    assert response.status_code == 409
+    assert not control.device.commands
 
 
 def test_ready_batch_rechecks_after_preflight_before_beginning(monkeypatch):

@@ -25,6 +25,7 @@ from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
 from src.devices.syringe_commands import SyringeCommand
 from src.utils.runtime_paths import data_path
+from src.web.turntable_control import is_startup_reset
 
 
 BATCH_DIR = data_path("output/guided_batches")
@@ -152,7 +153,7 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id", "bottles_confirmed"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "turntable_collection_v6"
+    fields["priming_protocol"] = "cooling55_startup_stop_v7"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters, config.turntables) for device in group
         if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2", "turntable1")]
@@ -166,7 +167,7 @@ def priming_recipe(spec, batch_id):
                           **({"wait": wait} if wait else {})))
     # Check temperature without starting microwave output; hot residual liquid is unsafe to drain.
     add("prime_temperature", "wait", wait=dict(type="microwave_temperature_below",
-        device_id="microwave1", target_temperature=45, timeout=spec.cooling_timeout))
+        device_id="microwave1", target_temperature=55, timeout=spec.cooling_timeout))
     for n, initialization in enumerate((spec.initialization_a, spec.initialization_b), 1):
         add(f"prime_initialize_{n}", "syringe_pump.initialize",
             dict(device_id=f"syringe_pump{n}", confirm=True, timeout=spec.syringe_timeout,
@@ -191,7 +192,7 @@ def priming_recipe(spec, batch_id):
     waste = "NC"
     add("prime_waste_route", "valve.switch", dict(device_id="valve1", position=waste))
     add("prime_recheck_temperature", "wait", wait=dict(type="microwave_temperature_below",
-        device_id="microwave1", target_temperature=45, timeout=spec.cooling_timeout))
+        device_id="microwave1", target_temperature=55, timeout=spec.cooling_timeout))
     seconds = spec.prime_drain_seconds
     add("prime_drain", "pump.start", dict(device_id="pump1", channel=4, mode="FLOW_MODE",
         flow_rate=spec.prime_drain_flow, flow_unit=1, flow_duration_seconds=seconds,
@@ -257,7 +258,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         target_temperature=row[4], tolerance=5, hold_mode="timed", timeout=max(1, seconds)))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
     cool = dict(type="microwave_temperature_below", device_id="microwave1",
-                target_temperature=45, timeout=spec.cooling_timeout)
+                target_temperature=55, timeout=spec.cooling_timeout)
     add("cool_before_collection", "wait", wait=cool)
     add("recheck_temperature", "wait", wait=cool)
     add("product_route", "valve.switch", dict(device_id="valve1", position=spec.product_port))
@@ -512,7 +513,7 @@ class GuidedBatch:
             labels = {"feed_both": "两路前驱体进料", "microwave_config": "设置微波反应温度",
                 "heat_both_stable": "两路温度同时在目标 ±5℃ 内持续 30 秒",
                 "microwave_start": "微波升温", "hold": "反应保温", "microwave_stop": "停止微波",
-                "cool_before_collection": "等待降温至45℃",
+                "cool_before_collection": "等待降温至55℃",
                 "recheck_temperature": "收取前复查温度", "product_route": "切向产物出口",
                 "collect_product": "抽取产物", "collect_product_stop": "停止产物抽取"}
             label = labels.get(p.step_id)
@@ -525,7 +526,7 @@ class GuidedBatch:
             result["progress"]["step_label"] = label
             if p.step_id.startswith("prime_"):
                 parts = p.step_id.split("_")
-                prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤45℃",
+                prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤55℃",
                     "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
                     "prime_heat_duration": f"到温后脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
                     "prime_heat_both_reached": "等待两路达到各自目标温度，随后计时脱气",
@@ -533,7 +534,7 @@ class GuidedBatch:
                     **{f"prime_heat_{n}_{action}": f"预充前{verb}前驱体 {name}"
                        for n, name in enumerate(("A", "B"))
                        for action, verb in (("set", "设置温度："), ("start", "开始加热："))},
-                    "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度 ≤45℃",
+                    "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度 ≤55℃",
                     "prime_drain": "预充排废液", "prime_drain_stop": "停止预充排液"}
                 result["progress"]["step_label"] = prime_labels.get(p.step_id, label)
                 if p.step_id in ("prime_initialize_1", "prime_initialize_2"):
@@ -671,6 +672,7 @@ class GuidedBatch:
         self.save()
         await self.pumps_stopped()
         await self.waste_route()
+        await self.turntable.prepare_start()
         await self.move_turntable(home=True, target=1, step_id="turntable_home_start", label="批次开始：回机械原点，确认1号瓶")
         self.record["preparation"]["status"] = "completed"
         self._orchestration_step = None
@@ -1038,7 +1040,8 @@ async def preflight(dm, spec, owner=None, *, before_initialization=False, turnta
     if not control.device.is_connected() or control.owner not in (None, turntable_owner):
         raise ValueError("接样转盘未连接或已被其他任务占用")
     state = await asyncio.to_thread(control.read)
-    if (not state.get("read_ok") or state.get("busy") is not False
+    startup_reset = before_initialization and control.owner is None and is_startup_reset(state)
+    if not startup_reset and (not state.get("read_ok") or state.get("busy") is not False
             or state.get("work_state") != 0x20 or state.get("motion_blocked")):
         raise ValueError("接样转盘未确认停止，不能开始批次")
     for devices, ids in ((dm.get_all_heaters(), ("heater1", "heater2")),

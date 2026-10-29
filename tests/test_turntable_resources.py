@@ -27,6 +27,10 @@ def manager(monkeypatch, tmp_path):
 
 
 class FakeSerial:
+    @property
+    def in_waiting(self):
+        return len(self.buffer)
+
     def flush(self):
         pass
 
@@ -94,6 +98,52 @@ def test_connect_read_disconnect_only_query_status(device, manager):
     assert handle.writes == [STATUS_FRAME, STATUS_FRAME]
     assert instance.snapshot["read_ok"] is False and instance.snapshot["position"] is None
     assert not manager.is_port_acquired("TEST")
+
+
+def test_connect_discards_startup_bytes_and_retries_only_extra_reply_once(device, monkeypatch, caplog):
+    instance, handles = device
+    original_open, original_write = FakeSerial.open, FakeSerial.write
+    def open_with_stale(self):
+        original_open(self)
+        self.buffer.extend(b'boot')
+    def write(self, frame):
+        result = original_write(self, frame)
+        if len(self.writes) == 1:
+            self.buffer.extend(bytes.fromhex('12 34 56 78'))
+        return result
+    monkeypatch.setattr(FakeSerial, 'open', open_with_stale)
+    monkeypatch.setattr(FakeSerial, 'write', write)
+    caplog.set_level('INFO', logger='src.protocols.turntable')
+    assert instance.connect('TEST')
+    assert handles[0].writes == [STATUS_FRAME, STATUS_FRAME]
+    assert instance.snapshot['read_ok'] and instance.snapshot['position'] == 10
+    assert 'raw=62 6f 6f 74' in caplog.text
+    assert 'raw=12 34 56 78' in caplog.text
+
+
+def test_repeated_extra_reply_fails_connection_and_releases_port(device, monkeypatch, manager):
+    instance, handles = device
+    original_write = FakeSerial.write
+    def write(self, frame):
+        result = original_write(self, frame)
+        self.buffer.extend(b'bad!')
+        return result
+    monkeypatch.setattr(FakeSerial, 'write', write)
+    with pytest.raises(OSError, match='trailing'):
+        instance.connect('TEST')
+    assert handles[0].writes == [STATUS_FRAME, STATUS_FRAME]
+    assert not instance.is_connected() and not handles[0].is_open
+    assert not manager.is_port_acquired('TEST')
+
+
+def test_extra_reply_during_normal_read_is_not_retried(device):
+    instance, handles = device
+    instance.connect('TEST')
+    handles[0].response += b'bad!'
+    with pytest.raises(OSError, match='trailing'):
+        instance.read_status()
+    assert len(handles[0].writes) == 2
+    assert instance.snapshot['read_ok'] is False
 
 
 def test_read_failure_clears_stale_position_and_motion_send_is_unconfirmed(device):

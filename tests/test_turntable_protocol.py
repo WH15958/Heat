@@ -134,6 +134,38 @@ def test_failed_query_also_leaves_processing_gap(paced_wire):
     assert wire.sent_at[-1] - finished == pytest.approx(.1)
 
 
+def test_connection_settling_waits_for_late_bytes_and_never_writes(paced_wire, caplog):
+    clock, wire = paced_wire
+    from src.protocols import turntable
+    protocol = TurntableProtocol(wire, .2)
+    sleep = turntable.time.sleep
+    injected = []
+    def late_bytes(seconds):
+        sleep(seconds)
+        if clock.now >= 10.06 and not injected:
+            wire.buffer.extend(b'late')
+            injected.append(clock.now)
+    turntable.time.sleep = late_bytes
+    caplog.set_level('INFO', logger='src.protocols.turntable')
+    protocol.prepare_connection()
+    assert clock.now >= injected[0] + .1
+    assert not wire.buffer and not wire.writes
+    assert 'raw=6c 61 74 65' in caplog.text
+
+
+def test_connection_never_queries_a_continuously_noisy_link(paced_wire):
+    clock, wire = paced_wire
+    from src.protocols import turntable
+    sleep = turntable.time.sleep
+    def noisy(seconds):
+        sleep(seconds)
+        wire.buffer.extend(b'x')
+    turntable.time.sleep = noisy
+    with pytest.raises(TimeoutError, match='quiet'):
+        TurntableProtocol(wire).prepare_connection()
+    assert clock.now < 10.55 and not wire.writes
+
+
 @pytest.mark.parametrize('response,error', [
     (b'', 'received 0/8'),
     (bytes.fromhex('00 00 20 3e'), 'received 4/8'),

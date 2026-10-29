@@ -38,6 +38,88 @@ def app_for(dm):
     return app
 
 
+def test_new_reset_batch_confirms_stop_then_homes_before_consuming():
+    async def run():
+        dm = FakeManager()
+        control = dm.turntable('turntable1')
+        control.device.work_state = 0
+        await guided.preflight(dm, spec(), before_initialization=True)
+        assert not dm.calls  # Preflight remains read-only.
+        batch = guided.GuidedBatch(dm, spec())
+        await batch.start(prime_only=True)
+        await batch.task
+        assert batch.record['priming']['status'] == 'completed', batch.record.get('error')
+        stop = dm.calls.index(('turntable_stop', None))
+        home = dm.calls.index(('turntable_home', 1))
+        init = dm.calls.index(('initialize', 'syringe_pump1'))
+        assert stop < home < init
+        assert control.stop_confirmed and control.summary()['current_bottle'] == 1
+        await batch.stop()
+    asyncio.run(run())
+
+
+def test_reset_stop_failure_blocks_home_and_consumption(monkeypatch):
+    from src.web import turntable_control
+    now = [10.0]
+    monkeypatch.setattr(turntable_control, 'time', SimpleNamespace(
+        monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds)))
+    async def run():
+        dm = FakeManager()
+        control = dm.turntable('turntable1')
+        control.device.work_state = 0
+        control.device.stop_ok = False
+        batch = guided.GuidedBatch(dm, spec())
+        await batch.start()
+        await batch.task
+        assert batch.state.value == 'failed'
+        assert batch.record['recovery_required']
+        assert not any(c[0] in ('turntable_home', 'initialize', 'aspirate', 'start_microwave') for c in dm.calls)
+        assert not control.stop_confirmed
+    asyncio.run(run())
+
+
+def test_formal_preflight_still_rejects_reset():
+    async def run():
+        dm = FakeManager()
+        dm.turntable('turntable1').device.work_state = 0
+        with pytest.raises(ValueError, match='未确认停止'):
+            await guided.preflight(dm, spec())
+        assert not dm.calls
+    asyncio.run(run())
+
+
+def test_all_new_cooling_checks_use_55_and_legacy_plan_is_unchanged():
+    request = spec()
+    plans = [guided.priming_recipe(request, 'preview'), *guided.compile_plan(request)]
+    waits = [step['wait'] for plan in plans for step in plan['steps']
+             if step.get('wait', {}).get('type') == 'microwave_temperature_below']
+    assert len(waits) == 4
+    assert all(wait['target_temperature'] == 55 for wait in waits)
+    legacy = copy.deepcopy(plans[0])
+    for step in legacy['steps']:
+        if step.get('wait', {}).get('type') == 'microwave_temperature_below':
+            step['wait']['target_temperature'] = 45
+    parsed = guided.parse_experiment_data(legacy)
+    assert [step.wait.target_temperature for step in parsed['steps']
+            if step.wait.type.value == 'microwave_temperature_below'] == [45, 45]
+
+
+@pytest.mark.parametrize('temperature,stopped,expected', [(55, True, True), (55.01, True, False),
+                                                         (50, False, False)])
+def test_generated_55_cooling_wait_enforces_temperature_and_stopped_output(temperature, stopped, expected):
+    wait = next(step['wait'] for step in guided.priming_recipe(spec(), 'preview')['steps']
+                if step['id'] == 'prime_recheck_temperature')
+    dm = SimpleNamespace(read_microwave_data=lambda _: dict(material_temperature=temperature,
+        fault_code=0, status_confirmed=True, control_active=not stopped, output_active=not stopped,
+        stop_confirmed=stopped))
+    executor = execution.StepExecutor(dm)
+    condition = guided.parse_experiment_data({'steps': [dict(id='cool', type='wait',
+        wait={**wait, 'timeout': .01})]})['steps'][0].wait
+    # This calls the actual cooling implementation, not the fast test hold helper.
+    result = asyncio.run(executor._wait_condition(condition))
+    assert result is expected
+
+
 def test_home_before_consumption_then_collect_clean_move_and_final_home():
     class RecordingManager(FakeManager):
         def start_pump_channel(self, did, channel, *args):

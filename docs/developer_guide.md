@@ -554,7 +554,7 @@ GET `/api/guided/current`、`/api/guided/batches`、`/api/guided/{batch_id}` 返
 
 双泵排液使用 syringe_pair.dispense，协调位于 StepExecutor 上层，每台同步 Controller 保持原锁与所有权。两路并行下发后分别监督完成，一路失败即停止两路；对整个双泵步骤执行暂停边界语义，不保证硬件同步触发。生成流程显式吸取本组剂量，正式进料不隐式回零；每批通过明确确认的预充入口依次执行已有 syringe_pump.initialize，确认完成及可信零位后才吸排预充液。
 
-微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤45℃，同时要求 fault_code=0、status_confirmed=true、control_active=false、output_active=false、stop_confirmed=true，read_ok 不得显式为 false；温度或停止状态未知、控制仍开启均不放行。收取前重复此检查，再切换产物出口及抽液。通道四排液使用 FLOW_MODE 及软件定时停泵，通道三清洗进液保留 TIME_QUANTITY、pump_complete 和显式 stop_channel；理论流量不冒充实际排空传感器。
+微波停止后使用 microwave_temperature_below，material_temperature 必须为有效非负有限数字且 ≤55℃，同时要求 fault_code=0、status_confirmed=true、control_active=false、output_active=false、stop_confirmed=true，read_ok 不得显式为 false；温度或停止状态未知、控制仍开启均不放行。收取前重复此检查，再切换产物出口及抽液。通道四排液使用 FLOW_MODE 及软件定时停泵，通道三清洗进液保留 TIME_QUANTITY、pump_complete 和显式 stop_channel；理论流量不冒充实际排空传感器。
 
 启动前将完整 recipes 与请求快照单独保存至 output/guided_batches/plans/{batch_id}.json，GET /api/guided/{batch_id}/plan 可读取；单组 metadata.recipe_file 指向该快照，recipe_group 指明组号。批次 JSON 原子保存至 output/guided_batches，保存完整请求、组状态、当前步骤、run_id/sample_id 和 persistence_status；单组继续使用原实验历史及样品记录。保存失败不启动下一组，cleanup_pending 保留不确定停机的占用。服务重启后没有 live runner 的非终态或待清理记录标记 interrupted/recovery_required，所有实验启动入口均阻断。POST `/{batch_id}/acknowledge-interrupted` 需 devices_stopped_confirmed=true，人工确认后解除锁定但不续跑。
 
@@ -615,7 +615,7 @@ GuidedRequest 新增 `prime_volume_a/b`（默认各 2 mL，须不超过实际泵
 
 引导式每组使用 `heater_pair_stable` 等待：两个显式目标、tolerance=3、seconds=30、timeout=precursor_timeout（默认3600）。StepExecutor 在上层每秒读取两路温度，单调时钟连续计时；越界或实际暂停重置窗口，读取失败/无效值/超时立即失败。初始化进度记录为 prime_initialize_1/2，复用既有动作日志及维护样品编号，不改变微波自动功率配置。
 
-加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤45℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名使用 `priming_protocol=turntable_collection_v6` 并包含 heater1/2、config.turntables 等固定设备配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
+加热预充流程：`prime_initialize_1/2` 后执行 `prime_heat_0/1_set/start`、`prime_heat_both_reached` 和 `prime_heat_duration`，然后才吸排液。`heater_pair_reached` 在既有双路等待循环中检查两路同轮有效读数均 `pv >= target_temperature`，目标取第一组条件；超过目标也视为达到，不要求容差或稳定时长。保留现有读取频率、故障、无效值、暂停、停止及 `precursor_timeout` 检查，不在设备层新增轮询。`prime_recheck_temperature` 等待反应液 ≤55℃ 后排废，超时/读温失败禁止排液。预充引擎启用 `keep_heaters_on_completion=True`，停止/失败仍全清理。签名使用 `priming_protocol=cooling55_startup_stop_v7` 并包含 heater1/2、config.turntables 等固定设备配置，旧预充签名不再匹配；旧流程快照和 YAML 不改写，正式组的 `heater_pair_stable` 及微波规则不变。
 
 引导式 `prime_heat_minutes` 为必填数值（0–1440分钟、可换算为整秒），纳入预充签名。两路 heater.start 后先执行 `prime_heat_both_reached`；通过后 `prime_heat_duration` 使用既有 duration 等待，温度波动不改变计时，实际暂停扣时、停止可中断。`precursor_timeout` 独立控制预充及各组双路到温等待，默认3600秒，上限7200秒；原 heating_timeout 仍用于微波（默认600秒）。旧请求缺少加热时长不能新启动，旧记录不迁移或自动补0；签名包含本轮转盘配置与收集策略；旧预充结果不能直接获得新流程资格。
 
@@ -652,7 +652,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 `StepExecutor._run_timed_flow` 从 START 确认后按单调时钟计时，在 Web/编排层约每秒复用 read_pump_status 监督当前通道；读取失败或提前停止立即失败并清理。每次短睡眠最多 50ms，停止请求可中断；已发出的流量动作在暂停中仍计时、监督和到时停泵，步骤边界由引擎等待继续。所有退出路径尝试停止，停止未确认保留活动设备供原清理/恢复机制处理；不自动重启泵。串口调用耗时可能推迟停泵确认，不保证硬实时精度。进度 wait_type=flow_duration 是只读动作标记，不是新增 YAML wait 类型。
 
-预充签名协议为 turntable_collection_v6，覆盖转盘配置与滴液参数，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
+预充签名协议为 cooling55_startup_stop_v7，覆盖转盘配置与滴液参数，旧批次仅供查看，不复用旧预充资格。历史流程不改写。流量模式不能在后端进程崩溃、主机掉电或通信中断时保证自主定时停泵；持久化恢复锁用于禁止自动续跑，不能代替现场停机。实际流量、暂停到时停止及异常停机仍须实机水测。
 
 进度设备快照保留 status_confirmed/control_word/current_segment/runtime_seconds；没有 read_ok 时，仅使用明确的 status_confirmed 归一化读取确认，显式 read_ok=false 优先。复用执行器已有读取，不增加设备轮询。
 
@@ -663,6 +663,8 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 表单以 `heat.guided-draft.v1` 在 localStorage 保存一份版本化草稿，仅包含输入和步骤，不含校验证据、人工确认、运行状态、batch_id 或预充资格。恢复按字段检查，旧终态记录不回填覆盖新草稿，活动/恢复/清理/保存错误优先处理且保留草稿。启动成功清除草稿；新建空白前确认替换。`batchExport` 复用精确 run_id/metadata 关联，在完整日志之外附带批次检查点与原始流程快照，快照不存在或批次身份不一致时拒绝完整导出。物理存储仍使用现有批次、plans 与运行日志目录，不复制或改写历史记录。
 
 ### CL-01A 转盘手动接入
+
+2026-10-29：`TurntableProtocol.prepare_connection()` 仅在显式连接时执行100毫秒安静窗口，限500毫秒/1024字节；`UnexpectedStatusBytes` 只允许连接层进行一次整理后只读重试。原查询新增多余字节诊断，最多捕获256字节，不改变普通读取失败语义。引导新批次预检通过 `is_startup_reset` 有限接受初始0x00，预检仍只读；持久化及占用完成后，`GuidedTurntable.prepare_start` 在设备锁、所有权及停止代次保护下执行 `prepare_guided_start`，仅初始复位发送STOP并确认，再交原流程回零。取消等待保持同步工作受跟踪；停止失败进入批次清理/恢复锁。新批次四处降温检查改为55℃，签名 `cooling55_startup_stop_v7` 使旧预充资格失效，旧快照不改写。实机边界见 [转盘接入说明](turntable_integration.md)。
 
 2026-10-28：`TurntableProtocol` 对状态查询统一执行100毫秒收发处理间隔，以最近写入完成/查询结束为基准，已有空闲时间抵扣；命令写入不延时、不重发。仍使用原同步驱动和设备锁，间隔可能使等待锁的STOP额外延后至多约100毫秒（不含系统调度）；响应超时预算不变，动作及停止确认期限不延长。首个命令后读回使用INFO，常规成功读回使用DEBUG，异常使用WARNING，保留原始帧、查询间隔、响应耗时及命令年龄。该初始间隔不是厂家保证值，实机验收与恢复说明见 [时序修复记录](turntable_integration.md#2026-10-28-运动后查询时序修复含有限实机核验)。
 
