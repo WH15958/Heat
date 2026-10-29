@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import serial
 
 from src.devices.turntable_commands import TurntableCommand
-from src.protocols.turntable import INPUT_BITS, TurntableProtocol
+from src.protocols.turntable import INPUT_BITS, TurntableProtocol, UnexpectedStatusBytes
 from src.utils.logger import get_logger
 from src.utils.serial_manager import get_serial_manager
 
@@ -65,7 +65,15 @@ class TurntableDevice:
             self.handle.open()
             self.protocol = TurntableProtocol(self.handle, connection.timeout)
             phase = "status"
-            self.read_status()
+            self.protocol.prepare_connection()
+            try:
+                self.read_status()
+            except UnexpectedStatusBytes:
+                # One connection-only retry after a fresh quiet interval. Never
+                # replay commands or retry ordinary/moving status reads here.
+                logger.warning("CL-01A initial reply has extra bytes on %s; resynchronizing once", port)
+                self.protocol.prepare_connection()
+                self.read_status()
             self.connection_error = None
             return True
         except Exception as exc:

@@ -134,6 +134,35 @@ def move(control, steps=100):
     return control.command(dict(action='move_relative', steps=steps, speed=400))
 
 
+@pytest.mark.parametrize('cancel_during_read', [False, True])
+def test_guided_reset_preparation_respects_stop_generation(controller, monkeypatch, cancel_during_read):
+    controller.device.work_state = 0
+    controller.read()
+    owner = object()
+    controller.claim(owner)
+    generation = controller.generation
+    if cancel_during_read:
+        read = controller.device.read_status
+        def read_and_cancel():
+            result = read()
+            controller.invalidate_pending()
+            return result
+        monkeypatch.setattr(controller.device, 'read_status', read_and_cancel)
+    else:
+        controller.invalidate_pending()
+    with pytest.raises(RuntimeError, match='取消'):
+        controller.prepare_guided_start(owner, generation)
+    assert not controller.device.commands
+
+
+def test_status_reads_never_turn_reset_into_stop_command(controller):
+    controller.device.work_state = 0
+    for _ in range(3):
+        state = controller.read()
+        assert state['work_state'] == 0 and not state['stop_confirmed']
+    assert not controller.device.commands
+
+
 def stable_read(control, clock, position):
     control.device.position, control.device.work_state = position, 0x20
     control.read()

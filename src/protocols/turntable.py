@@ -23,6 +23,10 @@ STATUS_QUERY_GAP_SECONDS = 0.1
 logger = logging.getLogger(__name__)
 
 
+class UnexpectedStatusBytes(IOError):
+    """An unframed reply cannot be trusted when extra bytes are present."""
+
+
 class TurntableProtocol:
     def __init__(self, serial_handle, timeout=1.0):
         self.serial = serial_handle
@@ -31,6 +35,31 @@ class TurntableProtocol:
         self._last_command_at = None
         self._next_query_at = 0.0
         self._first_status_after_command = False
+
+    def prepare_connection(self):
+        """Drain startup/late bytes until 100 ms quiet, bounded by 500 ms/1 KiB.
+
+        Only used during explicit connection, never during motion supervision.
+        No command is sent and no discarded bytes count as a valid status.
+        """
+        started = quiet_since = time.monotonic()
+        discarded = bytearray()
+        try:
+            while time.monotonic() - started < 0.5:
+                waiting = getattr(self.serial, "in_waiting", 0)
+                if waiting:
+                    discarded.extend(self.serial.read(min(waiting, 1024 - len(discarded))))
+                    quiet_since = time.monotonic()
+                    if len(discarded) >= 1024:
+                        raise IOError("CL-01A connection input exceeds 1024 bytes; link not quiet")
+                elif time.monotonic() - quiet_since >= STATUS_QUERY_GAP_SECONDS:
+                    return
+                time.sleep(0.01)
+            raise TimeoutError("CL-01A connection input did not become quiet within 0.5s")
+        finally:
+            logger.info("CL-01A connection settling: port=%s discarded=%s raw=%s elapsed=%.3fs",
+                        getattr(self.serial, "port", None), len(discarded), discarded.hex(" "),
+                        time.monotonic() - started)
 
     @staticmethod
     def frame(request):
@@ -95,7 +124,11 @@ class TurntableProtocol:
                 raise TimeoutError(f"No complete eight-byte CL-01A status response (received {len(reply)}/8 bytes, elapsed {elapsed:.3f}s)")
             trailing = getattr(self.serial, "in_waiting", 0)
             if trailing:
-                raise IOError("Unexpected trailing CL-01A status bytes")
+                extra = self.serial.read(min(trailing, 256))
+                logger.warning("CL-01A trailing bytes: port=%s count=%s captured=%s raw=%s truncated=%s",
+                               getattr(self.serial, "port", None), trailing, len(extra), extra.hex(" "),
+                               trailing > len(extra))
+                raise UnexpectedStatusBytes("Unexpected trailing CL-01A status bytes")
             status = self.decode_status(bytes(reply))
             self._log_status(logging.INFO if self._first_status_after_command else logging.DEBUG,
                              "received", reply, started, queried_at, trailing)

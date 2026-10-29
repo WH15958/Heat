@@ -906,11 +906,11 @@ interval_time: 0
   wait:
     type: microwave_temperature_below
     device_id: microwave1
-    target_temperature: 45
+    target_temperature: 55
     timeout: 3600
 ```
 
-引导式片段使用 45℃门槛；60 分钟仅为暂定超时上限，须由实验室验证。引导式完整批次会在收取前复查降温条件，再切换产物阀并抽液。
+引导式片段使用 55℃门槛；60 分钟仅为暂定超时上限，须由实验室验证。引导式完整批次会在收取前复查降温条件，再切换产物阀并抽液。
 
 
 ### 双泵排液
@@ -965,7 +965,7 @@ interval_time: 0
 
 引导式 recipe 不在反应前停前驱体加热器；外层 GuidedBatch 在成功组间保留加热器，到整批结束/失败/停止时全停机。独立运行导出的单组 YAML 使用普通引擎，完成时仍清理全部活动设备，不能仅凭 YAML 推断有跨组保温。搭建式的阀位及 heater.stop 编排保持自由。
 
-引导式批次的预充 YAML 在两泵初始化后，使用 `heater.set_temperature`、`heater.start`、`heater_pair_reached` 按第一组目标加热，两路实测温度均达到或超过各自目标后通过；不要求连续稳定等待。排液前仍使用 `microwave_temperature_below` 等待 ≤45℃。外层批次在成功预充后保留前驱体加热，正式组仍使用 `heater_pair_stable` 再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
+引导式批次的预充 YAML 在两泵初始化后，使用 `heater.set_temperature`、`heater.start`、`heater_pair_reached` 按第一组目标加热，两路实测温度均达到或超过各自目标后通过；不要求连续稳定等待。排液前仍使用 `microwave_temperature_below` 等待 ≤55℃。外层批次在成功预充后保留前驱体加热，正式组仍使用 `heater_pair_stable` 再次稳定到温；独立 YAML 的普通引擎完成时仍全清理。
 
 引导式预充在两路 heater.start 和 `prime_heat_both_reached` 到温等待通过后立即执行 `prime_heat_duration`：`type: wait`，`wait: {type: duration, seconds: prime_heat_minutes * 60}`。该等待独立计时并支持暂停/停止，温度波动不暂停或重置计时，结束后执行预充吸排；前置双路到温等待默认超时3600秒。旧 YAML 等待类型和默认值保持原语义，历史流程快照不改写。
 

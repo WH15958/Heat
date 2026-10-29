@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 PENDING = {"accepted", "running", "unknown"}
 
 
+def is_startup_reset(state):
+    """A valid idle reset, without previous motion or an unresolved stop."""
+    return (state.get("read_ok") is True and state.get("busy") is False
+            and state.get("work_state") == 0 and not state.get("action")
+            and not state.get("motion_blocked"))
+
+
 class TurntableController:
     def __init__(self, config, device=None):
         self.config = config
@@ -105,6 +112,27 @@ class TurntableController:
                     return False
                 self.owner = None
             return True
+
+    def prepare_guided_start(self, owner, expected_generation):
+        """Explicit new-batch preparation; never called by status/connection reads."""
+        with self.lock:
+            self._check_owner(owner)
+            if self.owner is not owner:
+                raise RuntimeError("批次尚未占用转盘")
+            state = self.read()
+            with self.gate:
+                if expected_generation != self.generation or self.stopping:
+                    raise RuntimeError("停止请求已取消转盘启动准备")
+            self.require_idle()
+            if is_startup_reset(state):
+                logger.info("Turntable %s startup reset: confirming STOP before guided home, position=%s",
+                            self.config.device_id, state.get("position"))
+                if not self.stop():
+                    raise OSError("转盘上电复位后的停止未确认，不能自动回零")
+            elif (state.get("read_ok") is not True or state.get("busy") is not False
+                  or state.get("work_state") != 0x20 or state.get("motion_blocked")):
+                raise RuntimeError("转盘状态已变化，不能开始回零")
+            return self.summary()
 
     def snapshot_version(self):
         # Also usable for a timeout response while the serial lock is occupied.

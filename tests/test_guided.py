@@ -338,7 +338,7 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
             current = guided.priming_signature(request)
         fields = json.loads(digest.call_args.args[0])
-        self.assertEqual(fields.pop("priming_protocol"), "turntable_collection_v6")
+        self.assertEqual(fields.pop("priming_protocol"), "cooling55_startup_stop_v7")
         previous_fields = dict(fields, priming_protocol="reached_then_dwell_flow_drain_v5")
         self.assertNotEqual(current, hashlib.sha256(json.dumps(previous_fields, sort_keys=True, allow_nan=False).encode()).hexdigest())
         self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
