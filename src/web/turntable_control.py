@@ -125,10 +125,20 @@ class TurntableController:
                     raise RuntimeError("停止请求已取消转盘启动准备")
             self.require_idle()
             if is_startup_reset(state):
-                logger.info("Turntable %s startup reset: confirming STOP before guided home, position=%s",
-                            self.config.device_id, state.get("position"))
-                if not self.stop():
-                    raise OSError("转盘上电复位后的停止未确认，不能自动回零")
+                # The manual defines 0x00 as power-on reset; PAUSE need not
+                # change it to 0x20. Observe twice without claiming STOP success.
+                time.sleep(0.1)
+                checked = self.read()
+                with self.gate:
+                    if expected_generation != self.generation or self.stopping:
+                        raise RuntimeError("停止请求已取消转盘启动准备")
+                self.require_idle()
+                if (not is_startup_reset(checked)
+                        or checked.get("position") != state.get("position")):
+                    raise RuntimeError("转盘首次复位状态或坐标不稳定，不能自动回零")
+                logger.info("Turntable %s startup reset stable: ready for guided home, position=%s; "
+                            "STOP and bottle position remain unconfirmed",
+                            self.config.device_id, checked.get("position"))
             elif (state.get("read_ok") is not True or state.get("busy") is not False
                   or state.get("work_state") != 0x20 or state.get("motion_blocked")):
                 raise RuntimeError("转盘状态已变化，不能开始回零")

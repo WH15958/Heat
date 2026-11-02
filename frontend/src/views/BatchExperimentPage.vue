@@ -117,7 +117,7 @@
         <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液</label>
         <label class="confirm-check" data-field="bottlesConfirmed"><input v-model="bottlesConfirmed" type="checkbox" :disabled="activeRun||controlling" />已将本批所需 {{ plan.rows.length || '—' }} 个产物瓶清空并按编号就位，允许转盘自动回零与换瓶</label><small v-if="fieldErrors.bottlesConfirmed" class="field-error" role="alert">{{ fieldErrors.bottlesConfirmed }}</small>
         <small>修改参数后，需重新校验并勾选全部确认；运行中不逐组等待换瓶。</small>
-        <details class="batch-details"><summary>查看启动说明</summary><p>请先连接全部设备，并将本批所需空瓶按编号摆放。转盘若处于上电复位状态，系统会先确认停止，再回零；通信异常或已有未完成动作仍会阻止启动。系统先确认泵停止、阀在 NC，再机械回零到 1 号瓶；随后按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，设定时间结束后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 55℃及以下后自动收集。</p></details>
+        <details class="batch-details"><summary>查看启动说明</summary><p>请先连接全部设备，并将本批所需空瓶按编号摆放。转盘若处于首次上电复位状态，系统会复查状态与坐标稳定后回零，回零完成并确认停止后才继续；通信异常或已有未完成动作仍会阻止启动。系统先确认泵停止、阀在 NC，再机械回零到 1 号瓶；随后按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，设定时间结束后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 55℃及以下后自动收集。</p></details>
       </div>
       <template v-if="stage===6">
         <el-button type="primary" :loading="controlling" :disabled="controlling||!!startBlockReason" aria-describedby="start-status" @click="startBatch">开始自动实验</el-button>

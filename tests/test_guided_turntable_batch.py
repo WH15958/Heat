@@ -38,27 +38,28 @@ def app_for(dm):
     return app
 
 
-def test_new_reset_batch_confirms_stop_then_homes_before_consuming():
+def test_new_reset_batch_homes_without_pause_before_consuming():
     async def run():
         dm = FakeManager()
         control = dm.turntable('turntable1')
         control.device.work_state = 0
+        control.device.stop_ok = False  # PAUSE does not change power-on reset.
         await guided.preflight(dm, spec(), before_initialization=True)
         assert not dm.calls  # Preflight remains read-only.
         batch = guided.GuidedBatch(dm, spec())
         await batch.start(prime_only=True)
         await batch.task
         assert batch.record['priming']['status'] == 'completed', batch.record.get('error')
-        stop = dm.calls.index(('turntable_stop', None))
         home = dm.calls.index(('turntable_home', 1))
         init = dm.calls.index(('initialize', 'syringe_pump1'))
-        assert stop < home < init
+        assert home < init
+        assert ('turntable_stop', None) not in dm.calls[:init]
         assert control.stop_confirmed and control.summary()['current_bottle'] == 1
         await batch.stop()
     asyncio.run(run())
 
 
-def test_reset_stop_failure_blocks_home_and_consumption(monkeypatch):
+def test_unstable_reset_blocks_home_and_consumption(monkeypatch):
     from src.web import turntable_control
     now = [10.0]
     monkeypatch.setattr(turntable_control, 'time', SimpleNamespace(
@@ -68,6 +69,11 @@ def test_reset_stop_failure_blocks_home_and_consumption(monkeypatch):
         control = dm.turntable('turntable1')
         control.device.work_state = 0
         control.device.stop_ok = False
+        prepare = control.prepare_guided_start
+        def unstable_prepare(owner, generation):
+            control.device.reads.extend([(0, 0), (1, 0)])
+            return prepare(owner, generation)
+        monkeypatch.setattr(control, 'prepare_guided_start', unstable_prepare)
         batch = guided.GuidedBatch(dm, spec())
         await batch.start()
         await batch.task
