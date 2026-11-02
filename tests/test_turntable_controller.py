@@ -163,6 +163,52 @@ def test_status_reads_never_turn_reset_into_stop_command(controller):
     assert not controller.device.commands
 
 
+def test_guided_stable_reset_does_not_confirm_stop_or_bottle(controller):
+    controller.device.work_state = 0
+    controller.device.stop_ok = False
+    controller.read()
+    owner = object()
+    controller.claim(owner)
+    state = controller.prepare_guided_start(owner, controller.generation)
+    assert not state['stop_confirmed'] and not state['homed']
+    assert not state['bottle_ready'] and state['current_bottle'] is None
+    assert not controller.device.commands
+
+
+@pytest.mark.parametrize('second', [(1, 0), (0, 1), (0, 0x20), OSError('bad reply')])
+def test_guided_reset_recheck_rejects_changed_or_failed_status(controller, second):
+    controller.device.work_state = 0
+    controller.read()
+    owner = object()
+    controller.claim(owner)
+    controller.device.reads.extend([(0, 0), second])
+    with pytest.raises(RuntimeError):
+        controller.prepare_guided_start(owner, controller.generation)
+    assert not controller.device.commands
+    assert not controller.stop_confirmed
+
+
+def test_guided_stop_during_reset_recheck_cancels_preparation(controller, monkeypatch):
+    controller.device.work_state = 0
+    controller.read()
+    owner = object()
+    controller.claim(owner)
+    generation = controller.generation
+    read = controller.device.read_status
+    calls = 0
+    def read_and_cancel():
+        nonlocal calls
+        calls += 1
+        result = read()
+        if calls == 2:
+            controller.invalidate_pending()
+        return result
+    monkeypatch.setattr(controller.device, 'read_status', read_and_cancel)
+    with pytest.raises(RuntimeError, match='取消'):
+        controller.prepare_guided_start(owner, generation)
+    assert not controller.device.commands
+
+
 def stable_read(control, clock, position):
     control.device.position, control.device.work_state = position, 0x20
     control.read()

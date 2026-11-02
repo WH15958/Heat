@@ -664,7 +664,7 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 
 ### CL-01A 转盘手动接入
 
-2026-10-29：`TurntableProtocol.prepare_connection()` 仅在显式连接时执行100毫秒安静窗口，限500毫秒/1024字节；`UnexpectedStatusBytes` 只允许连接层进行一次整理后只读重试。原查询新增多余字节诊断，最多捕获256字节，不改变普通读取失败语义。引导新批次预检通过 `is_startup_reset` 有限接受初始0x00，预检仍只读；持久化及占用完成后，`GuidedTurntable.prepare_start` 在设备锁、所有权及停止代次保护下执行 `prepare_guided_start`，仅初始复位发送STOP并确认，再交原流程回零。取消等待保持同步工作受跟踪；停止失败进入批次清理/恢复锁。新批次四处降温检查改为55℃，签名 `cooling55_startup_stop_v7` 使旧预充资格失效，旧快照不改写。实机边界见 [转盘接入说明](turntable_integration.md)。
+2026-10-29：`TurntableProtocol.prepare_connection()` 仅在显式连接时执行100毫秒安静窗口，限500毫秒/1024字节；`UnexpectedStatusBytes` 只允许连接层进行一次整理后只读重试。原查询新增多余字节诊断，最多捕获256字节，不改变普通读取失败语义。引导新批次预检通过 `is_startup_reset` 有限接受初始0x00，预检仍只读；持久化及占用完成后，`GuidedTurntable.prepare_start` 在设备锁、所有权及停止代次保护下执行 `prepare_guided_start`，仅初始复位间隔100毫秒复查状态与坐标一致（复查后再核对停止代次），不发STOP、不置stop_confirmed，再交原流程回零。取消等待保持同步工作受跟踪；停止失败进入批次清理/恢复锁。新批次四处降温检查改为55℃，签名 `cooling55_startup_stop_v7` 使旧预充资格失效，旧快照不改写。实机边界见 [转盘接入说明](turntable_integration.md)。
 
 2026-10-28：`TurntableProtocol` 对状态查询统一执行100毫秒收发处理间隔，以最近写入完成/查询结束为基准，已有空闲时间抵扣；命令写入不延时、不重发。仍使用原同步驱动和设备锁，间隔可能使等待锁的STOP额外延后至多约100毫秒（不含系统调度）；响应超时预算不变，动作及停止确认期限不延长。首个命令后读回使用INFO，常规成功读回使用DEBUG，异常使用WARNING，保留原始帧、查询间隔、响应耗时及命令年龄。该初始间隔不是厂家保证值，实机验收与恢复说明见 [时序修复记录](turntable_integration.md#2026-10-28-运动后查询时序修复含有限实机核验)。
 
