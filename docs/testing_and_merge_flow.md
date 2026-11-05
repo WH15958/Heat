@@ -201,8 +201,8 @@ git -c http.proxy="<verified-proxy-url>" push <failed-remote> <branch>
 
 合并前最后确认：
 
-- 测试通过
-- 前端构建通过
+- 按验证矩阵选定的测试通过
+- 涉及前端源码时，对应测试和生产构建通过；纯文档/规则不要求构建
 - 文档已同步
 - `git status --short` 干净或只包含本次改动
 - 未跟踪文件不是临时脚本或运行产物

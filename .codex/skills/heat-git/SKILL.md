@@ -65,6 +65,8 @@ python -c "import src.web.app; import src.web.api.experiments; import src.web.ap
 
 If `pytest` is installed, use targeted pytest files. If it is not installed, say so and use an equivalent targeted Python validation when practical.
 
+For missing validation dependencies, follow AGENTS.md: if essential, recommend the minimal installation and wait for user confirmation. A fallback must be practically equivalent or cover only a non-essential dependency; do not report unexecuted checks as passed.
+
 ## Documentation Decision Matrix
 
 Update only the docs that match the change.

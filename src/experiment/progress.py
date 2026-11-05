@@ -87,6 +87,8 @@ class ActivityProgress:
 def guided_activity(step, observation):
     """Describe the compiled step, not an inferred or prospective device action."""
     sid, params = step.id, step.params
+    cooling_condition = (f"反应液降至 {step.wait.target_temperature:g}℃及以下"
+        if valid_number(step.wait.target_temperature) else "反应液满足设定降温条件")
     activity = dict(observation, title="正在执行设备操作", description="等待设备确认本次动作。", stage=None)
     device_id = params.get("device_id") or step.wait.device_id
     activity["device_ids"] = [device_id] if device_id else []
@@ -100,11 +102,11 @@ def guided_activity(step, observation):
         elif sid == "prime_heat_both_reached":
             activity.update(title="等待前驱体到温", description="两路实测温度均达到或超过各自目标后，立即开始保温脱气计时。")
         elif sid == "prime_heat_both_stable":
-            activity.update(title="等待前驱体稳定到温", description="两路同时在目标 ±3℃ 内连续 30 秒后，开始计算脱气等待时间。")
+            activity.update(title="等待前驱体稳定到温", description=f"两路同时在目标 ±{step.wait.tolerance:g}℃ 内连续 {step.wait.seconds:g} 秒后，开始计算脱气等待时间。")
         elif sid.startswith("prime_heat_"):
             activity.update(title="启动前驱体加热" if sid.endswith("start") else "设置前驱体目标温度", description="按第一组条件准备两路加热，到温后计时脱气。")
         elif sid in ("prime_temperature", "prime_recheck_temperature"):
-            activity.update(title="检查反应液温度", description="等待反应液降至 45℃及以下，满足后继续本批准备。")
+            activity.update(title="检查反应液温度", description=f"等待{cooling_condition}，满足后继续本批准备。")
         elif sid == "prime_waste_route":
             activity.update(title="切换至废液出口", description="三通阀切向 NC，等待继电器读回确认。")
         elif sid.startswith("prime_drain"):
@@ -116,16 +118,16 @@ def guided_activity(step, observation):
     elif sid.startswith("heat_"):
         activity.update(stage="stabilizing", title="等待前驱体稳定到温" if sid == "heat_both_stable" else "调整前驱体加热", description="按本组目标温度检查 A/B；两路稳定到温后允许吸液与进料。")
     elif sid.startswith("aspirate_") or sid == "feed_both":
-        activity.update(stage="feeding", title="两路前驱体正在进料" if sid == "feed_both" else "注射泵正在吸液", description="两泵同时开始、各自完成；两路均完成后才启动微波。" if sid == "feed_both" else "按本组设定剂量吸液，等待注射泵完成。")
+        activity.update(stage="feeding", title="两路前驱体正在进料" if sid == "feed_both" else "注射泵正在吸液", description="并行下发两泵进料、各自完成；两路均完成后才启动微波。" if sid == "feed_both" else "按本组设定剂量吸液，等待注射泵完成。")
         if sid == "feed_both":
             activity["device_ids"] = [feed["device_id"] for feed in params["feeds"]]
             activity["feeds"] = [{key: feed[key] for key in ("device_id", "volume", "unit")} for feed in params["feeds"]]
     elif sid.startswith("microwave_") or sid == "hold":
         activity.update(stage="reaction", title={"hold": "微波反应保温", "microwave_start": "等待微波反应液升温", "microwave_stop": "正在停止微波", "microwave_config": "设置微波反应条件"}.get(sid, "微波反应"), description="物料到温后计时保温，结束后确认停止微波。前驱体加热器持续保温。")
         if sid == "hold" and observation.get("qualified_seconds") is not None:
-            activity["description"] = "目标 ±3℃ 内累计有效保温，越界暂停累计、回温后继续；最多额外等待10分钟。前驱体持续保温。"
+            activity["description"] = f"目标 ±{step.wait.tolerance:g}℃ 内累计有效保温，越界暂停累计、回温后继续；总等待上限 {step.wait.timeout:g} 秒。前驱体持续保温。"
         elif sid == "hold" and observation.get("hold_mode") == "timed":
-            activity.update(title="微波反应定时保温", description="反应液已满足稳定到温条件，按设定时长保温；温度偏离仅提示，计时继续。前驱体持续保温。")
+            activity.update(title="微波反应定时保温", description="按设定时长保温；已配置目标温度时，温度偏离仅提示，计时继续。前驱体持续保温。")
         elif sid == "microwave_start" and step.wait.seconds > 0:
             activity.update(title="等待微波反应液稳定到温", description=f"目标 ±{step.wait.tolerance:g}℃ 内连续稳定{step.wait.seconds:g}秒后开始保温计时；越界或实际暂停后重新累计稳定时间。")
     elif sid.startswith("clean_"):
@@ -136,7 +138,7 @@ def guided_activity(step, observation):
         if sid.endswith("_stop"):
             activity["title"] = f"第 {cycle} 次清洗 · 停止{'进液' if action=='in' else '排液'}"
     elif sid in ("cool_before_collection", "recheck_temperature", "product_route") or sid.startswith("collect_"):
-        activity.update(stage="collection", title="等待反应液降温", description="反应液降至 45℃及以下后，经 NO 出口收集产物。")
+        activity.update(stage="collection", title="等待反应液降温", description=f"{cooling_condition}后，经 NO 出口收集产物。")
         if sid == "product_route":
             activity.update(title="切换至产物出口", description="三通阀切向 NO，等待继电器读回确认。")
         elif sid.startswith("collect_"):

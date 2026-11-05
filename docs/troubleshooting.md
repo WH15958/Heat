@@ -41,7 +41,7 @@ python scripts/cleanup_locks.py --list
 # 清理过期锁文件
 python scripts/cleanup_locks.py
 
-# 强制清理所有锁文件，仅限确认没有其他 Heat/串口进程时使用
+# 将当前进程遗留记录纳入清理，仍遵守 OS 锁检查
 python scripts/cleanup_locks.py --force
 ```
 
@@ -49,9 +49,9 @@ python scripts/cleanup_locks.py --force
 
 - `list_all_serial_locks()`：列出当前锁文件
 - `cleanup_all_stale_serial_locks()`：清理过期锁文件
-- `cleanup_all_stale_serial_locks(include_current_process=True)`：强制清理所有锁文件
+- `cleanup_all_stale_serial_locks(include_current_process=True)`：将当前进程记录纳入过期清理候选，仍须先取得对应 OS 锁
 
-生产或真实联调环境中慎用 `--force`，它可能清理其他仍在运行进程持有的锁。
+以上工具用于串口锁诊断；当前实现仍检查 OS 文件锁与所有者，不能用删除锁文件绕过活进程。永久保留的 `.guard` 文件存在不表示占用，不要手动删除。业务恢复记录（`output/yaml_runs`、引导批次和微波托管记录）与串口锁不同，不得用锁清理工具解除。
 
 ---
 
@@ -109,6 +109,8 @@ python scripts/cleanup_locks.py --force
 3. 检查后端日志中 `data_push_loop` 是否异常
 4. 检查 `src/web/api/ws.py`
 
+设备控制采用6秒过期保护，只读仪表盘采用15秒窗口。服务器仍连接不代表每台设备都有新鲜读数；整轮采样仍等待慢设备返回，可能使其他设备一起短暂变为未知。先核对实际运行程序路径、启动时间和源码/安装版本，再记录全设备连接后的推送间隔及逐设备错误；不要用旧帧续期或直接放宽超时掩盖通信失败。当前采样边界见[开发者指南](developer_guide.md#串口稳定绑定)。
+
 ---
 
 ## 4. 实验无法启动
@@ -124,13 +126,17 @@ python scripts/cleanup_locks.py --force
 - 文件名非法
 - YAML 缺少 `steps`
 - 已有实验处于 `running` 或 `paused`
+- 普通 YAML、引导批次或微波托管仍有清理未确认、持久化失败或中断恢复锁
+- 设备未连接、状态未知/过期、被其他流程占用，或流程参数与装置配置不一致
+- 存储目录不可读、历史 JSON/CSV 损坏；接口可能返回500/503，原文件保留
 
 ### 建议处理
 
-1. 检查实验文件是否在 `experiments/`
+1. 检查实验文件是否在实际运行工作区的 `experiments/`；桌面版为 `%LOCALAPPDATA%\Heat\workspace`，源码数据位置见[日常开发说明](daily_development.md#代码版本与数据位置)
 2. 检查文件后缀是否为 `.yaml` / `.yml`
 3. 检查 YAML 顶层是否包含 `steps`
 4. 检查当前是否已有实验在运行
+5. 按页面提示处理停机、保存和恢复锁；先现场确认设备停止，解除锁定不续跑原实验。不要删除恢复文件或损坏历史来绕过保护。
 
 ---
 
@@ -208,8 +214,8 @@ python scripts/cleanup_locks.py --force
 
 1. 在 `frontend/` 执行 `npm run build`
 2. 确认构建产物已写入 `src/web/static/`；该目录是忽略的构建产物，不应提交
-3. 重启后端服务
-4. 浏览器执行强制刷新
+3. 浏览器执行强制刷新，并核对当前连接的是源码后台还是已安装桌面后台；源码构建不会更新安装目录
+4. 只有后端代码也变更时才需正常停机退出后重新启动；仅静态页面更新不以强杀或重启正在实验的后台解决。开发验证可将构建输出隔离到 `output/`，核验后再按发布流程部署
 
 ---
 
