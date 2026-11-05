@@ -36,7 +36,7 @@ data/campaigns/recommendations.json
 data/campaigns/characterizations.json
 ```
 
-这些文件会在首次访问 Campaign API 时自动创建。已有的 `data/datasets/samples.csv` 不迁移、不替代，仍用于现有实验样品记录链路。
+缺失的这些文件会在首次访问 Campaign 存储时创建；设置 `HEAT_DATA_DIR` 时相对于该数据根目录，桌面版默认位于 `%LOCALAPPDATA%\Heat\workspace`。已有的 `data/datasets/samples.csv` 不迁移、不替代，仍用于现有实验样品记录链路。
 
 样品编号分配、写入和删除会校验 `samples.csv` 的表头及行列格式；损坏时保留原文件并报告失败，不当作空历史继续写入。合法旧列和扩展列保留。追踪记录失败的运行须先核对和补齐记录，再判断是否可用于 Trial 表征关联与 planner 反馈。
 
@@ -169,7 +169,7 @@ python -m pytest tests\test_campaigns.py -q
 
 仅前端源码改动才需要 `cd frontend; npm run build -- --mode production`；仅文档、规则改动执行 `git diff --check -- <paths>` 与内容一致性检查。必要测试依赖缺失时按 AGENTS.md 先确认安装，不把未执行的行为测试视为通过。
 
-批量条件设计 Demo（`/experiment/batch/template`）独立于 Campaign：从现有 YAML 生成参数组合，使用既有 batch_id、condition_id、sample_index 标记另存的单组文件，不创建 Trial，不注入 recommendation，不启动实验或实验队列。具体操作见用户指南“批量条件设计 Demo”。
+模板参数设计（`/experiment/batch/template`）独立于 Campaign：从现有 YAML 生成参数组合，使用既有 batch_id、condition_id、sample_index 标记另存的单组文件，不创建 Trial，不注入 recommendation，不启动实验或实验队列。页面入口见[用户指南](user_guide.md#21-页面入口)，实现边界见[开发者指南](developer_guide.md#批量条件设计前端)。
 
 引导式完整批次执行（/experiment/batch）复用现有实验引擎和单组 run_id/sample_id，记录 batch_id、condition_id、sample_index 及本组参数。它不创建 Campaign Trial，不注入 recommendation，也不授权 planner 启动设备。模板参数设计入口仍为独立的另存工具。
 

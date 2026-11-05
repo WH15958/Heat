@@ -1,6 +1,6 @@
 # Heat
 
-Heat 是一个面向实验室与小型工业场景的自动化控制系统，用于协调加热器、蠕动泵、实验流程、实时监控和样品记录。
+Heat 是一个面向实验室与小型工业场景的自动化控制系统，用于协调加热器、蠕动泵、注射泵、微波反应仪、三通阀、接样转盘、实验流程、实时监控和样品记录。
 
 ## 你现在应该看什么
 
@@ -13,13 +13,13 @@ Heat 是一个面向实验室与小型工业场景的自动化控制系统，用
 
 - 后端：Python + FastAPI
 - 前端：Vue 3 + Vite + Element Plus
-- 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵、MKM-AH1E 微波反应仪
-- 协议：AIBUS、MODBUS RTU
+- 设备：宇电 AI 系列温控器、LabSmart 多通道蠕动泵、MKM-AH1E 微波反应仪、MSP1-CX 注射泵、中盛继电器控制的三通阀、CL-01A 接样转盘
+- 协议：AIBUS、MODBUS RTU、注射泵 OEM/DT、CL-01A 二进制串口协议
 - 实验定义：YAML，支持图形编排与 YAML 双模式编辑
 - 数据能力：实时 WebSocket 推送、实验日志、`samples.csv` 样品记录
-- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/experiment/batch`、`/campaigns`、`/history`
+- Web 页面：`/`、`/control`、`/experiment`、`/experiment/editor`、`/experiment/batch`、`/experiment/batch/template`、`/campaigns`、`/history`
 - API 前缀：设备 `/api`、实验 `/api/experiments`、引导式批次 `/api/guided`、Campaign `/api/campaigns`
-- 引导式批次：固定装置条件组合、双泵协调、45℃降温后自动从产物出口收取、收取清洗和逐组记录；复用真实设备接口，软件验证不替代设备验收。操作见 [用户指南](docs/user_guide.md#引导式批次实验)。
+- 引导式批次：固定装置条件组合、双注射泵协调、反应液降至 55℃及以下后从 NO 产物出口收取、NC 排废清洗、转盘接样和逐组记录；55℃是当前生成流程的软件门槛，阀门及液路的适用工况须现场核对，软件验证不替代设备验收。旧流程仍按其保存的参数执行。操作见 [用户指南](docs/user_guide.md#引导式批次实验)。
 
 ## 适用人群
 
@@ -91,8 +91,10 @@ Windows 完成上述依赖安装和前端构建后，也可双击根目录的 `s
 - [docs/mvp_system_acceptance_checklist.md](docs/mvp_system_acceptance_checklist.md)：MVP Gate 验收、证据和签字的唯一记录
 - [docs/microwave_smoke_test.md](docs/microwave_smoke_test.md)：微波仪分级实机 smoke test
 - [docs/campaign_workflow.md](docs/campaign_workflow.md)：批次式人工闭环优化、Trial 与离线表征录入流程
-- [docs/system_engineering_design.md](docs/system_engineering_design.md)：当前水测试液路、死体积、预灌和三层标定的长期工程参考
+- [docs/system_engineering_design.md](docs/system_engineering_design.md)：早期水测试与当前引导式液路的边界、死体积、预灌和三层标定参考
 - [docs/device_materials/](docs/device_materials/)：设备说明书、通信协议原始资料和转换版资料
+- [连接件与配件登记](docs/device_materials/accessories/README.md)：规格、来源、数量含义与待确认项
+- [2026-11-05 全项目资料审查](docs/documentation_review_20261105.md)：覆盖清单、修订依据、验证及资料缺口
 - [docs/experiment_yaml_spec.md](docs/experiment_yaml_spec.md)：实验 YAML 规范与示例
 - [docs/troubleshooting.md](docs/troubleshooting.md)：常见故障排查
 
@@ -107,7 +109,8 @@ Windows 完成上述依赖安装和前端构建后，也可双击根目录的 `s
 - 加热器连接、温度设定、启动和停止
 - 蠕动泵 1-4 通道控制，支持四种运行模式
 - 微波仪连接、状态读取、参数配置、启动和停止
-- CL-01A 接样转盘手动控制与停止监督；定位编码及机械回零待现场核验，见 [转盘接入说明](docs/turntable_integration.md)
+- 双 MSP1-CX 注射泵手动控制、有限程序和 YAML 动作；三通阀手动切换及流程控制
+- CL-01A 接样转盘手动控制、引导式自动接样及搭建式动作；已有有限回原点和换瓶实机记录，完整验收边界见 [转盘接入说明](docs/turntable_integration.md)
 - Web 实时仪表盘与控制面板
 - Campaign、Trial、人工 recommendation 与离线表征记录
 - 单实验运行保护、暂停、恢复、停止

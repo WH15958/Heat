@@ -67,6 +67,8 @@ steps:
 
 ## 你现在应该看什么
 
+专题入口：[搭建式转盘](#搭建式转盘动作2026-10-26)、[注射泵](#msp1-cx-注射泵动作与等待)、[三通阀](#三通阀动作-valveswitch)、[降温等待](#降温等待microwave_temperature_below)、[监督保温](#微波保护保温-microwave_monitored_hold)、[引导式约定](#引导式生成流程的排液与保温约定)。示例是格式说明，执行前仍需核对实际装置与现场许可。
+
 - 只想会写一个简单实验：看“最小示例”
 - 想知道所有字段：看“顶层字段”和“steps 结构”
 - 想知道所有动作和等待类型：看“动作表”和“等待表”
@@ -730,9 +732,11 @@ steps:
     channel: 1
     flow_rate: 5.0
     mode: FLOW_MODE
-    tube_model: 13
+    tube_model: 11
     flow_unit: 1
 ```
+
+上例 `tube_model: 11` 对应当前 `pump1` 配置；HMI 已确认的 `11 -> 13` 是该设备的写入/读回映射，不能用读回值13替代待写值，也不能由新登记的软管规格推定管型或标定结果。
 
 ### 8.2 定时定量模式
 
@@ -878,6 +882,8 @@ interval_time: 0
 
 只接受 device_id 与 position（大写 NO 或 NC），设备必须是已启用配置中的阀门，运行前手动连接。当前 COM–NO 继电器接线下，NO 表示断电公共口通流体 NO，NC 表示通电公共口通流体 NC。需现场确认阀体为 0127 T 及实际出口。
 
+上述身份检查针对既有 Bürkert 装置；后续 Henyon 更换资料见[设备索引](device_materials/README.md)。厂家说明书已归档不代表已更换或继电器映射已经适配，不据此改写既有 YAML。
+
 ```yaml
 - id: select_no
   type: valve.switch
@@ -974,7 +980,7 @@ interval_time: 0
 
 引导式正式组 metadata 增加 `bottle_number`（组号对应的瓶位）、`collection_device_id: turntable1` 和 `collection_status`（pending、collecting、collected 或 possibly_partial）。运行时更新收取状态；停止或故障可能留下部分产物，不得仅凭组号或瓶号判为完整收取。旧日志及旧样品关联不回填。
 
-转盘准备回零、清洗后滴液等待与换瓶、整批结束停机回零均由外层 `GuidedBatch/GuidedTurntable` 编排，完整批次 plan 的 `collection` 保存该策略；搭建式另有下文三个独立转盘动作，不新增等待类型。导出的单组 YAML 只包含组内液路与反应步骤，瓶号 metadata 是追踪信息，不会驱动转盘，也不保证批次换瓶联锁。需要完整自动接样流程时使用引导式完整批次，或自行编排包含下文转盘动作及全部液路、滴液等待步骤的搭建式配方，不能把导出的单组 YAML 当作完整批次执行。
+转盘准备回零、清洗后滴液等待与换瓶、整批结束停机回零均由外层 `GuidedBatch/GuidedTurntable` 编排，完整批次 plan 的 `collection` 保存该策略；搭建式另有本文开头列出的三个独立[转盘动作](#搭建式转盘动作2026-10-26)，不新增等待类型。导出的单组 YAML 只包含组内液路与反应步骤，瓶号 metadata 是追踪信息，不会驱动转盘，也不保证批次换瓶联锁。需要完整自动接样流程时使用引导式完整批次，或自行编排包含上述转盘动作及全部液路、滴液等待步骤的搭建式配方，不能把导出的单组 YAML 当作完整批次执行。
 
 
 ### 流量模式的编排定时排液

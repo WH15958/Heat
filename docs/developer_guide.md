@@ -27,6 +27,8 @@
 - 想接入新设备：看“新增设备驱动标准流程”
 - 想确认 merge 前要做什么：看 [testing_and_merge_flow.md](testing_and_merge_flow.md)
 - 想排查线上/联调问题：看 [troubleshooting.md](troubleshooting.md)
+- 固定装置批次：看[引导式完整后端](#引导式完整后端)、[保护等待与计时](#自动化保护等待与计时)、[只读进度](#引导式只读动作快照2026-10-16)
+- 设备专题：看[注射泵](#msp1-cx-注射泵架构)、[三通阀](#继电器三通阀接入)、[转盘](#cl-01a-转盘手动接入)；资料缺口见[全项目审查](documentation_review_20261105.md)
 
 ---
 
@@ -47,8 +49,8 @@ Vue 前端
 
 - `src/web/`：REST API、WebSocket、应用生命周期
 - `src/experiment/`：YAML 解析、状态机、步骤执行、实验日志
-- `src/devices/`：加热器、泵和微波仪的同步设备驱动
-- `src/protocols/`：AIBUS、MODBUS RTU、参数定义和微波仪寄存器常量
+- `src/devices/`：加热器、蠕动泵、注射泵、微波仪、继电器三通阀和转盘的同步设备驱动
+- `src/protocols/`：AIBUS、MODBUS RTU、注射泵 OEM/DT、转盘二进制串口协议及参数定义
 - `src/utils/`：配置、日志、串口资源管理
 - `src/science/`：`sample_id` 和 `samples.csv` 记录链路
 - `src/campaigns/`：Campaign、Trial、Recommendation 与表征结果存储
@@ -59,6 +61,9 @@ Vue 前端
 - `/`
 - `/control`
 - `/experiment`
+- `/experiment/editor`
+- `/experiment/batch`
+- `/experiment/batch/template`
 - `/campaigns`
 - `/history`
 
@@ -126,6 +131,7 @@ FastAPI 是异步的，但设备是同步的。
 - `src/experiment/editor.py`：无硬件访问的 YAML 编排校验、设备引用提示和原子文件保存
 - `src/experiment/parameter_models.py`：设备 REST 与编排器共用的纯参数契约
 - `src/web/api/campaigns.py`：`/api/campaigns` 下的 Campaign、Trial、Recommendation 与表征结果接口
+- `src/web/api/guided.py`：`/api/guided` 下的固定装置批次预览、执行、恢复和历史接口
 - `src/web/api/ws.py`：WebSocket 推送与连接管理
 
 #### 实验编排接口
@@ -169,6 +175,8 @@ Windows 双击入口为 `start_heat.bat`，负责选择虚拟环境/Conda/PATH P
 - `src/devices/heater.py`：加热器同步控制
 - `src/devices/peristaltic_pump.py`：多通道泵同步控制
 - `src/devices/microwave.py`：MKM-AH1E 微波仪同步 Modbus 控制
+- `src/devices/syringe_pump.py` / `src/protocols/syringe_pump.py`：MSP1-CX 同步驱动与 OEM/DT 协议
+- `src/devices/relay_valve.py`：中盛继电器读回与三通阀位置映射；阀体厂家资料不替代继电器协议
 - `src/devices/turntable.py` / `src/protocols/turntable.py`：CL-01A 转盘同步串口访问及厂家二进制协议；手动动作监督在 `src/web/turntable_control.py`
 - `src/protocols/aibus.py`：加热器协议实现
 - `src/protocols/modbus_rtu.py`：泵协议实现
@@ -542,6 +550,8 @@ PPTX 和组会展示材料属于仓库外产物，应存放在独立汇报目录
 
 每组沿用 metadata 的既有 batch_id、condition_id、sample_index 字段，并移除模板的 sample_id，使原运行链重新生成样品身份。未实现持久化批次队列和自动启动；与 Campaign/planner 无自动连接。测试：`cd frontend; npx tsx --test tests/batch.test.ts tests/experimentDocument.test.ts`。
 
+这里的“未实现”仅限定模板另存工具；固定装置的阀路、转盘和跨组执行由下节引导式流程提供。模板页提示按此边界显示，不再称整个项目尚未接入阀或转盘。
+
 ### 引导式完整后端
 
 `src/experiment/guided.py` 定义严格请求模型、后端条件组合、固定液路完整 recipe 和 GuidedBatch。调用原 parser、StepExecutor、ExperimentEngine 和 ExperimentLogger，每组一个真实运行及 sample_id；不用另建驱动或后台串口线程。总组数（含重复）不超过固定 turntable1 配置的 bottle_count，本机 12；每组最多 10 次清洗；加热温度及剂量以当前设备配置范围校验。
@@ -638,6 +648,8 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 `StepExecutor.activity_snapshot` 只复制执行时已有的观测；`ActivityProgress` 不访问设备。双路稳定循环记录实际稳定窗口，暂停清零；duration/monitored_hold 使用原暂停扣时单调时钟。泵在原 START 确认后记录单调时钟，reference=true 的剩余时长不因编排暂停冻结，也不参与完成判断。并行进料聚合子执行器已缓存的状态。切换步骤、装载新组时清除观测，步骤退出冻结快照，展示不改变驱动调用顺序或数量。引导层再按编译步骤生成动作说明，通用执行器不解释引导阶段。
 
 预充前到温快照的 `wait_type=heater_pair_reached` 表示两路温度按“≥各自目标”判断，不显示连续稳定倒计时；旧记录的 `heater_pair_stable` 继续按原容差和稳定时长展示。
+
+`guided_activity` 的降温说明读取本步骤 `wait.target_temperature`，旧45℃与新55℃分别显示；缺少有效目标时仅说明“设定降温条件”。旧预充稳定提示读取 `tolerance/seconds`，有效保温提示读取 `tolerance/timeout`，timeout 表示总等待上限，不固定追加10分钟。无目标的定时保温不宣称已经稳定到温。此层仅生成说明，不修改步骤、观测、控制阈值或设备调用；回归见 `tests/test_guided_progress.py`。
 
 状态顶层新增 `stop_requested` 和 `cleanup_in_progress`；后者观察执行器清理及预充失败清理的在途调用。原 `cleanup_pending` 仍保留其资源/恢复含义，不能把它当作“正在清理”。已结束批次可能保留 stop_requested=true，客户端须优先判断终态。
 

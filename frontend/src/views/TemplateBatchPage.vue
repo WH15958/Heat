@@ -1,7 +1,7 @@
 <template>
   <div class="batch-page">
     <header><div><h2>高级模板参数设计</h2><p>从已有实验生成多组条件，保留真实设备动作和固定步骤。</p></div><el-button @click="router.push('/experiment/batch')">返回引导式实验</el-button></header>
-    <el-alert title="当前可生成、校验和保存单组实验；外部分流阀、圆盘收集及跨组自动调度尚未接入，不提供整批启动。" type="info" :closable="false" />
+    <el-alert title="此页用于生成、校验和另存单组实验。固定装置的阀路切换、转盘接样及整批执行请使用引导式实验。" type="info" :closable="false" />
     <section>
       <h3>1. 选择固定流程</h3>
       <div class="controls"><label>现有实验<select v-model="filename" :disabled="busy" @change="loadTemplate"><option value="">请选择</option><option v-for="item in templates" :key="item.filename" :value="item.filename">{{ item.name }} · {{ item.filename }}</option></select></label><label>新批次名称<input v-model="batch" :disabled="busy" placeholder="例如 batch_001" /></label></div>
@@ -27,7 +27,7 @@
       <h3>3. 条件预览 · {{ plan.rows.length }} 组</h3>
       <p v-for="total in totals" :key="total.device">{{ total.device }}：整批理论排出量 {{ total.volume }} mL（仅统计模板的显式注射泵排出动作，不含程序内部动作、清洗或预灌消耗）。</p>
       <p v-if="!generated">请填写有效批次名称：1–60 位字母、数字、下划线或短横线。</p>
-      <p>组号是计划顺序，不代表圆盘已经具备定位能力。此处不会连接或启动设备。</p>
+      <p>组号表示模板组合的计划顺序，不关联实际瓶位；保存文件不会连接或启动设备。</p>
       <div class="table-wrap"><table><thead><tr><th>组号</th><th v-for="axis in axes" :key="axis.key">{{ axis.label }}</th><th>文件</th></tr></thead><tbody><tr v-for="(row, i) in plan.rows" :key="i" :class="{ selected: selected === i }" @click="selectRow(i)"><td>{{ i + 1 }}</td><td v-for="(value, j) in row" :key="j">{{ value }}</td><td><button :disabled="busy" @click.stop="selectRow(i)">查看第 {{ i + 1 }} 组</button></td></tr></tbody></table></div>
       <div class="actions"><el-button :loading="busy" :disabled="!generated" @click="validateAll">校验全部组合</el-button><el-button :disabled="busy || !generated" @click="saveSelected">校验并另存所选组</el-button></div>
       <p v-if="report" role="status">{{ report }}</p>

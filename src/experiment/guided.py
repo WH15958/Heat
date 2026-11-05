@@ -511,9 +511,9 @@ class GuidedBatch:
             result["progress"]["activity"] = guided_activity(self.executor._activity_step, p.activity)
         if p:
             labels = {"feed_both": "两路前驱体进料", "microwave_config": "设置微波反应温度",
-                "heat_both_stable": "两路温度同时在目标 ±5℃ 内持续 30 秒",
+                "heat_both_stable": "等待两路温度稳定",
                 "microwave_start": "微波升温", "hold": "反应保温", "microwave_stop": "停止微波",
-                "cool_before_collection": "等待降温至55℃",
+                "cool_before_collection": "等待反应液满足设定降温条件",
                 "recheck_temperature": "收取前复查温度", "product_route": "切向产物出口",
                 "collect_product": "抽取产物", "collect_product_stop": "停止产物抽取"}
             label = labels.get(p.step_id)
@@ -526,15 +526,15 @@ class GuidedBatch:
             result["progress"]["step_label"] = label
             if p.step_id.startswith("prime_"):
                 parts = p.step_id.split("_")
-                prime_labels = {"prime_temperature": "预充前检查反应液温度 ≤55℃",
+                prime_labels = {"prime_temperature": "预充前检查反应液温度",
                     "prime_initialize_1": "初始化注射泵 A", "prime_initialize_2": "初始化注射泵 B",
-                    "prime_heat_duration": f"到温后脱气：等待 {self.spec.prime_heat_minutes:g} 分钟",
+                    "prime_heat_duration": "到温后按设定时长脱气",
                     "prime_heat_both_reached": "等待两路达到各自目标温度，随后计时脱气",
-                    "prime_heat_both_stable": "等待两路目标 ±3℃ 并稳定 30 秒，随后计时脱气",
+                    "prime_heat_both_stable": "等待两路温度稳定，随后计时脱气",
                     **{f"prime_heat_{n}_{action}": f"预充前{verb}前驱体 {name}"
                        for n, name in enumerate(("A", "B"))
                        for action, verb in (("set", "设置温度："), ("start", "开始加热："))},
-                    "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度 ≤55℃",
+                    "prime_waste_route": "切向废液端", "prime_recheck_temperature": "排液前复查温度",
                     "prime_drain": "预充排废液", "prime_drain_stop": "停止预充排液"}
                 result["progress"]["step_label"] = prime_labels.get(p.step_id, label)
                 if p.step_id in ("prime_initialize_1", "prime_initialize_2"):
@@ -552,6 +552,16 @@ class GuidedBatch:
                     result["progress"]["device_id"] = "valve1"
                 else:
                     result["progress"]["device_id"] = "microwave1（只读温度）"
+            step = self.executor._activity_step
+            if step is not None and step.id == p.step_id:
+                if p.step_id in ("prime_temperature", "prime_recheck_temperature",
+                                 "cool_before_collection", "recheck_temperature"):
+                    if step.wait.target_temperature is not None:
+                        result["progress"]["step_label"] += f"（≤{step.wait.target_temperature:g}℃）"
+                elif p.step_id in ("heat_both_stable", "prime_heat_both_stable"):
+                    result["progress"]["step_label"] += f"（目标 ±{step.wait.tolerance:g}℃，连续 {step.wait.seconds:g} 秒）"
+                elif p.step_id == "prime_heat_duration":
+                    result["progress"]["step_label"] += f"（{step.wait.seconds:g} 秒）"
         if self._orchestration_step:
             result["progress"] = dict(current_step=0, total_steps=1, elapsed=0,
                 step_id=self._orchestration_step[0], step_label=self._orchestration_step[1],

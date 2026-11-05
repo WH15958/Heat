@@ -1,5 +1,6 @@
 """Progress observes existing execution; fake time, no serial devices."""
 import asyncio
+import copy
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -161,3 +162,105 @@ def test_water_test_early_exit_retains_failure_and_diagnostics(monkeypatch):
     assert '控制字=16384' in executor._last_error
     assert executor.activity_snapshot['devices']['microwave1']['read_ok'] is True
     assert executor.activity_snapshot['state'] == 'failed'
+
+
+@pytest.mark.parametrize('step_id', ['prime_temperature', 'prime_recheck_temperature',
+                                    'cool_before_collection', 'recheck_temperature'])
+@pytest.mark.parametrize('target', [45, 55, None])
+def test_cooling_description_follows_step_without_mutation(step_id, target):
+    step = ExperimentStep(step_id, ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.MICROWAVE_TEMPERATURE_BELOW, device_id='microwave1',
+        target_temperature=target))
+    observation = dict(state='waiting', readings=[dict(value=60)], devices={})
+    before = copy.deepcopy((step, observation))
+    activity = progress.guided_activity(step, observation)
+    if target is None:
+        assert '45' not in activity['description'] and '55' not in activity['description']
+        assert '设定降温条件' in activity['description']
+    else:
+        assert f'{target}℃' in activity['description']
+        assert activity['parameters']['target_temperature'] == target
+    assert (step, observation) == before
+
+
+@pytest.mark.parametrize('tolerance,seconds', [(3, 30), (5, 15)])
+def test_legacy_priming_stability_description_uses_saved_parameters(tolerance, seconds):
+    step = ExperimentStep('prime_heat_both_stable', ActionType.WAIT,
+        wait=WaitCondition(type=WaitType.HEATER_PAIR_STABLE, tolerance=tolerance, seconds=seconds))
+    description = progress.guided_activity(step, {})['description']
+    assert f'±{tolerance}℃' in description and f'{seconds} 秒' in description
+
+
+@pytest.mark.parametrize('tolerance,timeout', [(3, 1200), (5, 750)])
+def test_qualified_hold_description_uses_actual_tolerance_and_total_timeout(tolerance, timeout):
+    step = ExperimentStep('hold', ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.MICROWAVE_MONITORED_HOLD, seconds=600, target_temperature=60,
+        tolerance=tolerance, timeout=timeout))
+    description = progress.guided_activity(step, dict(qualified_seconds=0))['description']
+    assert f'±{tolerance}℃' in description
+    assert f'总等待上限 {timeout} 秒' in description
+    assert '额外等待10分钟' not in description
+
+
+def test_hold_description_without_target_does_not_invent_temperature_band():
+    step = ExperimentStep('hold', ActionType.WAIT,
+        wait=WaitCondition(type=WaitType.MICROWAVE_MONITORED_HOLD, seconds=60))
+    description = progress.guided_activity(step, dict(hold_mode='timed'))['description']
+    assert '稳定到温' not in description and '±' not in description
+    assert '按设定时长' in description
+
+
+def test_progress_description_does_not_issue_device_calls():
+    dm = Mock()
+    executor = execution.StepExecutor(dm)
+    step = ExperimentStep('prime_temperature', ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.MICROWAVE_TEMPERATURE_BELOW, device_id='microwave1', target_temperature=55))
+    executor.activity.reset(step)
+    snapshot = executor.activity.snapshot()
+    progress.guided_activity(step, snapshot)
+    assert dm.mock_calls == []
+    assert executor.activity.snapshot() == snapshot
+
+
+@pytest.mark.parametrize('step_id', ['prime_temperature', 'prime_recheck_temperature',
+                                    'cool_before_collection', 'recheck_temperature'])
+@pytest.mark.parametrize('target', [45, 55, None])
+def test_batch_step_label_uses_active_step_parameters(step_id, target, tmp_path):
+    from src.experiment.guided import GuidedBatch
+    from test_guided import FakeManager, spec
+
+    dm = FakeManager()
+    batch = GuidedBatch(dm, spec(), directory=tmp_path)
+    step = ExperimentStep(step_id, ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.MICROWAVE_TEMPERATURE_BELOW, target_temperature=target))
+    batch.engine = ExperimentEngine(batch.executor)
+    batch.engine.load_steps([step])
+    batch.executor._activity_step = step
+    before = copy.deepcopy((step, dm.calls, batch.record))
+    label = batch.snapshot()['progress']['step_label']
+    if target is None:
+        assert '45' not in label and '55' not in label
+    else:
+        assert f'≤{target}℃' in label
+    assert (step, dm.calls, batch.record) == before
+
+
+@pytest.mark.parametrize('step_id,tolerance,seconds', [
+    ('heat_both_stable', 5, 30), ('prime_heat_both_stable', 3, 15),
+    ('prime_heat_duration', 1, 90)])
+def test_batch_wait_label_uses_step_and_handles_missing_activity(step_id, tolerance, seconds, tmp_path):
+    from src.experiment.guided import GuidedBatch
+    from test_guided import FakeManager, spec
+
+    batch = GuidedBatch(FakeManager(), spec(), directory=tmp_path)
+    step = ExperimentStep(step_id, ActionType.WAIT, wait=WaitCondition(
+        type=WaitType.DURATION if step_id == 'prime_heat_duration' else WaitType.HEATER_PAIR_STABLE,
+        tolerance=tolerance, seconds=seconds))
+    batch.engine = ExperimentEngine(batch.executor)
+    batch.engine.load_steps([step])
+    assert not any(c.isdigit() for c in batch.snapshot()['progress']['step_label'])
+    batch.executor._activity_step = step
+    label = batch.snapshot()['progress']['step_label']
+    assert f'{seconds} 秒' in label
+    if step_id != 'prime_heat_duration':
+        assert f'±{tolerance}℃' in label
