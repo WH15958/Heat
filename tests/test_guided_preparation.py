@@ -374,7 +374,7 @@ def test_hot_priming_liquid_cannot_drain_and_stop_cleans_heaters(prepared_env):
         def warm_liquid(did, params, owner):
             result = original(did, params, owner)
             if params['action'] == 'dispense':
-                dm.temperature = 60
+                dm.temperature = 110
             return result
         dm.syringe_command = warm_liquid
         batch = guided.GuidedBatch(dm, spec())

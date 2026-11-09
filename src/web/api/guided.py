@@ -218,6 +218,16 @@ async def saved_plan(batch_id: str):
         raise HTTPException(503, "完整流程快照读取失败") from exc
 
 
+@router.get("/{batch_id}/charts")
+async def charts(batch_id: str):
+    from src.experiment.batch_charts import saved_charts
+    record = await status(batch_id)
+    try:
+        return await asyncio.to_thread(saved_charts, record, guided.BATCH_DIR)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(503, "图表生成或保存失败，请检查执行日志及存储后重试") from exc
+
+
 @router.post("/{batch_id}/pause")
 async def pause(batch_id: str):
     try:

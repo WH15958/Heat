@@ -17,9 +17,9 @@ function page(){
  const imports:Record<string,any>={
   vue:{...vue,onMounted:()=>{},onUnmounted:()=>{}},
   'vue-router':{useRoute:()=>route,useRouter:()=>({push:async(v:any)=>{route.query=typeof v==='string'?{}:v.query},replace:async(v:any)=>{route.query=v.query}})},
-  axios:{get:async(url:string)=>{calls.push(url);if(url.endsWith('/current'))return{data:current};if(url.endsWith('/batches'))return{data:records};if(url.endsWith('/runs'))return{data:runs};if(url.endsWith('/plan')){if(failPlan)throw Error('missing');return{data:plans[url.split('/')[3]!]}};return{data:details[url.split('/')[3]!]}}},
+  axios:{get:async(url:string)=>{calls.push(url);if(url.endsWith('/current'))return{data:current};if(url.endsWith('/batches'))return{data:records};if(url.endsWith('/runs'))return{data:runs};if(url.includes('/history/runs/')){const run=runs.find(r=>r.run_id===decodeURIComponent(url.split('/').pop()!));if(!run)throw Error('missing run');return{data:run}};if(url.endsWith('/plan')){if(failPlan)throw Error('missing');return{data:plans[url.split('/')[3]!]}};return{data:details[url.split('/')[3]!]}}},
   'element-plus':{ElMessageBox:{confirm:async()=>{if(!confirm)throw 'cancel'}}},
-  './BatchExperimentPage.vue':{},'../experiment/guidedProgress':progress,'../experiment/guidedHistory':history,
+  './BatchExperimentPage.vue':{},'../components/BatchHistoryCharts.vue':{},'../experiment/guidedProgress':progress,'../experiment/guidedHistory':history,
  }
  const exports:any={},scope=vue.effectScope()
  runInNewContext(compiled,{exports,localStorage:{getItem:(k:string)=>stored.get(k)||null,setItem:(k:string,v:string)=>stored.set(k,v),removeItem:(k:string)=>stored.delete(k)},require:(name:string)=>{assert.ok(name in imports,name);return imports[name]}})
@@ -70,7 +70,7 @@ test('history reuse replaces a draft only after confirmation and copies input wi
   assert.deepEqual(draft.request.axes,request.axes);assert.equal(draft.request.prime_drain_seconds,200)
   for(const key of ['experiment_name','plumbing_confirmed','bottles_confirmed','priming_batch_id','sample_id'])assert.equal(draft.request[key],undefined)
   assert.equal(request.plumbing_confirmed,true)
-  assert.ok(p.calls.every(url=>url.startsWith('/api/guided/')||url==='/api/experiments/history/runs'))
+  assert.ok(p.calls.every(url=>url.startsWith('/api/guided/')||url.startsWith('/api/experiments/history/runs/')))
  }finally{p.dispose()}
 })
 
@@ -107,6 +107,19 @@ test('batch history preserves bottle associations and distinguishes collection f
   p.details.B.groups=[{...group,state:'failed',collection_status:'possibly_partial',collection_error:'排液中断'}]
   await p.state.readDetail('B')
   assert.equal(p.state.finalizationFailed.value,false);assert.equal(p.state.groups.value[0].collection_status,'possibly_partial');assert.equal(p.state.groups.value[0].collection_error,'排液中断')
-  assert.ok(p.calls.every(url=>url.startsWith('/api/guided/')||url==='/api/experiments/history/runs'))
+  assert.ok(p.calls.every(url=>url.startsWith('/api/guided/')||url.startsWith('/api/experiments/history/runs/')))
+ }finally{p.dispose()}
+})
+
+test('opening a batch reads only its explicit run IDs and reports missing logs',async()=>{
+ const p=page();try{
+  p.details.B={batch_id:'B',groups:[{index:1,run_id:'R'},{index:2,run_id:'missing'}],priming:{run_id:'prime'}}
+  p.plans.B={batch_id:'B'}
+  p.setRuns([{run_id:'R',status:'completed'},{run_id:'prime',status:'completed'},{run_id:'unrelated'}])
+  await p.state.readDetail('B')
+  assert.equal(p.state.related.value.length,2)
+  assert.match(p.state.detailError.value,/missing/)
+  assert.ok(!p.calls.includes('/api/experiments/history/runs'))
+  assert.ok(!p.calls.some(url=>url.endsWith('/unrelated')))
  }finally{p.dispose()}
 })

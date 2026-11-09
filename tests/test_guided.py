@@ -338,8 +338,8 @@ class GuidedTests(unittest.TestCase):
         with patch.object(guided.hashlib, "sha256", wraps=hashlib.sha256) as digest:
             current = guided.priming_signature(request)
         fields = json.loads(digest.call_args.args[0])
-        self.assertEqual(fields.pop("priming_protocol"), "cooling55_startup_stop_v7")
-        previous_fields = dict(fields, priming_protocol="reached_then_dwell_flow_drain_v5")
+        self.assertEqual(fields.pop("priming_protocol"), "cooling100_startup_stop_v8")
+        previous_fields = dict(fields, priming_protocol="cooling55_startup_stop_v7")
         self.assertNotEqual(current, hashlib.sha256(json.dumps(previous_fields, sort_keys=True, allow_nan=False).encode()).hexdigest())
         self.assertTrue({"heater1", "heater2"}.issubset({d["device_id"] for d in fields["devices"]}))
         fields["devices"] = [d for d in fields["devices"] if d["device_id"] not in ("heater1", "heater2")]
@@ -486,7 +486,7 @@ class GuidedTests(unittest.TestCase):
     def test_priming_stop_and_checkpoint_failure_lock(self):
         async def scenario():
             dm = FakeManager()
-            dm.temperature = 60
+            dm.temperature = 110
             batch = guided.GuidedBatch(dm, spec(cooling_timeout=1))
             await batch.start(prime_only=True)
             await until(lambda: batch.record.get("last_step") == "prime_temperature")
@@ -651,7 +651,7 @@ class GuidedTests(unittest.TestCase):
         async def scenario():
             dm = FakeManager()
             batch = guided.GuidedBatch(dm, spec(repeats=2,
-                axes=[[30], [30], [0.1], [0.2], [60], [0]]))
+                axes=[[30], [30], [0.1], [0.2], [110], [0]]))
             await batch.start()
             await until(lambda: batch.record.get("last_step") == "cool_before_collection")
             await batch.pause()
@@ -659,7 +659,7 @@ class GuidedTests(unittest.TestCase):
             await asyncio.sleep(0.1)
             self.assertEqual(batch.state.value, "paused")
             self.assertEqual(sum(c[0] == "pump_start" for c in dm.calls), 1)
-            dm.temperature = 60
+            dm.temperature = 110
             await batch.resume()
             self.assertTrue(await batch.stop())
             self.assertEqual(batch.state.value, "stopped")
@@ -696,7 +696,7 @@ class GuidedTests(unittest.TestCase):
     def test_hot_product_never_reaches_bottle_or_pump(self):
         async def scenario():
             dm = FakeManager()
-            batch = guided.GuidedBatch(dm, spec(axes=[[30], [30], [0.1], [0.2], [60], [0]],
+            batch = guided.GuidedBatch(dm, spec(axes=[[30], [30], [0.1], [0.2], [110], [0]],
                                                 cooling_timeout=0.02))
             await batch.start()
             await batch.task

@@ -1,7 +1,7 @@
 <template>
   <BatchExperimentPage v-if="setup" />
-  <div v-else class="guided-entry">
-    <header><div><h2>引导式实验</h2><p>以命名批次保存参数、预充与各组实验记录。</p></div><el-button v-if="history" @click="router.push('/experiment/batch')">返回实验入口</el-button></header>
+  <div v-else class="guided-entry" :class="{'history-mode':history}">
+    <header><div><h2>{{ history ? '实验记录' : '引导式实验' }}</h2><p>{{ history ? '查看批次结果与温度曲线' : '以命名批次保存参数、预充与各组实验记录。' }}</p></div><el-button v-if="history" @click="router.push('/experiment/batch')">返回实验入口</el-button></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <section v-if="attention" class="attention"><h3>有正在执行或需要处理的批次</h3><p>{{ current.experiment_name || current.request?.experiment_name || current.batch_id }} · {{ label(current.state) }}</p><p>请先查看进度或处理恢复事项，再开始新批次。本机草稿会保留。</p><el-button type="primary" @click="openCurrent">查看当前批次 / 恢复事项</el-button></section>
     <div v-if="!history" class="entry-grid">
@@ -9,22 +9,23 @@
       <section><span class="entry-icon">▤</span><h3>历史实验</h3><p>按批次查看完整参数、预充记录、各组结果与曲线，并导出整批记录。</p><el-button @click="router.push({path:'/experiment/batch',query:{view:'history'}})">查看历史实验</el-button></section>
     </div>
     <template v-else>
-      <div class="history-heading"><h3>历史实验 · {{ records.length }} 批</h3><el-button :loading="loading" @click="load">刷新记录</el-button></div>
+      <div class="history-heading"><h3>全部批次 <span class="record-count">{{ records.length }}</span></h3><el-button size="small" :loading="loading" @click="load">刷新记录</el-button></div>
       <p v-if="!loading&&!records.length&&!error">暂无已保存的批次。</p>
       <div class="history-layout">
-        <nav aria-label="历史批次"><button v-for="record in records" :key="record.batch_id" :class="{selected:detail?.batch_id===record.batch_id}" @click="selectBatch(record.batch_id)"><strong>{{ record.experiment_name || record.request?.experiment_name || '未命名实验' }}</strong><span>{{ label(record.state) }} · {{ record.total_groups || 0 }} 组</span><small>{{ date(record.created_at) }}</small><small>{{ record.batch_id }}</small></button></nav>
-        <section v-if="detail" class="batch-detail" :aria-busy="detailLoading">
-          <h3>{{ detail.experiment_name || detail.request?.experiment_name || '未命名实验' }}</h3><p>{{ label(detail.state) }} · {{ detail.total_groups || 0 }} 组 · {{ date(detail.created_at) }}</p><small>{{ detail.batch_id }}</small>
+        <nav aria-label="历史批次"><button v-for="record in records" :key="record.batch_id" :class="{selected:detail?.batch_id===record.batch_id}" :aria-current="detail?.batch_id===record.batch_id ? 'true' : undefined" :title="record.batch_id" @click="selectBatch(record.batch_id)"><strong>{{ record.experiment_name || record.request?.experiment_name || '未命名实验' }}</strong><span class="record-meta"><span class="record-status" :data-state="record.state">{{ label(record.state) }}</span><span>{{ record.total_groups || 0 }} 组</span></span><small>{{ date(record.created_at) }}</small></button></nav>
+        <section v-if="detail" class="batch-detail" :aria-busy="detailLoading" tabindex="0" aria-label="实验记录详情">
+          <div class="detail-heading"><h3>{{ detail.experiment_name || detail.request?.experiment_name || '未命名实验' }}</h3><span class="record-status" :data-state="detail.state">{{ label(detail.state) }}</span></div><p class="detail-meta">{{ detail.total_groups || 0 }} 组实验 · {{ date(detail.created_at) }}</p>
           <el-alert v-if="detail.error" :title="detail.error" type="error" :closable="false" />
           <el-alert v-if="finalizationFailed" title="实验组已完成，收尾回零失败；已完成样品记录保留，请检查恢复事项。" type="warning" :closable="false" />
           <el-alert v-if="detail.persistence_status==='error'" title="批次保存失败，请检查记录恢复，不能视为完整归档。" type="error" :closable="false" />
           <el-alert v-if="detailError" :title="detailError" type="warning" :closable="false" />
           <div class="detail-actions"><el-button type="primary" :loading="reusing" :disabled="loading||!!error||detailLoading||attention||!hasGuidedAxes(reuseRequest)" @click="reuseConditions">复用本批条件新建</el-button><el-button :loading="exporting" :disabled="detailLoading" @click="exportAll">导出整批记录</el-button><el-button @click="router.push({path:'/history',query:{batch_id:detail.batch_id}})">查看记录详情与曲线</el-button></div>
-          <h4>本批预充</h4><p>{{ label(detail.priming?.status || 'pending') }} · A {{ detail.priming?.completed_cycles?.[0] || 0 }} 次 / B {{ detail.priming?.completed_cycles?.[1] || 0 }} 次</p><p>记录编号：{{ detail.priming?.run_id || '未生成（可查看下方已关联记录）' }}</p>
+          <BatchHistoryCharts :key="detail.batch_id" :batch-id="detail.batch_id" :groups="detail.groups || []" />
+          <details><summary>本批预充 · {{ label(detail.priming?.status || 'pending') }}</summary><p>A {{ detail.priming?.completed_cycles?.[0] || 0 }} 次 / B {{ detail.priming?.completed_cycles?.[1] || 0 }} 次</p><p>记录编号：{{ detail.priming?.run_id || '未生成（可查看下方已关联记录）' }}</p></details>
           <h4>各组实验</h4><p class="condition-note">以下为设定条件；实际温度与执行过程请查看记录详情与曲线。未执行组展示计划条件。</p><div class="table-scroll"><table><thead><tr><th>组号</th><th>状态</th><th>实验条件</th><th>产物瓶</th><th>收取状态</th><th>样品编号</th><th>记录编号</th></tr></thead><tbody><tr v-for="g in groups" :key="g.index"><td>{{ g.index }}</td><td>{{ label(g.state) }}</td><td class="group-conditions"><small>{{ g.conditionSource }}</small><template v-if="g.parameters"><div>前驱体 A：{{ g.parameters[0] }} ℃ · 进样 {{ g.parameters[2] }} mL</div><div>前驱体 B：{{ g.parameters[1] }} ℃ · 进样 {{ g.parameters[3] }} mL</div><div>微波：{{ g.parameters[4] }} ℃ · 保温 {{ g.parameters[5] }} 分钟</div></template></td><td>{{ g.bottle_number==null ? '未记录' : turntableBottleLabel(g.bottle_number) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<p v-if="g.collection_error">{{ g.collection_error }}</p></td><td>{{ g.sample_id || '—' }}</td><td>{{ g.run_id || '尚未生成' }}</td></tr></tbody></table></div>
           <details v-if="reuseRequest"><summary>本批共用的进料、收集与清洗条件</summary><dl class="common-conditions"><template v-for="field in commonFields" :key="field.key"><dt>{{ field.label }}</dt><dd>{{ reuseRequest[field.key] ?? '未记录' }}<template v-if="reuseRequest[field.key]!=null"> {{ field.unit }}</template></dd></template></dl></details>
           <details v-if="detail.turntable"><summary>转盘与收尾记录</summary><p>最后确认瓶位：{{ turntableBottleLabel(detail.turntable.current_bottle) }} · 目标：{{ turntableBottleLabel(detail.turntable.target_bottle) }}</p><p>收尾：{{ label(detail.finalization?.status || 'pending') }} {{ detail.finalization?.error || '' }}</p><pre>{{ JSON.stringify(detail.turntable_events || [],null,2) }}</pre></details>
-          <h4>已关联执行记录（含预充）</h4><p v-if="!related.length">尚未找到执行日志；批次参数与检查点仍保留。</p><ul><li v-for="run in related" :key="run.run_id">{{ run.experiment_name || run.run_id }} · {{ label(run.status) }} · {{ run.run_id }}</li></ul>
+          <details><summary>记录编号与关联日志（含预充）</summary><p class="batch-id">批次编号：{{ detail.batch_id }}</p><p v-if="!related.length">尚未找到执行日志；批次参数与检查点仍保留。</p><ul><li v-for="run in related" :key="run.run_id">{{ run.experiment_name || run.run_id }} · {{ label(run.status) }} · {{ run.run_id }}</li></ul></details>
           <details><summary>完整批次参数</summary><pre>{{ JSON.stringify(detail.request, null, 2) }}</pre></details>
           <details><summary>预充及各组完整流程快照</summary><pre>{{ savedPlan ? JSON.stringify(savedPlan,null,2) : '流程快照未读取成功，请检查记录。' }}</pre></details>
         </section>
@@ -39,6 +40,7 @@ import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { ElMessageBox } from 'element-plus'
 import BatchExperimentPage from './BatchExperimentPage.vue'
+import BatchHistoryCharts from '../components/BatchHistoryCharts.vue'
 import { batchExport, batchRunIds, collectionStatusLabel, turntableBottleLabel } from '../experiment/guidedProgress'
 import { guidedHistoryDraft, guidedHistoryGroups, hasGuidedAxes } from '../experiment/guidedHistory'
 const route=useRoute(),router=useRouter()
@@ -96,16 +98,20 @@ async function readDetail(id:string){
   const {data}=await axios.get(`/api/guided/${encodeURIComponent(id)}`)
   if(token!==sequence)return
   detail.value=data
-  const results=await Promise.allSettled([axios.get(`/api/guided/${encodeURIComponent(id)}/plan`),axios.get('/api/experiments/history/runs')])
+  const ids=batchRunIds(data,[])
+  const results=await Promise.allSettled([axios.get(`/api/guided/${encodeURIComponent(id)}/plan`),...ids.map(runId=>axios.get(`/api/experiments/history/runs/${encodeURIComponent(runId)}`))])
   if(token!==sequence)return
   const warnings:string[]=[]
   if(results[0].status==='fulfilled')savedPlan.value=results[0].value.data;else warnings.push('完整流程快照读取失败')
-  if(results[1].status==='fulfilled'){
-   const runs=results[1].value.data,ids=batchRunIds(data,runs)
-   related.value=runs.filter((r:any)=>ids.includes(r.run_id))
-   const missing=ids.filter((runId:string)=>!runs.some((r:any)=>r.run_id===runId))
-   if(missing.length)warnings.push('部分执行日志缺失：'+missing.join('、'))
-  }else warnings.push('执行日志列表读取失败')
+  const missing:string[]=[]
+  results.slice(1).forEach((result,index)=>{
+   if(result.status==='fulfilled'&&result.value.data?.run_id===ids[index]){
+    const run=result.value.data
+    related.value.push({run_id:run.run_id,experiment_name:run.experiment_name,status:run.status})
+   }else missing.push(ids[index]!)
+  })
+  if(missing.length)warnings.push('部分执行日志缺失：'+missing.join('、'))
+  if(!ids.length)warnings.push('本批未保存执行记录编号；可通过“查看记录详情与曲线”检查历史关联。')
   detailError.value=warnings.join('；')
  }catch{if(token===sequence)detailError.value='批次读取失败，请刷新记录。'}finally{if(token===sequence)detailLoading.value=false}
 }
@@ -133,4 +139,6 @@ onUnmounted(()=>{sequence++})
 <style scoped>
 .group-conditions{min-width:260px;line-height:1.8}.group-conditions small{display:block;color:#607a91;margin-bottom:4px}.condition-note{font-size:13px}.common-conditions{display:grid;grid-template-columns:minmax(180px,1fr) minmax(100px,1fr);gap:10px;font-size:13px}.common-conditions dt,.common-conditions dd{margin:0;padding:4px 0}
 .guided-entry{color:#294763;max-width:1400px;margin:auto}header,.history-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}h2{font-size:28px;margin:0}p{line-height:1.8;color:#607a91}.entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin-top:28px}.entry-grid section,.batch-detail,.attention{background:white;border:1px solid #d7e6f4;border-radius:16px;padding:28px}.entry-icon{font-size:32px;color:#1688e8}.entry-grid small{display:block;margin-top:16px;color:#607a91}.attention{margin:20px 0;border-color:#e8b963}.history-heading{margin-top:24px}.history-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:24px}.history-layout nav{display:flex;flex-direction:column;gap:12px}.history-layout nav button{text-align:left;border:1px solid #d7e6f4;border-radius:10px;padding:16px;background:white;color:#294763;cursor:pointer;display:flex;flex-direction:column;gap:8px;overflow-wrap:anywhere}.history-layout nav button.selected{border-color:#1688e8;background:#edf6ff}.batch-detail{min-width:0}.batch-detail>small{overflow-wrap:anywhere}.detail-actions{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}.table-scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:10px;text-align:left;border-bottom:1px solid #e3ebf3;overflow-wrap:anywhere}details{margin-top:20px}summary{cursor:pointer}pre{max-height:400px;overflow:auto;background:#f4f8fc;padding:16px;font-size:12px}li{font-size:13px;overflow-wrap:anywhere;margin:10px 0}@media(max-width:800px){.entry-grid,.history-layout{grid-template-columns:1fr}.entry-grid section,.batch-detail{padding:20px}}
+.history-mode{display:flex;flex-direction:column;padding-bottom:8px;box-sizing:border-box}.history-mode>header{margin-bottom:12px;flex-shrink:0}.history-mode>header h2{font-size:23px}.history-mode>header p{margin:5px 0 0;font-size:13px}.history-mode .history-heading{margin:0 0 12px;flex-shrink:0}.history-heading h3{font-size:14px;margin:0}.record-count{display:inline-block;margin-left:6px;padding:2px 8px;border-radius:12px;background:#e5eff9;color:#56728d;font-size:12px;font-weight:500}.history-mode .history-layout{grid-template-columns:minmax(210px,260px) minmax(0,1fr);gap:20px;align-items:start}.history-mode .history-layout nav{position:sticky;top:96px;max-height:calc(100dvh - 112px);overflow-y:auto;overscroll-behavior:contain;min-height:0;gap:8px;padding:2px 6px 4px 2px;scrollbar-width:thin}.history-mode .history-layout nav button{flex-shrink:0;padding:15px 16px;gap:9px;border-color:#e1e9f1;border-radius:10px;transition:background .15s,border-color .15s}.history-mode .history-layout nav button:hover{background:#f5f9fd;border-color:#aac9e7}.history-mode .history-layout nav button.selected{background:#edf5ff;border-color:#87b7eb;box-shadow:inset 3px 0 #3186d8}.history-mode .history-layout nav button strong{font-size:14px;line-height:1.5}.history-mode .history-layout nav button small{font-size:12px;color:#6d8093}.record-meta{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#6d8093}.record-status{display:inline-flex;align-items:center;font-size:12px;line-height:1.5;padding:3px 8px;border-radius:6px;background:#eef2f6;color:#62758a;white-space:nowrap}.record-status[data-state="completed"]{background:#eaf5ef;color:#337759}.record-status[data-state="failed"],.record-status[data-state="interrupted"]{background:#fff0ed;color:#a64f3e}.record-status[data-state="running"]{background:#e8f1ff;color:#286cb2}.history-mode .batch-detail{padding:24px 28px;border-color:#e1e9f1;border-radius:12px}.detail-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.detail-heading h3{font-size:22px;line-height:1.4;margin:0;overflow-wrap:anywhere}.detail-meta{font-size:13px;margin:9px 0 0}.detail-actions .el-button{margin-left:0;font-size:13px}.batch-detail details{padding:13px 0;border-top:1px solid #e7edf3;font-size:13px}.batch-detail details summary{color:#47617a;font-weight:500}.batch-id{overflow-wrap:anywhere}.batch-detail table th{background:#f5f8fc;color:#62758a;font-size:12px;white-space:nowrap}.batch-detail table td{font-size:12px;vertical-align:top}.batch-detail table tbody tr:hover{background:#f8fbfe}
+@media(max-width:800px){.history-mode{height:auto;min-height:0}.history-mode .history-layout{display:grid;grid-template-columns:1fr;overflow:visible}.history-mode .history-layout nav{position:static;max-height:220px}.history-mode .batch-detail{overflow:visible;padding:20px 16px}.detail-heading h3{font-size:20px}.history-mode .history-layout nav button{padding:12px}.detail-actions{gap:8px}.common-conditions{grid-template-columns:1fr 1fr}}
 </style>

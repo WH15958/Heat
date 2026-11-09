@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import itertools
 import json
+import logging
 import math
 import os
 import tempfile
@@ -153,7 +154,7 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id", "bottles_confirmed"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "cooling55_startup_stop_v7"
+    fields["priming_protocol"] = "cooling100_startup_stop_v8"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters, config.turntables) for device in group
         if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2", "turntable1")]
@@ -167,7 +168,7 @@ def priming_recipe(spec, batch_id):
                           **({"wait": wait} if wait else {})))
     # Check temperature without starting microwave output; hot residual liquid is unsafe to drain.
     add("prime_temperature", "wait", wait=dict(type="microwave_temperature_below",
-        device_id="microwave1", target_temperature=55, timeout=spec.cooling_timeout))
+        device_id="microwave1", target_temperature=100, timeout=spec.cooling_timeout))
     for n, initialization in enumerate((spec.initialization_a, spec.initialization_b), 1):
         add(f"prime_initialize_{n}", "syringe_pump.initialize",
             dict(device_id=f"syringe_pump{n}", confirm=True, timeout=spec.syringe_timeout,
@@ -192,7 +193,7 @@ def priming_recipe(spec, batch_id):
     waste = "NC"
     add("prime_waste_route", "valve.switch", dict(device_id="valve1", position=waste))
     add("prime_recheck_temperature", "wait", wait=dict(type="microwave_temperature_below",
-        device_id="microwave1", target_temperature=55, timeout=spec.cooling_timeout))
+        device_id="microwave1", target_temperature=100, timeout=spec.cooling_timeout))
     seconds = spec.prime_drain_seconds
     add("prime_drain", "pump.start", dict(device_id="pump1", channel=4, mode="FLOW_MODE",
         flow_rate=spec.prime_drain_flow, flow_unit=1, flow_duration_seconds=seconds,
@@ -258,7 +259,7 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         target_temperature=row[4], tolerance=5, hold_mode="timed", timeout=max(1, seconds)))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
     cool = dict(type="microwave_temperature_below", device_id="microwave1",
-                target_temperature=55, timeout=spec.cooling_timeout)
+                target_temperature=100, timeout=spec.cooling_timeout)
     add("cool_before_collection", "wait", wait=cool)
     add("recheck_temperature", "wait", wait=cool)
     add("product_route", "valve.switch", dict(device_id="valve1", position=spec.product_port))
@@ -892,6 +893,15 @@ class GuidedBatch:
                     self.record["recovery_required"] = True
                     self.record["error"] = str(exc)
                     self.finish_elapsed()
+
+            # Derived charts are generated only after device cleanup and final persistence.
+            # A report failure must not change the experiment/device outcome.
+            if self.state.value in TERMINAL:
+                try:
+                    from src.experiment.batch_charts import saved_charts
+                    await asyncio.to_thread(saved_charts, self.snapshot(), Path(self.directory or BATCH_DIR))
+                except Exception:
+                    logging.getLogger(__name__).exception("Batch chart generation failed: %s", self.batch_id)
 
     def checkpoint(self, progress):
         if progress.state in (ExperimentState.RUNNING, ExperimentState.PAUSED):

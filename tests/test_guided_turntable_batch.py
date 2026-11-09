@@ -94,25 +94,26 @@ def test_formal_preflight_still_rejects_reset():
     asyncio.run(run())
 
 
-def test_all_new_cooling_checks_use_55_and_legacy_plan_is_unchanged():
+@pytest.mark.parametrize('legacy_temperature', [45, 55])
+def test_all_new_cooling_checks_use_100_and_legacy_plan_is_unchanged(legacy_temperature):
     request = spec()
     plans = [guided.priming_recipe(request, 'preview'), *guided.compile_plan(request)]
     waits = [step['wait'] for plan in plans for step in plan['steps']
              if step.get('wait', {}).get('type') == 'microwave_temperature_below']
     assert len(waits) == 4
-    assert all(wait['target_temperature'] == 55 for wait in waits)
+    assert all(wait['target_temperature'] == 100 for wait in waits)
     legacy = copy.deepcopy(plans[0])
     for step in legacy['steps']:
         if step.get('wait', {}).get('type') == 'microwave_temperature_below':
-            step['wait']['target_temperature'] = 45
+            step['wait']['target_temperature'] = legacy_temperature
     parsed = guided.parse_experiment_data(legacy)
     assert [step.wait.target_temperature for step in parsed['steps']
-            if step.wait.type.value == 'microwave_temperature_below'] == [45, 45]
+            if step.wait.type.value == 'microwave_temperature_below'] == [legacy_temperature, legacy_temperature]
 
 
-@pytest.mark.parametrize('temperature,stopped,expected', [(55, True, True), (55.01, True, False),
-                                                         (50, False, False)])
-def test_generated_55_cooling_wait_enforces_temperature_and_stopped_output(temperature, stopped, expected):
+@pytest.mark.parametrize('temperature,stopped,expected', [(99.99, True, True), (100, True, True),
+                                                         (100.01, True, False), (100, False, False)])
+def test_generated_100_cooling_wait_enforces_temperature_and_stopped_output(temperature, stopped, expected):
     wait = next(step['wait'] for step in guided.priming_recipe(spec(), 'preview')['steps']
                 if step['id'] == 'prime_recheck_temperature')
     dm = SimpleNamespace(read_microwave_data=lambda _: dict(material_temperature=temperature,

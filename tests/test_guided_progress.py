@@ -166,7 +166,7 @@ def test_water_test_early_exit_retains_failure_and_diagnostics(monkeypatch):
 
 @pytest.mark.parametrize('step_id', ['prime_temperature', 'prime_recheck_temperature',
                                     'cool_before_collection', 'recheck_temperature'])
-@pytest.mark.parametrize('target', [45, 55, None])
+@pytest.mark.parametrize('target', [45, 55, 100, None])
 def test_cooling_description_follows_step_without_mutation(step_id, target):
     step = ExperimentStep(step_id, ActionType.WAIT, wait=WaitCondition(
         type=WaitType.MICROWAVE_TEMPERATURE_BELOW, device_id='microwave1',
@@ -175,7 +175,7 @@ def test_cooling_description_follows_step_without_mutation(step_id, target):
     before = copy.deepcopy((step, observation))
     activity = progress.guided_activity(step, observation)
     if target is None:
-        assert '45' not in activity['description'] and '55' not in activity['description']
+        assert '45' not in activity['description'] and '100' not in activity['description'] and '55' not in activity['description']
         assert '设定降温条件' in activity['description']
     else:
         assert f'{target}℃' in activity['description']
@@ -224,7 +224,7 @@ def test_progress_description_does_not_issue_device_calls():
 
 @pytest.mark.parametrize('step_id', ['prime_temperature', 'prime_recheck_temperature',
                                     'cool_before_collection', 'recheck_temperature'])
-@pytest.mark.parametrize('target', [45, 55, None])
+@pytest.mark.parametrize('target', [45, 55, 100, None])
 def test_batch_step_label_uses_active_step_parameters(step_id, target, tmp_path):
     from src.experiment.guided import GuidedBatch
     from test_guided import FakeManager, spec
