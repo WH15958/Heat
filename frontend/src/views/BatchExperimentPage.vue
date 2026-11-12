@@ -14,14 +14,14 @@
         <el-button v-if="batch.phase==='ready'" @click="showProgress=false;stage=6">前往批次确认</el-button>
       </div></div>
       <el-alert v-if="stale" :title="refreshError||'状态已过期：超过 6 秒未收到更新，以下为最后一次确认的信息。'" type="warning" :closable="false" />
-      <el-alert v-if="batch.pause_pending" :title="turntablePausePending(batch)?'已请求暂停：当前转盘动作继续监督，到位并确认停止后暂停；恢复不回零、不重复换瓶。':'已请求暂停：当前反应继续，停止微波后暂停；随后不收集、不清洗、不进入下一组。'" type="warning" :closable="false" />
+      <el-alert v-if="batch.pause_pending" :title="turntablePausePending(batch)?'已请求暂停：当前轴动作继续监督，停稳后暂停，不派发下一段；继续时重新核对双轴，不重复已完成动作。':'已请求暂停：当前反应继续，停止微波后暂停；随后不收集、不清洗、不进入下一组。'" type="warning" :closable="false" />
       <el-alert v-else-if="batch.state==='paused'&&batch.phase!=='ready'" :title="['preparing','indexing','finishing'].includes(batch.phase)?'转盘阶段已暂停，保留当前位置与进度；恢复不重新回零、不重放动作。':batch.phase==='priming'?'预充已暂停；前驱体保持已启动的加热，已发出的泵动作完成后等待继续。':'实验已暂停，等待继续；前驱体加热器保持保温。'" type="info" :closable="false" />
       <el-alert v-if="batch.error" :title="batch.error" type="error" :closable="false" />
       <el-alert v-if="finalizationFailed" :title="'实验组已完成，收尾回零失败。已完成样品记录保留；请现场检查后解除恢复锁定。'+(batch.finalization.error||'')" type="error" :closable="false" />
       <el-alert v-if="batch.persistence_status==='error'" title="记录保存失败，禁止继续运行" type="error" :closable="false" />
       <el-alert v-if="batch.state==='completed'&&batch.cleanup_pending" title="实验流程已结束，设备清理仍待确认。" type="warning" :closable="false" />
       <div v-if="batch.recovery_required" class="notice"><p>需要现场检查设备停止、残留、液路和已用产物瓶。停止或故障后转盘保留当前位置，不自动回零；解除恢复锁定仅允许新建批次，不续跑原批次。下次启动重新确认空瓶并机械回零。</p><el-button type="warning" :disabled="controlling" @click="acknowledgeInterrupted">现场已检查，解除锁定</el-button></div>
-      <BatchCompletionPanel v-if="batchCompleted" :experiment-name="batch.experiment_name || batch.request?.experiment_name || batch.name || '未命名实验'" :completed-count="completedGroups" :total-count="batch.total_groups || 0" :persistence-status="batch.persistence_status" :exporting="exportingBatch" @history="openBatchHistory" @export="exportBatch" />
+      <BatchCompletionPanel v-if="batchCompleted" :experiment-name="batch.experiment_name || batch.request?.experiment_name || batch.name || '未命名实验'" :completed-count="completedGroups" :total-count="batch.total_groups || 0" :persistence-status="batch.persistence_status" :collection-summary="batch.collection?.layout==='four_ring' ? `四圈接样 · 1–${batch.total_groups}号瓶 · 已返回最外圈1号` : undefined" :exporting="exportingBatch" @history="openBatchHistory" @export="exportBatch" />
       <component :is="batchCompleted?'details':'div'" class="current-operation" :class="{stale,'completed-snapshot':batchCompleted}" :aria-label="batchCompleted?'最后动作记录':'当前动作'">
         <summary v-if="batchCompleted">查看最后动作与读数</summary>
         <div class="activity-heading"><div><small>{{ terminalRun ? '最后动作快照' : '当前动作' }}</small><h3>{{ operationTitle }}</h3><p>{{ operationDescription }}</p></div><span class="activity-status">{{ stale?'状态过期':batch.cleanup_in_progress?'正在清理':batch.stop_requested&&!terminalRun?'正在停止':stateLabel }}</span></div>
@@ -36,9 +36,9 @@
         </div>
       </component>
       <div v-if="batch.turntable" class="turntable-progress" aria-label="产物收集转盘状态">
-        <div><small>最近确认瓶位</small><strong>{{ turntableBottleLabel(batch.turntable.current_bottle) }}</strong></div>
-        <div><small>目标瓶位</small><strong>{{ turntableBottleLabel(batch.turntable.target_bottle) }}</strong></div>
-        <div><small>转盘动作</small><strong>{{ turntableOperationLabel }}</strong></div>
+        <div><small>最近确认瓶位</small><strong>{{ collectionLocationLabel({...batch.turntable,bottle_number:batch.turntable.current_bottle}) }}</strong></div>
+        <div><small>目标瓶位</small><strong>{{ collectionLocationLabel(batch.collection?.bottle_locations?.find((p:any)=>p.bottle_number===batch.turntable.target_bottle)||{bottle_number:batch.turntable.target_bottle}) }}</strong></div>
+        <div><small>接样动作</small><strong>{{ turntableOperationLabel }}</strong></div>
         <div><small>批次收尾</small><strong>{{ finalizationLabel }}</strong></div>
         <p>瓶位以后台确认结果为准，未知时不推算。暂停保留进度；停止或故障原位停机，不自动回零。</p>
       </div>
@@ -50,7 +50,7 @@
       </div>
       <div v-if="terminalRun&&!batchCompleted" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="openBatchHistory">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
       <div v-if="batch.phase==='priming'||batch.phase==='ready'" class="notice">已完成预充循环：A {{ batch.priming?.completed_cycles?.[0] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次，B {{ batch.priming?.completed_cycles?.[1] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次。初始化与预充每批只执行一次。</div>
-      <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th><th>产物瓶</th><th>收取状态</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td><td>{{ g.bottle_number==null ? '未记录' : turntableBottleLabel(g.bottle_number) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<small v-if="g.collection_error" class="collection-error">{{ g.collection_error }}</small></td></tr></tbody></table></div>
+      <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th><th>产物瓶</th><th>收取状态</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td><td>{{ g.bottle_number==null ? '未记录' : collectionLocationLabel(g) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<small v-if="g.collection_error" class="collection-error">{{ g.collection_error }}</small></td></tr></tbody></table></div>
       <p><small>整批进度按完成组数统计。升温和降温耗时取决于实测温度；不估算剩余完成时间。每组使用独立瓶位；清洗、停泵和滴液等待完成后自动换瓶，最后一组结束后回零。</small></p>
     </section>
     <div v-else class="layout"><main :inert="activeRun">
@@ -97,7 +97,7 @@
         <p v-if="primeReady">已有本批次预充结果，开始自动实验时将沿用，不重复初始化或预充。修改参数或维护设备前请先停止批次。</p>
         <details><summary>预充流程预览</summary><pre>{{ previewPrime }}</pre></details>
       </section>
-      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ i+1 }} 号瓶</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先机械回零至 1 号瓶，再执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 100℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤100℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。最后一组结束后停机并机械回零。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
+      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组 / {{ bottleCount || '—' }} 瓶</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ previewCollection?.bottle_locations?.[i] ? collectionLocationLabel(previewCollection.bottle_locations[i]) : `${i+1} 号瓶（待校验）` }}</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先将转盘机械回零；四圈系统再将平台移到最外圈1号瓶，随后执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 100℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤100℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。跨圈时先转盘回共同零点线，再将平台移入下一圈。最后一组结束后停机，转盘机械回零，再退平台至最外圈（旧单圈只回转盘）。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
     </main><aside class="batch-sidebar">
       <h3>本批实验</h3>
       <template v-if="validatedKey===requestKey&&!plan.error">
@@ -115,9 +115,9 @@
         <label class="confirm-check"><input v-model="plumbingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对接管、泵向及微波负载</label>
         <label class="confirm-check"><input v-model="primingConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对设备、容量及前驱体相容性</label>
         <label class="confirm-check"><input v-model="initializationConfirmed" type="checkbox" :disabled="activeRun||controlling" />已核对初始化方向与代码，允许活塞运动、切阀及预充耗液</label>
-        <label class="confirm-check" data-field="bottlesConfirmed"><input v-model="bottlesConfirmed" type="checkbox" :disabled="activeRun||controlling" />已将本批所需 {{ plan.rows.length || '—' }} 个产物瓶清空并按编号就位，允许转盘自动回零与换瓶</label><small v-if="fieldErrors.bottlesConfirmed" class="field-error" role="alert">{{ fieldErrors.bottlesConfirmed }}</small>
+        <label class="confirm-check" data-field="bottlesConfirmed"><input v-model="bottlesConfirmed" type="checkbox" :disabled="activeRun||controlling" />已将本批所需 {{ plan.rows.length || '—' }} 个产物瓶清空并按编号就位，允许接样系统自动定位与换圈</label><small v-if="fieldErrors.bottlesConfirmed" class="field-error" role="alert">{{ fieldErrors.bottlesConfirmed }}</small>
         <small>修改参数后，需重新校验并勾选全部确认；运行中不逐组等待换瓶。</small>
-        <details class="batch-details"><summary>查看启动说明</summary><p>请先连接全部设备，并将本批所需空瓶按编号摆放。转盘若处于首次上电复位状态，系统会复查状态与坐标稳定后回零，回零完成并确认停止后才继续；通信异常或已有未完成动作仍会阻止启动。系统先确认泵停止、阀在 NC，再机械回零到 1 号瓶；随后按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，设定时间结束后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 100℃及以下后自动收集。</p></details>
+        <details class="batch-details"><summary>查看启动说明</summary><p>请先连接全部设备，并将本批所需空瓶按编号摆放。转盘若处于首次上电复位状态，系统会复查状态与坐标稳定后回零，回零完成并确认停止后才继续；通信异常或已有未完成动作仍会阻止启动。系统先确认泵停止、阀在 NC 并完成滴液等待，再将转盘机械回零；四圈系统随后将平台移到最外圈，确认1号瓶；随后按预充页确认的方向与代码依次初始化两台注射泵，按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，设定时间结束后预充、排液；随后再次确认稳定到温并开始进料。反应液降至 100℃及以下后自动收集。</p></details>
       </div>
       <template v-if="stage===6">
         <el-button type="primary" :loading="controlling" :disabled="controlling||!!startBlockReason" aria-describedby="start-status" @click="startBatch">开始自动实验</el-button>
@@ -138,10 +138,11 @@ import axios from 'axios'
 import {usePendingConfirmation} from '../composables/pendingConfirmation'
 import {guidedHistoryDraft} from '../experiment/guidedHistory'
 const confirmations=usePendingConfirmation()
+import {collectionCapacity,collectionConfigError,collectionLocationLabel} from '../experiment/guidedCollection'
 import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
-import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed,collectionStatusLabel,turntableBottleLabel,batchElapsedLabel} from '../experiment/guidedProgress'
+import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed,collectionStatusLabel,batchElapsedLabel} from '../experiment/guidedProgress'
 const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref(''),validating=ref(false)
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
@@ -160,13 +161,8 @@ const productPort='NO'
 const wastePort='NC'
 const valveConfigured=computed(()=>!!registry.value.valves?.valve1)
 const turntableConfig=computed(()=>registry.value.turntables?.turntable1)
-const bottleCount=computed(()=>Number.isInteger(turntableConfig.value?.bottle_count)&&turntableConfig.value.bottle_count>1?turntableConfig.value.bottle_count:0)
-const turntableConfigError=computed(()=>{
- const config=turntableConfig.value
- if(!config||config.configured===false||config.enabled===false)return '固定转盘 turntable1 未配置或未启用'
- if(!bottleCount.value||!Number.isInteger(config.pulses_per_bottle)||config.pulses_per_bottle<=0)return '转盘瓶位配置无效，请检查瓶数与每瓶脉冲数'
- return config.home_enabled===true&&config.position_encoding_verified===true?'':'转盘机械回零或定位功能尚未启用'
-})
+const bottleCount=computed(()=>collectionCapacity(turntableConfig.value))
+const turntableConfigError=computed(()=>collectionConfigError(registry.value.turntables||{}))
 const turntableDripSeconds=ref<InputNumber>(null),bottlesConfirmed=ref(false)
 const repeats=ref<InputNumber>(null),speedA=ref<InputNumber>(null),speedB=ref<InputNumber>(null),cleanChannel=ref(3),drainChannel=ref(4)
 type NumberField={key:string;label:string;unit:string;value:InputNumber}
@@ -253,12 +249,13 @@ function stepError(step:number):string {
 function nextStage(){error.value=stepError(stage.value);if(error.value)focusIssues(stage.value);else if(stage.value<6)stage.value++}
 const total=(i:number)=>Number(plan.value.rows.reduce((s,r)=>s+r[i]!,0).toPrecision(10))
 const plumbingConfirmed=ref(false),drainDirection=ref('CW'),cleanDirection=ref('CW')
+const previewCollection=ref<any>(null)
 const previewPrime=ref(''),previewYaml=ref<string[]>([]),validatedKey=ref(''),controlling=ref(false),batch=ref<any>({state:'idle'})
 const activeRun=computed(()=>['running','paused'].includes(batch.value.state)&&batch.value.phase!=='ready')
 const terminalRun=computed(()=>['completed','failed','stopped','interrupted'].includes(batch.value.state))
 const batchCompleted=computed(()=>batchCompletionConfirmed(batch.value))
 const finalizationFailed=computed(()=>batch.value.finalization?.status==='failed'&&batch.value.total_groups>0&&completedGroups.value===batch.value.total_groups)
-const turntableOperationLabel=computed(()=>({pending:'等待准备',homing:'机械回零中',settling:'等待残余滴液',indexing:'切换下一瓶',ready:'瓶位已确认',stopped:'已停止',failed:'动作失败'} as Record<string,string>)[batch.value.turntable?.operation]||'未记录')
+const turntableOperationLabel=computed(()=>({rotation_home:'转盘机械回零',rotation_start:'转盘回起始角度',platform_ring:'平台换圈',rotation_bottle:'转盘定位',pending:'等待准备',homing:'机械回零中',settling:'等待残余滴液',indexing:'切换下一瓶',ready:'瓶位已确认',stopped:'已停止',failed:'动作失败'} as Record<string,string>)[batch.value.turntable?.operation]||'未记录')
 const finalizationLabel=computed(()=>({pending:'待收尾',running:'停机与回零中',completed:'已完成停机与回零',failed:'收尾失败'} as Record<string,string>)[batch.value.finalization?.status]||'未记录')
 const showProgress=ref(false),lastRefresh=ref(0),refreshError=ref('')
 const executionStages=stageNames
@@ -269,7 +266,7 @@ const stale=computed(()=>staleStatus(lastRefresh.value,statusNow.value,refreshEr
 const stageLabels:Record<string,string>={pending:'未开始',running:'进行中',completed:'已完成',paused:'已暂停',failed:'失败',stopped:'已结束',stopping:'正在停止',cleanup:'正在清理'}
 const operationTitle=computed(()=>finalizationFailed.value?'实验组已完成，收尾回零失败':batch.value.cleanup_in_progress?'正在清理设备':terminalRun.value?'已结束 · '+(activity.value?.title||batch.value.progress?.step_label||'本批实验'):batch.value.stop_requested?'正在停止本批次':activity.value?.title||currentStepLabel.value)
 const operationDescription=computed(()=>batch.value.cleanup_in_progress?'等待设备停止和资源释放确认。':terminalRun.value?(batch.value.cleanup_required?'清理未确认，请检查恢复事项。':batch.value.recovery_required?'批次已中止，仍需现场检查并解除恢复锁定。':batch.value.cleanup_pending?'仍有待处理事项，请检查恢复状态。':'最后一次动作与读数保留如下。'):batch.value.stop_requested?'停止请求已发出，等待设备与记录处理完成。':activity.value?.description||'以下显示已确认的步骤信息。')
-const deviceLabel=(id:string)=>({heater1:'前驱体 A 加热器',heater2:'前驱体 B 加热器',syringe_pump1:'注射泵 A',syringe_pump2:'注射泵 B',microwave1:'微波反应仪',pump1:'蠕动泵',valve1:'三通阀',turntable1:'产物收集转盘'} as Record<string,string>)[id]||id
+const deviceLabel=(id:string)=>id===turntableConfig.value?.collection_peer?'接样移动平台':({heater1:'前驱体 A 加热器',heater2:'前驱体 B 加热器',syringe_pump1:'注射泵 A',syringe_pump2:'注射泵 B',microwave1:'微波反应仪',pump1:'蠕动泵',valve1:'三通阀',turntable1:'产物收集转盘'} as Record<string,string>)[id]||id
 const seconds=(value:any)=>typeof value==='number'&&Number.isFinite(value)?Math.floor(value)+' 秒':'未知'
 const pendingControl=ref(''),controlFeedback=ref(''),controlUncertain=ref(false)
 let controlSequence=0,controlBatchId=''
@@ -282,7 +279,7 @@ function reconcileControl(data:any){
  if(['stopped','failed','completed','interrupted'].includes(data.state)&&!data.cleanup_in_progress){++controlSequence;pendingControl.value='';controlUncertain.value=false;controlFeedback.value=data.cleanup_pending?'本批已结束，清理未确认':'本批实验已结束';return}
  const action=pendingControl.value
  const confirmed=action==='pause'?(data.pause_pending||data.state==='paused'):action==='resume'?(data.state==='running'&&!data.pause_pending):(['stopped','failed','completed'].includes(data.state)&&!data.cleanup_in_progress)
- if(confirmed){++controlSequence;controlFeedback.value=action==='pause'?(data.pause_pending?(turntablePausePending(data)?'已请求暂停，等待当前转盘动作完成':'已请求暂停，等待当前反应结束'):'已暂停'):action==='resume'?'已继续运行':data.cleanup_pending?'已停止，清理未确认':'本批次已停止';pendingControl.value='';controlUncertain.value=false}
+ if(confirmed){++controlSequence;controlFeedback.value=action==='pause'?(data.pause_pending?(turntablePausePending(data)?'已请求暂停，等待当前轴动作完成':'已请求暂停，等待当前反应结束'):'已暂停'):action==='resume'?'已继续运行':data.cleanup_pending?'已停止，清理未确认':'本批次已停止';pendingControl.value='';controlUncertain.value=false}
 }
 const showCompleted=ref(false)
 const visibleGroups=computed(()=>progressGroups.value.filter(g=>showCompleted.value||g.state!=='completed'||g.index===batch.value.current_group))
@@ -304,7 +301,7 @@ const completedGroups=computed(()=>(batch.value.groups||[]).filter((g:any)=>g.st
 const elapsedLabel=computed(()=>batchElapsedLabel(batch.value))
 const currentStepLabel=computed(()=>batch.value.state==='completed'?'全部实验组已完成':batch.value.phase==='ready'?'预充已完成，等待正式启动':batch.value.progress?.step_label||(batch.value.state==='running'?'正在准备执行':'暂无步骤信息'))
 const currentDevice=computed(()=>{
- if(batch.value.progress?.device_id)return batch.value.progress.device_id
+ if(batch.value.progress?.device_id)return batch.value.progress.device_id===turntableConfig.value?.collection_peer?'接样移动平台':batch.value.progress.device_id
  const id=batch.value.progress?.step_id||''
  if(id.startsWith('turntable_'))return '产物收集转盘'
  if(['heat_both_stable','prime_heat_both_stable','prime_heat_both_reached','prime_heat_duration'].includes(id))return '加热器 A / B'
@@ -326,7 +323,7 @@ const progressGroups=computed(()=>{
  }else rows=[]
  return Array.from({length:batch.value.total_groups||0},(_,i)=>{
   const recorded=batch.value.groups?.find((g:any)=>g.index===i+1)
-  return {index:i+1,parameters:recorded?.parameters||rows[i]||[],sample_id:recorded?.sample_id,bottle_number:recorded?.bottle_number,collection_status:recorded?.collection_status,collection_error:recorded?.collection_error,
+  return {index:i+1,parameters:recorded?.parameters||rows[i]||[],sample_id:recorded?.sample_id,bottle_number:recorded?.bottle_number,collection_ring:recorded?.collection_ring,ring_bottle_number:recorded?.ring_bottle_number,collection_status:recorded?.collection_status,collection_error:recorded?.collection_error,
    state:recorded?.state==='running'&&i+1===batch.value.current_group?batch.value.state:recorded?.state||'pending'}
  })
 })
@@ -375,7 +372,7 @@ const startBlockReason=computed(()=>{
  return missing.length?'待确认：'+missing.join('；'):''
 })
 const fragment=computed(()=>previewYaml.value[selected.value]||'请先生成并校验完整批次。')
-watch([experimentName,axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,primeHeatMinutes,initialization,turntableDripSeconds],()=>{fieldErrors.value={};report.value='';selected.value=0;validatedKey.value='';previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false;bottlesConfirmed.value=false},{deep:true})
+watch([experimentName,axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,primeHeatMinutes,initialization,turntableDripSeconds],()=>{fieldErrors.value={};report.value='';selected.value=0;validatedKey.value='';previewCollection.value=null;previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false;bottlesConfirmed.value=false},{deep:true})
 function showError(e:any){
  const detail=e.response?.data?.detail
  error.value=Array.isArray(detail)?detail.map(d=>`${d.loc?.slice(1).join('.') || '参数'}：${d.msg}`).join('；'):String(detail||e.message||e)
@@ -391,7 +388,7 @@ function showError(e:any){
  if(priming.value.slice(5).some(p=>p.key===first.key))advancedOpen.value=true
  void nextTick(()=>{const container=document.querySelector(`[data-field="${first.key}"]`);const input=container?.matches('input')?container:container?.querySelector('input');(input as HTMLElement|null)?.focus();container?.scrollIntoView({block:'center'})})
 }
-async function validate(){validating.value=true;report.value='';try{const issue=stepError(6);if(issue){focusIssues(6);throw new Error(issue);}if(advancedMissing.value)throw new Error('请在可用容量中填写有效的容积和储液量');const key=requestKey.value;const {data}=await axios.post('/api/guided/preview',requestBody.value);if(key!==requestKey.value)return;previewYaml.value=data.yaml;previewPrime.value=JSON.stringify(data.priming,null,2);validatedKey.value=key;report.value=`后端已生成并校验 ${data.total_groups} 组完整流程，尚未启动设备。`}catch(e){advancedOpen.value=advancedMissing.value;showError(e)}finally{validating.value=false}}
+async function validate(){validating.value=true;report.value='';try{const issue=stepError(6);if(issue){focusIssues(6);throw new Error(issue);}if(advancedMissing.value)throw new Error('请在可用容量中填写有效的容积和储液量');const key=requestKey.value;const {data}=await axios.post('/api/guided/preview',requestBody.value);if(key!==requestKey.value)return;previewCollection.value=data.collection;previewYaml.value=data.yaml;previewPrime.value=JSON.stringify(data.priming,null,2);validatedKey.value=key;report.value=`后端已生成并校验 ${data.total_groups} 组完整流程，尚未启动设备。`}catch(e){advancedOpen.value=advancedMissing.value;showError(e)}finally{validating.value=false}}
 let restoredBatchId:string|null=null, refreshSequence=0
 function restoreParameters(r:any){
  experimentName.value=r.experiment_name??''
@@ -422,7 +419,7 @@ async function startBatch(){
  try{
   const key=requestKey.value
   if(startBlockReason.value)throw new Error(startBlockReason.value)
-  if(!await confirmations.confirm('start',()=>ElMessageBox.confirm('将先确认泵停止、阀在 NC 并将转盘机械回零至 1 号瓶，再自动初始化 A/B（移动活塞并切阀），按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至100℃及以下后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。本批所需产物瓶须已清空并就位；清洗后自动换瓶，整批正常结束后停机回零，停止或故障时原位停机、不回零。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})))return
+  if(!await confirmations.confirm('start',()=>ElMessageBox.confirm('将先确认泵停止、阀在 NC 并完成滴液等待，将转盘机械回零，四圈系统再将平台定位至最外圈1号瓶，再自动初始化 A/B（移动活塞并切阀），按第一组目标加热，两路均达到或超过各自目标后立即计时保温脱气，再按设定参数预充并排废液，消耗前驱体；前驱体持续保温，预充液须降至100℃及以下后排出。成功后重新确认稳定到温，再进料和微波反应。已有匹配的本批次预充结果时直接开始正式实验。本批所需产物瓶须已清空并就位；清洗后自动换瓶，跨圈先回起始角度再移动平台；整批正常结束后转盘回零、平台退回最外圈，停止或故障时原位停机、不回零。请确认初始化方向与代码、设备安装、液路、容量、废液及微波负载条件，运行期间有人看护。','开始真实实验',{confirmButtonText:'确认启动',cancelButtonText:'取消',type:'warning'})))return
   if(key!==requestKey.value||startBlockReason.value)throw new Error('参数、确认或批次状态已变化，请重新校验并确认')
   ++refreshSequence
   batch.value=(await axios.post('/api/guided/start',{...requestBody.value,plumbing_confirmed:plumbingConfirmed.value,priming_confirmed:primingConfirmed.value,initialization_confirmed:initializationConfirmed.value,bottles_confirmed:bottlesConfirmed.value,priming_batch_id:primeReady.value?batch.value.batch_id:undefined})).data
@@ -470,7 +467,7 @@ function returnToSetup(reuse=false){
  }
  experimentName.value=''
  plumbingConfirmed.value=primingConfirmed.value=initializationConfirmed.value=bottlesConfirmed.value=false
- validatedKey.value='';report.value='';previewYaml.value=[];previewPrime.value='';selected.value=0
+ validatedKey.value='';report.value='';previewCollection.value=null;previewYaml.value=[];previewPrime.value='';selected.value=0
  fieldErrors.value={};controlFeedback.value='';showCompleted.value=false
  error.value='';advancedOpen.value=false;stage.value=0;showProgress.value=false;newDraft.value=true;draftEnabled=true
  void router.replace({query:{...route.query,new:'1'}})
@@ -499,7 +496,7 @@ function restoreDraft(){
    priming.value.forEach(p=>{p.value=request[p.key]??null})
    experimentName.value='';stage.value=0
    plumbingConfirmed.value=primingConfirmed.value=initializationConfirmed.value=bottlesConfirmed.value=false
-   validatedKey.value='';previewYaml.value=[];previewPrime.value='';report.value=''
+   validatedKey.value='';previewCollection.value=null;previewYaml.value=[];previewPrime.value='';report.value=''
    draftRestored=true
    draftNotice.value=`已复用「${d.sourceName||'历史批次'}」的条件。请填写新名称，核对参数和可用容量；新批次使用当前到温规则，需重新校验、确认并初始化与预充。`
    saveDraft()

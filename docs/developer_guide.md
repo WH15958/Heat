@@ -1,5 +1,17 @@
 # Heat 开发者指南
 
+引导式四圈运动查询超时允许一次有条件的只读重查：每段单轴动作的双轴共享一次预算，仅处理TimeoutError；剩余动作期限不足查询预算、停止代次改变或已断线时不重查。重查不重发运动、不延长原期限；重查失败或本段再次超时则双轴停机。有效回复仍须通过状态、动作及到位校验，运动轴超时后重新累计三次稳定读回。动作status_retry与日志保存首次错误和重查结果。停止立即取消未发出的重查；已经进入同步串口读取时，STOP须等待该次读取返回或超时，不保证零等待。此策略仅完成软件验证，须现场空载确认停止延迟。
+
+## 引导式双轴接样协调（2026-11-12）
+
+`collection_layout`统一计算容量、总瓶号→圈号/圈内瓶号/平台坐标/角度，编译和设备页选瓶复用。引导式按配置选择旧`GuidedTurntable`或新`GuidedCollection`；四圈保持bottle_count=0，旧YAML指令仍拒绝。新协调层继承现有异步桥接和取消等待规则，驱动仍同步；运动监督间隔0.5秒，双轴强制新鲜读回，不在驱动层增加轮询。
+
+通过内部`claim_guided_pair`在共享锁下成对占用，失败回滚；手动HTTP不接受owner参数，只有已持有双轴owner的引导式可调用home/return_start/select_ring/select_bottle。阶段间校验坐标及停止代次，停止取消整个序列；成对停止均确认后才能释放。每段经批次回调检查泵/NC、写入意图、监督到位、保存两轴结果，并处理单轴边界暂停。故障不重发运动、不断点恢复。
+
+引导式路由和请求参数不变。preview.collection及批次collection增加layout、capacity、devices配置快照、bottle_locations；每个位置含bottle_number、collection_ring、ring_bottle_number、platform_position、rotation_offset。旧单圈不推导圈号。兼容turntable及turntable_events，在turntable增加collection_ring、ring_bottle_number、axes；阶段operation为rotation_home/rotation_start/platform_ring/rotation_bottle。事件保存派发意图及完成轴快照，最外层home/next事件保存目标瓶确认。重启清空双轴可信状态，不改写样品事实。
+
+运行metadata、groups及samples.csv追加圈位字段；CSV新写入时保留原有未知列，旧行新字段留空。预充协议版本为cooling100_four_ring_collection_v9，签名包含配对平台配置；运行配置与磁盘计划的四圈配置不一致时拒绝启动，旧预充签名不能复用。相关测试包含真实协调/控制器配合假设备的29组跨圈批次，禁止访问串口；现场空载与水测另行验收。
+
 ## 四圈接样设备页接入（2026-11-12）
 
 `CollectionAxisController` 位于 `src/web/collection_control.py`，复用同步 `TurntableDevice` 与现有串口管理、REST、Web监督、停止代次和实验互斥。两轴仍注册于 `DeviceManager.turntables`，纳入全局急停与退出清理；配对控制器共享RLock，检查另一轴停止和请求代次后才允许写运动。驱动内未新增轮询、线程或队列，页面/WS生命周期不控制硬件。
@@ -13,12 +25,12 @@
 - `return_start`：仅expected_position；两轴状态有效且稳定停止时，按当前位置选择最近的整圈起始坐标，正反向距离相等时选正向（已在起始角度则保持）；使用整数商余数计算，支持负坐标和多圈累计坐标，不要求平台恰好处于圈位，但须在标定行程内。
 - `platform_absolute`：position与expected_position；`platform_relative`：非零steps与expected_position。仅平台可用；相对目标由后端新鲜坐标计算。两者均要求两轴状态有效且稳定停止，目标限定在标定内圈至0，固定速度字段1000。参数为严格整数，拒绝多余字段和陈旧坐标。
 
-保留stop、转盘负向home及转盘有限move_relative；平台必须使用带expected_position的新高级命令。拒绝原始绝对定位、run和旧瓶位指令。两轴均要求状态0x20、speed_raw=0、连续三次同坐标才确认停止，定位还需目标匹配；平台0x20且速度非零按运动处理。平台普通状态读取最小间隔0.5秒，运动前强制新鲜读取；转盘不使用该缓存，回零命令后立即按底层协议间隔查询一次，降低漏掉短暂回零状态的风险；此限频并非通信故障修复。超时不重放运动，复用监督STOP及未确认阻断，停止会使配对轴排队请求失效。`claim`拒绝自动实验占用，未新增YAML动作或样品语义。
+保留stop、转盘负向home及转盘有限move_relative；平台必须使用带expected_position的新高级命令。拒绝原始绝对定位、run和旧瓶位指令。两轴均要求状态0x20、speed_raw=0、连续三次同坐标才确认停止，定位还需目标匹配；平台0x20且速度非零按运动处理。平台普通状态读取最小间隔0.5秒，运动前强制新鲜读取；转盘不使用该缓存，回零命令后立即按底层协议间隔查询一次，降低漏掉短暂回零状态的风险；此限频并非通信故障修复。超时不重放运动，复用监督STOP及未确认阻断，停止会使配对轴排队请求失效。普通`claim`拒绝旧单圈/YAML占用，引导式使用内部成对占用；未新增YAML动作。
 
 前端 `CollectionControl.vue` 将两轴放在同一栏中，常用区仅显示圈瓶与定位按钮，原始计数及任意平台移动收在高级区。圈位高亮须停止已确认，圈间不推测瓶号。设备控制页采用视口内布局，列表与详情各自overflow/overscroll隔离，仅/control隐藏页尾，不影响其他路由。复用快照版本和6秒过期保护。软件验证见 `tests/test_collection_control.py`，覆盖双轴互斥、陈旧请求、停止取消、状态误判、超时及实验阻断；实物路径与停止仍须实验室确认。
 
 
-`CollectionAxisController._read_status` 仅在查询前已确认静止、无未完成动作/停止阻断且读数有效时，对TimeoutError重查一次；停止代次改变或正在停止则不重查。复用协议间隔，无新增驱动轮询或睡眠；两次请求各受原串口超时约束。回复格式错误不重试，运动中超时仍立即交给原监督STOP路径，不重发运动。停止坐标不匹配错误显示目标和实际值；平台容差规则见下文。
+`CollectionAxisController._read_status` 仅在查询前已确认静止、无未完成动作/停止阻断且读数有效时，对TimeoutError重查一次；停止代次改变或正在停止则不重查。复用协议间隔，无新增驱动轮询或睡眠；两次请求各受原串口超时约束。回复格式错误不重试；手动运动超时仍交给原监督STOP路径，引导式运动采用本页顶部的一次重查规则，均不重发运动。停止坐标不匹配错误显示目标和实际值；平台容差规则见下文。
 
 到位判断通过 `TurntableController._target_reached` 扩展点完成，默认精确匹配；接样平台允许±10原始计数，转盘仍为0。摘要 `position_tolerance` 分别返回10/0，前端圈位识别与后端 `_ring_index` 使用同一容差；到位仍要求速度0及连续三次完全相同的坐标，不能将容差内变化当作稳定。完成动作保留 `actual_position` 和 `position_error`（实际减目标），不改写读数、不追加修正运动。平台目标边界仍严格为−444103至0，`expected_position` 仍精确匹配新鲜坐标；`return_start` 允许平台端点读回落在±10容差内。
 

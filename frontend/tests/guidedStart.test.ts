@@ -9,6 +9,7 @@ import * as batch from '../src/experiment/batch'
 import * as drain from '../src/experiment/drainEstimate'
 import * as priming from '../src/experiment/priming'
 import * as progress from '../src/experiment/guidedProgress'
+import * as collection from '../src/experiment/guidedCollection'
 import * as confirmations from '../src/composables/pendingConfirmation'
 import * as history from '../src/experiment/guidedHistory'
 
@@ -50,6 +51,7 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
     '../experiment/drainEstimate': drain,
     '../experiment/priming': priming,
     '../experiment/guidedProgress': progress,
+    '../experiment/guidedCollection': collection,
     '../composables/pendingConfirmation': confirmations,
     '../experiment/guidedHistory': history,
   }
@@ -188,7 +190,7 @@ test('preparation page advances without priming; one click sends a complete batc
     assert.equal(p.calls[0][1].turntable_drip_seconds, 5)
     assert.equal(p.state.showProgress.value, true)
     assert.match(p.dialogs[0], /预充并排废液/)
-    assert.match(p.dialogs[0], /机械回零至 1 号瓶/)
+    assert.match(p.dialogs[0], /转盘机械回零，四圈系统再将平台定位至最外圈1号瓶/)
     await p.state.refreshBatch()
     assert.equal(p.calls.filter(c => c[0] === '/api/guided/start').length, 1)
   } finally { p.dispose() }
@@ -737,4 +739,30 @@ test('turntable phases and persisted collection results remain distinct from fin
   assert.equal(s.turntablePausePending({pause_pending:true,phase:'experiments'}),false)
   assert.equal(p.calls.length,0)
  }finally{p.dispose()}
+})
+
+
+test('four-ring setup accepts 72 groups, rejects 73 and requires paired platform', async () => {
+ const p=page()
+ try {
+  const common={configured:true,enabled:true,position_encoding_verified:true,ring_counts:[28,20,16,8],ring_positions:[0,-147246,-297396,-444103]}
+  p.state.registry.value.turntables={turntable1:{...common,collection_axis:'rotation',collection_peer:'platform',bottle_count:0,home_enabled:true},platform:{...common,collection_axis:'radial',collection_peer:'turntable1'}}
+  p.state.repeats.value=72
+  await vue.nextTick()
+  assert.equal(p.state.bottleCount.value,72)
+  assert.equal(p.state.turntableConfigError.value,'')
+  assert.equal(p.state.plan.value.error,'')
+  p.state.repeats.value=73
+  await vue.nextTick()
+  assert.match(p.state.plan.value.error,/72/)
+  delete p.state.registry.value.turntables.platform
+  assert.match(p.state.turntableConfigError.value,/平台/)
+  assert.equal(p.calls.length,0)
+ } finally {p.dispose()}
+})
+
+test('collection labels preserve old history and show new ring metadata', () => {
+ assert.equal(collection.collectionLocationLabel({bottle_number:29,collection_ring:2,ring_bottle_number:1}),'第2圈 · 29 号瓶（圈内1号）')
+ assert.equal(collection.collectionLocationLabel({bottle_number:5}),'5 号瓶')
+ assert.equal(collection.collectionLocationLabel({}),'未确认')
 })

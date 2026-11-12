@@ -49,6 +49,53 @@ def settle(c, clock, position):
         clock.advance(.6); c.read(force=True)
 
 
+@pytest.mark.parametrize('failure', ['recover', 'twice', 'other_error', 'stop', 'deadline', 'late', 'stop_during_retry'])
+def test_guided_motion_status_retry_is_bounded(pair, clock, failure):
+    r, p = pair
+    owner = object()
+    r.claim_guided_pair(owner)
+    p.command(dict(action='select_ring', ring=2, expected_position=0), owner=owner)
+    deadline = p.action['deadline']
+    original = p.device.read_status
+    calls = 0
+
+    def read():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if failure == 'stop':
+                r.begin_stop()
+            if failure == 'deadline':
+                clock.advance(p.config.action_timeout)
+            raise OSError('broken link') if failure == 'other_error' else TimeoutError('missing reply')
+        if failure == 'twice':
+            raise TimeoutError('missing again')
+        if failure == 'late':
+            clock.advance(p.config.action_timeout)
+        if failure == 'stop_during_retry':
+            r.begin_stop()
+        p.device.position = -147246
+        p.device.work_state = 0x20
+        return original()
+
+    p.device.read_status = read
+    result = p.read(force=True)
+    assert p.action['deadline'] == deadline
+    assert len(p.device.commands) == 1  # Never replay the movement.
+    if failure == 'recover':
+        assert result['read_ok'] and not result['stop_confirmed']
+        assert p.action['status_retry']['result'] == 'received'
+        assert p._stable_count == 1
+        # Budget is shared with the stationary peer for this same segment.
+        r.device.reads.append(TimeoutError('second timeout in segment'))
+        count = r.device.read_count
+        assert not r.read(force=True)['read_ok']
+        assert r.device.read_count == count + 1
+    else:
+        assert not result['read_ok']
+    assert calls == (1 if failure in ('other_error', 'stop', 'deadline') else 2)
+
+
 def test_configuration_pair_and_legacy_isolation():
     config = ConfigManager('config/system_config.yaml').load()
     assert config.validate() == []
@@ -61,14 +108,13 @@ def test_configuration_pair_and_legacy_isolation():
     assert config.validate()
 
 
-def test_current_configuration_rejects_legacy_automation(monkeypatch):
+def test_current_configuration_accepts_guided_but_rejects_legacy_yaml(monkeypatch):
     from src.experiment import guided
     from src.experiment.parser import parse_experiment_data
     from test_guided import spec
     config = ConfigManager('config/system_config.yaml').load()
     monkeypatch.setattr(ConfigManager, 'load', lambda _: config)
-    with pytest.raises(ValueError):
-        guided.compile_plan(spec())
+    assert guided.compile_plan(spec())[0]["metadata"]["collection_ring"] == 1
     with pytest.raises(ValueError):
         parse_experiment_data({'steps': [{'type': 'turntable.home_bottle',
             'params': {'device_id': 'turntable1'}}]}, validate_devices=True)

@@ -15,7 +15,7 @@ async function chart(channel: any) {
   const imports: Record<string, any> = {
     vue: { ...vue, onMounted() {}, onUnmounted() {} },
     'vue-router': { useRoute: () => ({ query: {} }) },
-    axios: {}, 'element-plus': {}, '../experiment/guidedProgress': {},
+    axios: {}, 'element-plus': {}, '../experiment/guidedProgress': {}, '../experiment/guidedCollection': {},
     '../components/SyringeHistory.vue': {},
     '../lib/echarts': { init: () => ({ setOption: (option: any) => options.push(option), dispose() {} }) },
   }

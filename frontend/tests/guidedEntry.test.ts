@@ -1,3 +1,4 @@
+import * as collection from '../src/experiment/guidedCollection'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -19,7 +20,7 @@ function page(){
   'vue-router':{useRoute:()=>route,useRouter:()=>({push:async(v:any)=>{route.query=typeof v==='string'?{}:v.query},replace:async(v:any)=>{route.query=v.query}})},
   axios:{get:async(url:string)=>{calls.push(url);if(url.endsWith('/current'))return{data:current};if(url.endsWith('/batches'))return{data:records};if(url.endsWith('/runs'))return{data:runs};if(url.includes('/history/runs/')){const run=runs.find(r=>r.run_id===decodeURIComponent(url.split('/').pop()!));if(!run)throw Error('missing run');return{data:run}};if(url.endsWith('/plan')){if(failPlan)throw Error('missing');return{data:plans[url.split('/')[3]!]}};return{data:details[url.split('/')[3]!]}}},
   'element-plus':{ElMessageBox:{confirm:async()=>{if(!confirm)throw 'cancel'}}},
-  './BatchExperimentPage.vue':{},'../components/BatchHistoryCharts.vue':{},'../experiment/guidedProgress':progress,'../experiment/guidedHistory':history,
+  './BatchExperimentPage.vue':{},'../components/BatchHistoryCharts.vue':{},'../experiment/guidedProgress':progress,'../experiment/guidedCollection':collection,'../experiment/guidedHistory':history,
  }
  const exports:any={},scope=vue.effectScope()
  runInNewContext(compiled,{exports,localStorage:{getItem:(k:string)=>stored.get(k)||null,setItem:(k:string,v:string)=>stored.set(k,v),removeItem:(k:string)=>stored.delete(k)},require:(name:string)=>{assert.ok(name in imports,name);return imports[name]}})

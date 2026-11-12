@@ -1,3 +1,4 @@
+import * as collection from '../src/experiment/guidedCollection'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { webcrypto } from 'node:crypto'
@@ -210,6 +211,7 @@ test('syringe stop revokes a pending initialization and only sends stop', async 
 test('guided confirmation after leaving sends no hardware start or stop', async () => {
   const prompt = deferred(), writes: any[] = []
   const p = view('views/BatchExperimentPage.vue', {
+    '../experiment/guidedCollection': collection,
     '../experiment/batch': batch, '../experiment/drainEstimate': drain, '../experiment/priming': priming, '../experiment/guidedProgress': progress, '../experiment/guidedHistory': history,
     axios: { post: async (...args: any[]) => { writes.push(args); return { data: {} } } },
     'element-plus': { ElMessageBox: { confirm: () => prompt.promise } },

@@ -1,7 +1,9 @@
-"""Manual collection axes; no automatic cross-ring sequence or device threads."""
+"""Shared collection axes; cross-ring sequencing lives in guided orchestration."""
 import logging
 import time
 
+from src.experiment.collection_layout import bottle_location
+from src.protocols.turntable import STATUS_QUERY_GAP_SECONDS
 from src.web.turntable_control import TurntableController, PENDING
 from src.web.turntable_commands import CollectionCommand, parse_turntable_command
 
@@ -17,7 +19,40 @@ class CollectionAxisController(TurntableController):
         super().__init__(config, device)
 
     def claim(self, owner):
-        raise RuntimeError("四圈接样当前仅支持设备页手动控制，尚未接入实验")
+        raise RuntimeError("四圈接样仅允许引导式成对占用，不支持旧单圈/YAML占用")
+
+    def claim_guided_pair(self, owner):
+        """Internal reservation only; ordinary claim keeps YAML unsupported."""
+        with self.lock:
+            if self.config.collection_axis != "rotation" or self.peer is None:
+                raise RuntimeError("引导式需要完整接样双轴")
+            axes = (self, self.peer)
+            previous = [axis.owner for axis in axes]
+            try:
+                for axis in axes:
+                    TurntableController.claim(axis, owner)
+            except Exception:
+                for axis, old_owner in zip(axes, previous):
+                    axis.owner = old_owner
+                raise
+
+    def release_guided_pair(self, owner):
+        with self.lock:
+            axes = (self, self.peer)
+            if self.peer is None or any(axis.owner is not owner for axis in axes):
+                return False
+            for axis in axes:
+                axis.require_idle()
+                state = axis.summary()
+                if (not state["connected"] or not state["read_ok"] or not state["stop_confirmed"]
+                        or state["busy"] is not False or axis.stopping):
+                    return False
+            with self.gate, self.peer.gate:
+                if any(axis.stopping for axis in axes):
+                    return False
+                for axis in axes:
+                    axis.owner = None
+            return True
 
     def _is_stopped(self, status):
         return status.get("work_state") == 0x20 and status.get("speed_raw") == 0
@@ -54,25 +89,57 @@ class CollectionAxisController(TurntableController):
             return self.summary()
 
     def _read_status(self):
-        # Only retry observation while previously confirmed idle. In-motion
-        # failures must reach the supervisor's existing STOP path immediately.
+        # Guided motion shares one retry budget across both axes per segment.
         retry_idle = (self.stop_confirmed and not self._requires_stop
                       and not self._stability_pending and not self.stopping
                       and self.device.snapshot.get("read_ok") is True
                       and self.device.snapshot.get("busy") is False
                       and not (self.action and self.action["result"] in PENDING))
+        if self.owner is not None and self.peer is not None:
+            # During guided motion, a quiet peer is still part of a moving pair.
+            retry_idle = retry_idle and not (
+                self.peer.device.snapshot.get("busy") is not False
+                or (self.peer.action and self.peer.action["result"] in PENDING))
         generation = self.generation
+        peer_generation = self.peer.generation if self.peer else None
+        motion = None
+        if self.owner is not None and self.peer is not None and self.peer.owner is self.owner:
+            motion = next((axis.action for axis in (self, self.peer)
+                           if axis.action and axis.action["result"] in ("accepted", "running")), None)
         try:
             return self.device.read_status()
-        except TimeoutError:
-            if not retry_idle or self.stopping or self.generation != generation:
+        except TimeoutError as exc:
+            # Include protocol pacing, write budget and final short serial read.
+            timeout = self.config.connection.timeout
+            query_budget = timeout + min(1.0, timeout) + min(0.05, timeout) + STATUS_QUERY_GAP_SECONDS
+            retry_motion = (motion is not None and not motion.get("status_retry")
+                            and time.monotonic() + query_budget < motion["deadline"])
+            if (not (retry_idle or retry_motion) or self.stopping or self.generation != generation
+                    or not self.device.is_connected()
+                    or (self.peer is not None and (self.peer.stopping or self.peer.generation != peer_generation))):
                 raise
-            logger.warning("Collection %s idle status timed out; retrying observation once",
-                           self.config.device_id)
+            retry = dict(device_id=self.config.device_id, first_error=str(exc), result="retrying")
+            if retry_motion:
+                motion["status_retry"] = retry
+                if self.action is motion:
+                    self._reset_stability()
+            logger.warning("Collection %s status timed out; retrying observation once: %s",
+                           self.config.device_id, exc)
             # Existing protocol pacing applies. A timed-out query has already
             # consumed its response budget; do not add a blocking sleep here.
-            status = self.device.read_status()
-            logger.info("Collection %s idle status retry received: position=%s speed=%s",
+            try:
+                status = self.device.read_status()
+                if (self.stopping or self.generation != generation
+                        or (self.peer is not None and (self.peer.stopping or self.peer.generation != peer_generation))):
+                    raise RuntimeError("停止请求已取消状态重查")
+                if retry_motion and time.monotonic() >= motion["deadline"]:
+                    raise TimeoutError("状态重查超过原动作期限")
+                retry.update(result="received", position=status.get("position"), speed_raw=status.get("speed_raw"))
+            except Exception as retry_error:
+                retry.update(result="failed", error=str(retry_error))
+                logger.warning("Collection %s status retry failed: %s", self.config.device_id, retry_error)
+                raise
+            logger.info("Collection %s status retry received: position=%s speed=%s",
                         self.config.device_id, status.get("position"), status.get("speed_raw"))
             return status
 
@@ -91,7 +158,7 @@ class CollectionAxisController(TurntableController):
                      counts_per_revolution=self.config.counts_per_revolution)
         return state
 
-    def _ready(self, axis, *, reset_allowed=False):
+    def _ready(self, axis, *, reset_allowed=False, owner=None):
         state = axis.read(force=True)
         axis.require_idle()
         if (not state["connected"] or not state["read_ok"] or state["speed_raw"] != 0
@@ -99,7 +166,7 @@ class CollectionAxisController(TurntableController):
             raise RuntimeError("接样两轴须连接、状态有效且停止")
         if not state["stop_confirmed"] and not (reset_allowed and state["work_state"] == 0):
             raise RuntimeError("等待连续三次稳定停止读回，再操作")
-        axis._check_owner(None)
+        axis._check_owner(owner)
         return state
 
     def command(self, request, expected_generation=None, owner=None):
@@ -107,7 +174,10 @@ class CollectionAxisController(TurntableController):
         if req.action == "stop":
             return super().command(req, expected_generation, owner)
         if owner is not None:
-            raise RuntimeError("四圈接样尚未接入自动化")
+            if self.owner is not owner or self.peer is None or self.peer.owner is not owner:
+                raise RuntimeError("引导式尚未占用接样双轴")
+            if req.action not in ("home", "return_start", "select_ring", "select_bottle"):
+                raise ValueError("引导式不支持此接样动作")
         # Both paired controllers share this lock; keep peer checks and write atomic.
         with self.lock:
             generation = self.generation if expected_generation is None else expected_generation
@@ -116,8 +186,8 @@ class CollectionAxisController(TurntableController):
             if self.peer is None:
                 raise RuntimeError("接样配对轴未注册")
             peer_generation = self.peer.generation
-            peer_state = self._ready(self.peer, reset_allowed=True)
-            state = self._ready(self, reset_allowed=req.action == "home")
+            peer_state = self._ready(self.peer, reset_allowed=owner is None, owner=owner)
+            state = self._ready(self, reset_allowed=req.action == "home", owner=owner)
             if self.generation != generation or self.stopping or self.peer.stopping or self.peer.generation != peer_generation:
                 raise RuntimeError("停止请求已取消待执行操作")
             radial = self.config.collection_axis == "radial"
@@ -159,7 +229,7 @@ class CollectionAxisController(TurntableController):
                     if not first <= req.bottle < first + count:
                         raise ValueError("只能选择当前圈内瓶位，请先分步换圈")
                     rev = self.config.counts_per_revolution
-                    offset = ((req.bottle - first) * rev * 2 + count) // (2 * count)
+                    offset = bottle_location(self.config, req.bottle)["rotation_offset"]
                     target = state["position"] // rev * rev + offset
                     if target < state["position"]:
                         target += rev

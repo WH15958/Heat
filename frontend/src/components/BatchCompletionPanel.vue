@@ -9,12 +9,13 @@
       <div><small>完成实验组</small><strong>{{ completedCount }} <span>/ {{ totalCount }} 组</span></strong><p>各组条件与样品记录可在历史中查看</p></div>
       <div :class="{ 'record-warning': persistenceStatus !== 'ok' }"><small>实验记录</small><strong>{{ persistenceStatus === 'ok' ? '已保存' : persistenceStatus === 'error' ? '保存失败' : '保存状态未确认' }}</strong><p>{{ persistenceStatus === 'ok' ? '可查看本批历史或导出完整记录' : persistenceStatus === 'error' ? '请先处理记录恢复，再开始新实验' : '请核对记录保存结果' }}</p></div>
     </div>
+    <p v-if="collectionSummary">{{ collectionSummary }}</p>
     <div class="completion-actions"><el-button type="primary" @click="$emit('history')">查看本批历史</el-button><el-button :loading="exporting" @click="$emit('export')">导出本批记录</el-button></div>
   </div>
 </template>
 
 <script setup lang="ts">
-defineProps<{ experimentName: string; completedCount: number; totalCount: number; persistenceStatus?: string; exporting?: boolean }>()
+defineProps<{ experimentName: string; completedCount: number; totalCount: number; persistenceStatus?: string; collectionSummary?: string; exporting?: boolean }>()
 defineEmits<{ history: []; export: [] }>()
 </script>
 

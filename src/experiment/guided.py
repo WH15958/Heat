@@ -22,6 +22,8 @@ from src.experiment.editor import validate_source
 from src.experiment.engine import ExperimentEngine, ExperimentState
 from src.experiment.executor import StepExecutor
 from src.experiment.guided_turntable import GuidedTurntable
+from src.experiment.guided_collection import GuidedCollection
+from src.experiment.collection_layout import collection_plan
 from src.experiment.experiment_logger import ExperimentLogger
 from src.experiment.parser import parse_experiment_data
 from src.devices.syringe_commands import SyringeCommand
@@ -154,10 +156,10 @@ def priming_signature(spec):
     from src.utils.config import ConfigManager
     fields = spec.model_dump(exclude={"plumbing_confirmed", "priming_confirmed", "initialization_confirmed", "priming_batch_id", "bottles_confirmed"})
     config = ConfigManager().load()
-    fields["priming_protocol"] = "cooling100_startup_stop_v8"
+    fields["priming_protocol"] = "cooling100_four_ring_collection_v9"
     fields["devices"] = [device.to_dict() for group in (config.syringe_pumps, config.valves,
         config.pumps, config.microwaves, config.heaters, config.turntables) for device in group
-        if device.device_id in ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2", "turntable1")]
+        if device.device_id in tuple(t.collection_peer for t in config.turntables if t.collection_axis == "rotation") + ("syringe_pump1", "syringe_pump2", "valve1", "pump1", "microwave1", "heater1", "heater2", "turntable1")]
     return hashlib.sha256(json.dumps(fields, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
@@ -283,16 +285,16 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
         recipe_file=f"output/guided_batches/plans/{batch_id}.json", recipe_group=index+1))
 
 
+def describe_collection(count):
+    from src.utils.config import ConfigManager
+    return collection_plan(ConfigManager().load(), count)
+
+
 def compile_plan(spec, batch_id="preview"):
     from src.utils.config import ConfigManager
     config = ConfigManager().load()
     validate_fixed_channels(config, spec)
-    turntable = next((t for t in config.turntables if t.device_id == "turntable1" and t.enabled), None)
-    if (turntable is None or not turntable.home_enabled or not turntable.position_encoding_verified
-            or turntable.bottle_count < 1 or turntable.pulses_per_bottle <= 0):
-        raise ValueError("固定接样转盘 turntable1 未启用或瓶位、机械回零配置未完成")
-    if len(spec.rows()) > turntable.bottle_count:
-        raise ValueError(f"本批共 {len(spec.rows())} 组，超过转盘 {turntable.bottle_count} 个瓶位；禁止循环覆盖产物瓶")
+    collection = collection_plan(config, len(spec.rows()))
     for i, did in enumerate(("heater1", "heater2")):
         heater = next((h for h in config.heaters if h.device_id == did and h.enabled), None)
         if heater is None or any(not heater.min_temperature <= t <= heater.max_temperature for t in spec.axes[i]):
@@ -309,6 +311,11 @@ def compile_plan(spec, batch_id="preview"):
                 or code == 1 and pump.capacity_ml < 0.5):
             raise ValueError(f"{did} 初始化代码不适用于当前注射器容量")
     recipes = [recipe(row, spec, batch_id, i) for i, row in enumerate(spec.rows())]
+    for data, location in zip(recipes, collection["bottle_locations"]):
+        data["metadata"].update({key: value for key, value in location.items()
+                                 if key in ("collection_ring", "ring_bottle_number")})
+        if collection["layout"] == "four_ring":
+            data["metadata"]["collection_platform_id"] = collection["devices"][1]["device_id"]
     for data in [priming_recipe(spec, batch_id), *recipes]:
         result = validate_source(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
         if not result["valid"]:
@@ -420,10 +427,14 @@ class GuidedBatch:
         self._batch_paused_total = 0.0
         self._elapsed_started_at = None
         self._elapsed_finished_at = None
-        self.turntable = GuidedTurntable(dm, lambda: self.stopping, self.turntable_changed)
+        self.collection = describe_collection(len(self.recipes))
+        if dm.turntable("turntable1").config.collection_axis == "rotation":
+            self.turntable = GuidedCollection(dm, lambda: self.stopping, self.turntable_changed, self.collection_stage)
+        else:
+            self.turntable = GuidedTurntable(dm, lambda: self.stopping, self.turntable_changed)
         self.record = dict(batch_id=self.batch_id, experiment_name=spec.experiment_name, state="idle", request=spec.model_dump(),
             created_at=datetime.now(timezone.utc).isoformat(), current_group=0,
-            total_groups=len(self.recipes), groups=[], elapsed_seconds=0.0,
+            total_groups=len(self.recipes), groups=[], elapsed_seconds=0.0, collection=self.collection,
             error=None, persistence_status="ok", phase="preparing", recovery_required=False,
             preparation=dict(status="pending", error=None),
             finalization=dict(status="pending", error=None),
@@ -566,11 +577,15 @@ class GuidedBatch:
         if self._orchestration_step:
             result["progress"] = dict(current_step=0, total_steps=1, elapsed=0,
                 step_id=self._orchestration_step[0], step_label=self._orchestration_step[1],
-                device_id="turntable1")
+                device_id=(self.record["turntable"].get("active_device_id") or "turntable1")
+                    if self._orchestration_step[0] in ("turntable_rotation_home", "turntable_rotation_start",
+                                                      "turntable_platform_ring", "turntable_rotation_bottle") else "turntable1")
         return result
 
     def turntable_changed(self, status):
-        self.record["turntable"].update(status=status, current_bottle=status.get("current_bottle"))
+        self.record["turntable"].update(status=status, current_bottle=status.get("current_bottle"),
+                                         collection_ring=status.get("collection_ring"),
+                                         ring_bottle_number=status.get("ring_bottle_number"), axes=status.get("axes"))
         # Live telemetry does not fsync at polling frequency. Movement intent,
         # completion and collection boundaries below persist the relevant state.
         # Restart handling always invalidates the saved bottle position.
@@ -631,6 +646,39 @@ class GuidedBatch:
         from src.experiment.turntable_sequence import verify_collection_valve
         await verify_collection_valve(self.dm)
 
+    async def collection_stage(self, phase, label, target, device_id, execute):
+        while True:
+            await self.boundary()
+            await self.pumps_stopped()
+            await self.verify_waste_route()
+            if self.state != ExperimentState.PAUSED:
+                break
+        await self.boundary()
+        self._orchestration_step = ("turntable_" + phase, label)
+        self.record["turntable"].update(operation=phase, active_device_id=device_id, target_bottle=target, current_bottle=None,
+                                        collection_ring=None, ring_bottle_number=None)
+        event = dict(action=phase, target_bottle=target, device_id=device_id,
+                     status="started", at=datetime.now(timezone.utc).isoformat())
+        self.record["turntable_events"].append(event)
+        self.save()
+        self._motion_active = True
+        try:
+            status = await execute()
+            event.update(status="completed", axes=status.get("axes"))
+            self.save()
+        except BaseException as exc:
+            event.update(status="failed", error=str(exc), axes=self.record["turntable"].get("axes"))
+            raise
+        finally:
+            self._motion_active = False
+        if self._motion_pause_pending and not self.stopping:
+            self._motion_pause_pending = False
+            self.state = ExperimentState.PAUSED
+            self.set_batch_paused(True)
+            self.save()
+        await self.boundary()
+        return status
+
     async def move_turntable(self, *, home, target, step_id, label):
         while True:
             await self.boundary()
@@ -645,7 +693,7 @@ class GuidedBatch:
                      status="started", at=datetime.now(timezone.utc).isoformat())
         self.record["turntable_events"].append(event)
         self.save()  # Intent is durable before dispatch, even for the first home.
-        self._motion_active = True
+        self._motion_active = not isinstance(self.turntable, GuidedCollection)
         try:
             status = await (self.turntable.home() if home else self.turntable.next(target))
             event.update(status="completed", current_bottle=status["current_bottle"])
@@ -683,6 +731,8 @@ class GuidedBatch:
         self.save()
         await self.pumps_stopped()
         await self.waste_route()
+        if isinstance(self.turntable, GuidedCollection):
+            await self.settle()
         await self.turntable.prepare_start()
         await self.move_turntable(home=True, target=1, step_id="turntable_home_start", label="批次开始：回机械原点，确认1号瓶")
         self.record["preparation"]["status"] = "completed"
@@ -711,7 +761,7 @@ class GuidedBatch:
             # Immutable recipe snapshot, separate from small mutable checkpoints.
             atomic_record(dict(batch_id=self.batch_id, experiment_name=self.spec.experiment_name, request=self.spec.model_dump(),
                                priming=self.priming, recipes=self.recipes,
-                               collection=dict(device_id="turntable1", home_before_priming=True,
+                               collection=dict(**self.collection, home_before_priming=True,
                                    advance_after="cleaning_and_settle", drip_seconds=self.spec.turntable_drip_seconds,
                                    home_after_normal_completion=True, home_on_failure=False,
                                    bottle_numbers=list(range(1, len(self.recipes)+1)))), Path(self.directory or BATCH_DIR) / "plans")
@@ -806,7 +856,9 @@ class GuidedBatch:
                 run = self.engine.exp_logger.active_run
                 group = dict(index=i+1, parameters=data["metadata"]["guided_parameters"],
                     run_id=run.run_id, sample_id=run.metadata.get("sample_id"), state="running",
-                    bottle_number=i+1, collection_status="pending")
+                    bottle_number=i+1, collection_status="pending",
+                    **{key: data["metadata"][key] for key in ("collection_ring", "ring_bottle_number", "collection_device_id", "collection_platform_id")
+                       if key in data["metadata"]})
                 self.record["groups"].append(group)
                 self.save()
                 await self.engine.wait_finished()
@@ -1053,10 +1105,24 @@ async def preflight(dm, spec, owner=None, *, before_initialization=False, turnta
     if not spec.bottles_confirmed:
         raise ValueError("请确认本批所需产物瓶已清空或更换，并已按瓶号就位")
     control = dm.turntable("turntable1")
-    if (not control.config.enabled or not control.config.home_enabled
-            or not control.config.position_encoding_verified
-            or control.config.bottle_count < len(spec.rows())):
-        raise ValueError("运行中的转盘配置未启用或瓶位不足，请核对当前服务配置")
+    from src.utils.config import SystemConfig
+    live_config = SystemConfig(turntables=[c.config for c in dm.turntables.values()]) if hasattr(dm, "turntables") else None
+    if live_config is not None:
+        live_collection = collection_plan(live_config, len(spec.rows()))
+        if control.config.collection_axis == "rotation" and live_collection != describe_collection(len(spec.rows())):
+            raise ValueError("运行中的接样配置与计划不一致，请重载服务后重新校验")
+    elif control.config.bottle_count < len(spec.rows()):
+        raise ValueError("运行中的转盘瓶位不足")
+    if control.config.collection_axis == "rotation":
+        platform = control.peer
+        if platform is None or not platform.device.is_connected() or platform.owner not in (None, turntable_owner):
+            raise ValueError("接样平台未连接或已占用")
+        platform_state = await asyncio.to_thread(platform.read, force=True)
+        if (not platform_state.get("read_ok") or platform_state.get("busy") is not False
+                or platform_state.get("speed_raw") != 0 or not platform_state.get("stop_confirmed")
+                or platform_state.get("motion_blocked")
+                or not platform.config.ring_positions[-1] - platform.position_tolerance <= platform_state["position"] <= platform.position_tolerance):
+            raise ValueError("接样平台未确认稳定停止")
     if not control.device.is_connected() or control.owner not in (None, turntable_owner):
         raise ValueError("接样转盘未连接或已被其他任务占用")
     state = await asyncio.to_thread(control.read)

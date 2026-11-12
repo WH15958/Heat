@@ -27,6 +27,11 @@ SAMPLE_HEADERS = [
     "raw_log_path",
     "notes",
     "error_flag",
+    "bottle_number",
+    "collection_ring",
+    "ring_bottle_number",
+    "collection_device_id",
+    "collection_platform_id",
 ]
 
 
@@ -185,6 +190,8 @@ def _write_sample_record_unlocked(
             "raw_log_path": raw_log_path,
             "notes": notes,
             "error_flag": str(error_flag).lower(),
+            **{key: metadata.get(key, "") for key in ("bottle_number", "collection_ring", "ring_bottle_number",
+                                                    "collection_device_id", "collection_platform_id")},
         }
         with open(temp_path, "w", encoding="utf-8", newline="") as f:
             fieldnames = list(dict.fromkeys([*fieldnames, *SAMPLE_HEADERS]))

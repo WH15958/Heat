@@ -1002,3 +1002,5 @@ interval_time: 0
 `flow_duration_seconds` 是可选编排参数，不发送给设备；范围 0.1–9999 秒。必须显式 FLOW_MODE、启用且 on_error=stop，无额外 wait；不能混用 run_time/time_unit、dispense_volume/volume_unit、repeat_count 或 interval_time/interval_time_unit。未填写此字段的既有 FLOW_MODE 语义不变。
 
 START 确认后按单调时钟计时；期间约每秒检查运行状态，读取失败或提前停机视为失败并停止。暂停不冻结本次泵运行计时，到时仍主动停止并确认，再等待恢复进入下一步；停止请求可提前中断。停止未确认不会记作完成。此模式依赖软件和通信，不提供进程异常退出或掉电后的设备自主停止保障，必须现场处置；旧保存计划不改写。
+
+2026-11-12：四圈引导式生成的正式组metadata可含collection_ring、ring_bottle_number、collection_platform_id，总瓶号仍为bottle_number。双轴换圈由引导式协调层执行，不新增YAML动作；旧单圈turntable动作不能用于四圈配置。旧metadata缺项保持缺项，不进行历史推算。

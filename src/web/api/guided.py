@@ -68,7 +68,7 @@ def read_record(batch_id):
         record["recovery_required"] = True
         record["pause_pending"] = False
         if record.get("turntable"):
-            record["turntable"].update(current_bottle=None, operation="failed", status=None)
+            record["turntable"].update(current_bottle=None, collection_ring=None, ring_bottle_number=None, axes=None, operation="failed", status=None)
         for group in record.get("groups", []):
             if group.get("collection_status") == "collecting":
                 group.update(collection_status="possibly_partial", collection_error="服务中断，可能已部分收取；不得视为空瓶")
@@ -113,7 +113,7 @@ async def preview(spec: guided.GuidedRequest):
         raise HTTPException(422, str(exc)) from exc
     return dict(total_groups=len(recipes), rows=spec.rows(), recipes=recipes,
                 priming=guided.priming_recipe(spec, "preview"),
-                collection=dict(device_id="turntable1", bottle_numbers=list(range(1, len(recipes)+1)),
+                collection=dict(**guided.describe_collection(len(recipes)), bottle_numbers=list(range(1, len(recipes)+1)),
                                 drip_seconds=spec.turntable_drip_seconds,
                                 home_before_priming=True, home_after_normal_completion=True),
                 yaml=[yaml.safe_dump(r, allow_unicode=True, sort_keys=False) for r in recipes])

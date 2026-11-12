@@ -142,3 +142,19 @@ test('ring and bottle recognition use server tolerance and keep raw position', (
     assert.equal(p.calls.length, 0)
   } finally { p.dispose() }
 })
+
+
+test('guided ownership disables manual moves while stop remains available', async () => {
+ const p=panel()
+ try {
+  Object.assign(p.states.r,{experiment_owned:true})
+  Object.assign(p.states.p,{experiment_owned:true})
+  assert.equal(p.state.canRing.value,false)
+  assert.equal(p.state.canHome.value,false)
+  assert.match(p.state.blockedReason(p.states.p),/引导式/)
+  await p.state.send(p.states.p,{action:'select_ring',ring:2,expected_position:0})
+  assert.equal(p.calls.length,0)
+  await p.state.stopAll()
+  assert.deepEqual(p.calls.map(c=>c[1].action),['stop','stop'])
+ } finally {p.dispose()}
+})

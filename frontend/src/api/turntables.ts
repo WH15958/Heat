@@ -9,6 +9,7 @@ export interface TurntableState {
   counts_per_revolution?: number
   device_id: string
   name: string
+  experiment_owned?: boolean
   configured: boolean
   connected: boolean
   state_session?: string

@@ -16,7 +16,7 @@
         </header>
         <div class="card-body">
           <div class="connection-row"><span>{{ axis.connection_port || '串口待匹配' }}</span>
-            <DeviceConnectionControls :device-key="'turntable:'+axis.device_id" :connected="axis.connected" :loading="pending > 0" :connect-disabled="!axis.configured || axis.binding_resolved === false" :disconnect-disabled="!idle(axis)" @connect="connect(axis)" @disconnect="disconnect(axis)" />
+            <DeviceConnectionControls :device-key="'turntable:'+axis.device_id" :connected="axis.connected" :loading="pending > 0" :connect-disabled="!axis.configured || axis.binding_resolved === false" :disconnect-disabled="!idle(axis) || !!axis.experiment_owned" @connect="connect(axis)" @disconnect="disconnect(axis)" />
           </div>
           <el-alert v-if="axis.action?.error || axis.read_error || axis.connection_error || axis.binding_error" :title="axis.action?.error || axis.read_error || axis.connection_error || axis.binding_error || ''" type="error" :closable="false" show-icon />
           <div class="axis-toolbar">
@@ -78,7 +78,7 @@ const pending = ref(0), stopping = ref(false), jog = ref(50), bottle = ref(1)
 const absolutePosition = ref(0), relativeSteps = ref(-500)
 const ringNames = ['最外圈', '第二圈', '第三圈', '最内圈']
 function idle(a?: TurntableState) { return !!a && a.connected && a.read_ok && a.busy === false && a.stop_confirmed && !a.motion_blocked && !['accepted', 'running', 'unknown', 'stop_unconfirmed'].includes(a.action?.result || '') }
-const bothIdle = computed(() => pending.value === 0 && idle(rotation.value) && idle(radial.value))
+const bothIdle = computed(() => !axes.value.some(a => a.experiment_owned) && pending.value === 0 && idle(rotation.value) && idle(radial.value))
 const ring = computed(() => idle(radial.value) ? (radial.value?.ring_positions || []).findIndex(position => Math.abs(position - radial.value!.position!) <= (radial.value?.position_tolerance ?? 0)) : -1)
 const bottles = computed(() => { if (ring.value < 0) return []; const counts = radial.value?.ring_counts || []; const first = 1 + counts.slice(0, ring.value).reduce((a, b) => a + b, 0); return Array.from({ length: counts[ring.value] || 0 }, (_, i) => first + i) })
 watch(bottles, values => { if (!values.includes(bottle.value)) bottle.value = values[0] || 1 })
@@ -87,13 +87,14 @@ const platformMinimum = computed(() => radial.value?.ring_positions?.[3] ?? -444
 const ringLabel = computed(() => !radial.value?.connected || !radial.value.read_ok ? '未确认' : radial.value.busy ? '移动中' : ring.value >= 0 ? ringNames[ring.value] : idle(radial.value) ? '圈间位置' : '未确认')
 const canBottle = computed(() => bothIdle.value && ring.value >= 0)
 const canRing = computed(() => bothIdle.value)
-const canHome = computed(() => pending.value === 0 && idle(radial.value) && rotation.value?.connected && rotation.value.read_ok && !rotation.value.motion_blocked && (idle(rotation.value) || rotation.value.work_state === 0))
+const canHome = computed(() => !axes.value.some(a => a.experiment_owned) && pending.value === 0 && idle(radial.value) && rotation.value?.connected && rotation.value.read_ok && !rotation.value.motion_blocked && (idle(rotation.value) || rotation.value.work_state === 0))
 const currentBottle = computed(() => { if (!bothIdle.value || !rotation.value || ring.value < 0) return null; const rev = rotation.value.counts_per_revolution!; const offset = ((rotation.value.position! % rev) + rev) % rev; const i = bottles.value.findIndex((_, i) => Math.round(i * rev / bottles.value.length) === offset); return i < 0 ? null : bottles.value[i] })
 function canJog(a: TurntableState) { return bothIdle.value && a.collection_axis === 'rotation' }
 function statusLabel(a: TurntableState) {
   return !a.connected ? '未连接' : !a.read_ok ? '状态未知' : a.busy ? '运动中' : a.stop_confirmed ? '已停止' : '确认中'
 }
 function blockedReason(a: TurntableState) {
+  if (axes.value.some(axis => axis.experiment_owned)) return '引导式实验正在占用接样系统'
   if (!rotation.value?.connected || !radial.value?.connected) return '请先连接两台设备'
   if (!rotation.value.read_ok || !radial.value.read_ok) return '状态未知，请刷新或检查通信'
   if (!bothIdle.value) return '等待两轴停止确认'
