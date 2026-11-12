@@ -48,7 +48,7 @@
       </div>
       <div v-for="(turntable, id) in dashboardTurntables" v-show="selectedDevice === 'turntables'" :key="'t-'+id">
         <el-card class="device-card" shadow="hover">
-          <template #header><div class="card-header"><div class="device-heading"><img :src="turntableArtwork" alt="" /><div><h2>接样转盘</h2><span>{{ turntable.name }} · CL-01A</span></div></div><el-tag :type="turntable.read_ok ? 'success' : 'info'">{{ deviceInfo('turntables', id)?.status }}</el-tag></div></template>
+          <template #header><div class="card-header"><div class="device-heading"><img :src="turntableArtwork" alt="" /><div><h2>{{ turntable.collection_axis === 'radial' ? '接样移动平台' : '接样转盘' }}</h2><span>{{ turntable.name }} · {{ turntable.collection_axis === 'radial' ? 'YX-HA02C' : 'CL-01A' }}</span></div></div><el-tag :type="turntable.read_ok ? 'success' : 'info'">{{ deviceInfo('turntables', id)?.status }}</el-tag></div></template>
           <div class="valve-status-grid">
             <div class="valve-status-item"><div><small>当前瓶位</small><strong>{{ turntableBottle(turntable) }}</strong></div></div>
             <div class="valve-status-item"><div><small>运行状态</small><strong>{{ turntable.read_ok ? turntableWorkState[turntable.state_name || ''] || '未知' : '未知' }}</strong></div></div>

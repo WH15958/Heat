@@ -1,6 +1,7 @@
 <template>
-  <section aria-label="接样转盘设备">
-    <TurntableControl v-for="(state, id) in states" :key="id" :state="state" @update="update" />
+  <section aria-label="接样系统">
+    <CollectionControl v-if="Object.values(states).some(s => s.collection_axis && s.collection_axis !== 'legacy')" :states="states" @update="update" />
+    <TurntableControl v-for="state in Object.values(states).filter(s => !s.collection_axis || s.collection_axis === 'legacy')" :key="state.device_id" :state="state" @update="update" />
   </section>
 </template>
 <script setup lang="ts">
@@ -9,6 +10,7 @@ import { ElMessage } from 'element-plus'
 import { turntableApi, type TurntableState } from '../api/turntables'
 import { useWebSocket } from '../composables/useWebSocket'
 import TurntableControl from './TurntableControl.vue'
+import CollectionControl from './CollectionControl.vue'
 const states = ref<Record<string, TurntableState>>({})
 const emit = defineEmits<{ devices: [states: Record<string, TurntableState>] }>()
 watch(states, value => emit('devices', value), { deep: true })
@@ -37,7 +39,7 @@ function update(state: TurntableState) {
   clearTimeout(expiry.get(state.device_id))
   const readAt = Date.parse(state.read_at || '')
   const remaining = Number.isFinite(readAt) ? Math.max(0, 6000 - Math.max(0, Date.now() - readAt)) : 0
-  states.value[state.device_id] = { ...state, read_ok: state.read_ok && remaining > 0 }
+  states.value[state.device_id] = { ...current, ...state, read_ok: state.read_ok && remaining > 0 }
   expiry.set(state.device_id, setTimeout(() => {
     if (states.value[state.device_id]) states.value[state.device_id]!.read_ok = false
     expiry.delete(state.device_id)

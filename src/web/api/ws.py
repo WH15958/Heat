@@ -357,6 +357,8 @@ async def build_realtime_payload(
                 # A timed-out reader may still own the I/O lock; do not wait on it.
                 payload["turntables"][did] = {
                     "device_id": did, "name": controller.config.name,
+                    "collection_axis": getattr(controller.config, "collection_axis", "legacy"),
+                    "collection_peer": getattr(controller.config, "collection_peer", ""),
                     "connected": controller.device.is_connected(),
                     **controller.device.unknown(str(exc)),
                     "stop_confirmed": False, "homed": False,

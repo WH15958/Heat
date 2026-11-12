@@ -155,7 +155,17 @@ class DeviceManager:
         return control.command(command, owner, generation)
 
     def add_turntable(self, config):
-        controller = TurntableController(config)
+        if config.collection_axis != "legacy":
+            from src.web.collection_control import CollectionAxisController
+            controller = CollectionAxisController(config)
+            peer = self.turntables.get(config.collection_peer)
+            if peer is not None:
+                if not isinstance(peer, CollectionAxisController):
+                    raise ValueError("接样配对轴类型无效")
+                controller.lock = peer.lock
+                controller.peer, peer.peer = peer, controller
+        else:
+            controller = TurntableController(config)
         self.turntables[config.device_id] = controller
         controller.refresh_binding()
 

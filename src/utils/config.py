@@ -577,9 +577,32 @@ class TurntableConfig(BaseConfig):
     bottle_speed: int = 1000
     bottle_home_speed: int = 1000
     bottle_home_timeout: float = 180.0
+    collection_axis: str = "legacy"
+    collection_peer: str = ""
+    ring_counts: List[int] = field(default_factory=lambda: [28, 20, 16, 8])
+    ring_positions: List[int] = field(default_factory=lambda: [0, -147246, -297396, -444103])
+    counts_per_revolution: int = 144000
 
     def validate(self):
         errors = self.connection.validate()
+        if self.collection_axis not in ("legacy", "rotation", "radial"):
+            errors.append("接样轴类型无效")
+        if self.collection_axis != "legacy":
+            if not self.collection_peer or self.collection_peer == self.device_id:
+                errors.append("接样轴必须配置另一个轴的设备ID")
+            if self.bottle_count != 0:
+                errors.append("四圈手动接样不能启用旧单圈瓶位")
+            if (not isinstance(self.ring_counts, list) or self.ring_counts != [28, 20, 16, 8]
+                    or any(type(x) is not int for x in self.ring_counts)):
+                errors.append("当前接样标定仅支持28/20/16/8瓶")
+            if (not isinstance(self.ring_positions, list) or len(self.ring_positions) != 4 or any(type(x) is not int for x in self.ring_positions)
+                    or self.ring_positions[0] != 0
+                    or not all(-9_999_999 <= b < a for a, b in zip(self.ring_positions, self.ring_positions[1:]))):
+                errors.append("四圈坐标须从0向内递减且在控制器范围内")
+            if type(self.counts_per_revolution) is not int or not 1 <= self.counts_per_revolution <= 99_999_999:
+                errors.append("整圈计数无效")
+            if self.collection_axis == "radial" and self.home_enabled:
+                errors.append("无原点传感器的平台禁止机械回零")
         if not self.device_id:
             errors.append("转盘设备ID不能为空")
         for name in ("enabled", "home_enabled", "position_encoding_verified"):
@@ -681,6 +704,16 @@ class SystemConfig(BaseConfig):
             if turntable.device_id in seen:
                 errors.append(f"重复设备ID: {turntable.device_id}")
             seen.add(turntable.device_id)
+        axes = {c.device_id: c for c in self.turntables if c.enabled}
+        for axis in axes.values():
+            if axis.collection_axis == "legacy":
+                continue
+            peer = axes.get(axis.collection_peer)
+            if (peer is None or peer.collection_peer != axis.device_id
+                    or {axis.collection_axis, peer.collection_axis} != {"rotation", "radial"}
+                    or axis.ring_counts != peer.ring_counts or axis.ring_positions != peer.ring_positions
+                    or axis.counts_per_revolution != peer.counts_per_revolution):
+                errors.append("接样两轴必须互相绑定且使用一致标定")
         errors.extend(self.monitor.validate())
         errors.extend(self.report.validate())
         errors.extend(self.logging.validate())

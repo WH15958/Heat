@@ -64,7 +64,7 @@ watch(() => route.path, () => { menuOpen.value = false; if (route.path.startsWit
       <div class="sidebar-garden" aria-hidden="true"><img :src="flowers" class="decoration" alt="" /></div>
       <div class="sidebar-foot"><img :src="planet" class="sidebar-planet decoration" alt="" /><span>HEAT LAB<br /><small>探索 · 控制 · 记录</small></span></div>
     </aside>
-    <main id="main-content" class="app-main" tabindex="-1">
+    <main id="main-content" class="app-main" :class="{ 'control-main': route.path === '/control' }" tabindex="-1">
       <div class="page-heading"><div class="heading-title"><img :src="bow" class="heading-bow decoration" alt="" /><div><p>{{ currentPage.caption }}</p><h1>{{ currentPage.label }}</h1></div></div><span class="page-heading-note">HEAT / LABORATORY</span></div>
       <router-view />
       <div class="workspace-footer"><span>HEAT · 实验控制平台</span><img :src="cat" alt="" /></div>
@@ -73,6 +73,14 @@ watch(() => route.path, () => { menuOpen.value = false; if (route.path.startsWit
 </template>
 
 <style scoped>
+.control-main { height: calc(100dvh - 80px); display: flex; flex-direction: column; overflow: hidden; padding-top: 12px; padding-bottom: 10px; }
+.control-main > .page-heading { display: none; }
+.control-main > .workspace-footer { display: none; }
+.control-main :deep(.control-panel) { flex: 1; min-height: 0; }
+@media (max-width: 767px) {
+  .control-main { height: calc(100dvh - 68px); }
+  .control-main > .page-heading { display: none; }
+}
 .experiment-toggle { box-sizing: border-box; width: 100%; background: transparent; font-family: inherit; font-size: inherit; text-align: left; cursor: pointer; padding-right: 10px; gap: 10px; }
 .experiment-label { white-space: nowrap; flex-shrink: 0; }
 .nav-chevron { margin-left: auto; width: 12px; height: 12px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }

@@ -1,6 +1,12 @@
 import axios from 'axios'
 
 export interface TurntableState {
+  collection_axis?: "legacy" | "rotation" | "radial"
+  collection_peer?: string
+  ring_counts?: number[]
+  ring_positions?: number[]
+  position_tolerance?: number
+  counts_per_revolution?: number
   device_id: string
   name: string
   configured: boolean
@@ -37,11 +43,16 @@ export interface TurntableState {
   bottle_ready?: boolean
   bottle_error?: string | null
   bottle_token?: string | null
-  action?: { action: string; result: string; target?: number; error?: string; duration_seconds?: number; requested_speed?: number; target_bottle?: number; from_bottle?: number } | null
+  action?: { action: string; result: string; target?: number; actual_position?: number; position_error?: number; error?: string; duration_seconds?: number; requested_speed?: number; target_bottle?: number; from_bottle?: number } | null
 }
 
 export type TurntableDirection = 'positive' | 'negative'
 export type TurntableCommand =
+  | { action: 'return_start'; expected_position: number }
+  | { action: 'platform_absolute'; position: number; expected_position: number }
+  | { action: 'platform_relative'; steps: number; expected_position: number }
+  | { action: 'select_ring'; ring: number; expected_position: number }
+  | { action: 'select_bottle'; bottle: number; expected_position: number }
   | { action: 'stop' }
   | { action: 'home_bottle' }
   | { action: 'next_bottle'; expected_position: number; expected_bottle_token: string }

@@ -9,7 +9,7 @@ from uuid import uuid4
 from src.devices.turntable import TurntableDevice
 from src.devices.turntable_commands import MAX_POSITION, MIN_POSITION, TurntableCommand
 from src.utils.serial_binding import resolve_connection
-from src.web.turntable_commands import BottleCommand, parse_turntable_command
+from src.web.turntable_commands import BottleCommand, CollectionCommand, parse_turntable_command
 
 logger = logging.getLogger(__name__)
 PENDING = {"accepted", "running", "unknown"}
@@ -23,6 +23,14 @@ def is_startup_reset(state):
 
 
 class TurntableController:
+    stable_reads = 2
+
+    def _is_stopped(self, status):
+        return status["work_state"] == 0x20
+
+    def _target_reached(self, position, target):
+        return position == target
+
     def __init__(self, config, device=None):
         self.config = config
         self.device = device or TurntableDevice(config)
@@ -247,7 +255,7 @@ class TurntableController:
             self._invalidate_bottle()
         if state == 0:
             self.homed = False
-        if state == 0x20:
+        if self._is_stopped(status):
             if position != self._stable_position:
                 if self.stop_confirmed:
                     self._stability_pending = True
@@ -272,15 +280,16 @@ class TurntableController:
                     action["saw_running"] = True
                 if state == 0x08:
                     action["saw_homing"] = True
-            elif state == 0x20 and self._stable_count >= 2:
+            elif self._is_stopped(status) and self._stable_count >= self.stable_reads:
                 if motion_action == "run":
                     self._fail("连续运行提前停止")
-                elif position != action["target"]:
-                    self._fail("停止坐标与目标不一致")
+                elif not self._target_reached(position, action["target"]):
+                    self._fail(f"停止坐标与目标不一致（目标 {action['target']}，实际 {position}）；请核对位置")
                 elif motion_action == "home" and not action.get("saw_homing"):
                     self._fail("未观察到回零过程，不能确认机械原点")
                 else:
                     action["result"] = "completed"
+                    action.update(actual_position=position, position_error=position - action["target"])
                     self.stop_confirmed = True
                     self.homed = self.homed or motion_action == "home"
                     if action["action"] in ("home_bottle", "next_bottle"):
@@ -288,7 +297,7 @@ class TurntableController:
                         self._bottle_token = str(uuid4())
                     logger.info("Turntable %s completed: %s", self.config.device_id, action)
         pending = action and action["result"] in PENDING
-        if (self._stability_pending and state == 0x20 and self._stable_count >= 2
+        if (self._stability_pending and self._is_stopped(status) and self._stable_count >= self.stable_reads
                 and not self._requires_stop and not pending):
             self._stability_pending = False
             self.stop_confirmed = True
@@ -300,6 +309,9 @@ class TurntableController:
             self._block("存在未完成运动")
         else:
             self._block(None)
+
+    def _read_status(self):
+        return self.device.read_status()
 
     def read(self):
         with self.lock:
@@ -315,7 +327,7 @@ class TurntableController:
                     self._fail("运动中连接丢失")
                 return self.summary()
             try:
-                self._observe(self.device.read_status())
+                self._observe(self._read_status())
             except Exception as exc:
                 self._invalidate_bottle()
                 self.device.snapshot = self.device.unknown(str(exc))
@@ -328,6 +340,8 @@ class TurntableController:
 
     def command(self, request, expected_generation=None, owner=None):
         req = parse_turntable_command(request)
+        if isinstance(req, CollectionCommand):
+            raise ValueError("此设备不支持四圈接样指令")
         if req.action == "stop":
             if not self.stop():
                 raise OSError("转盘停止未确认，连接已保留")
@@ -438,6 +452,7 @@ class TurntableController:
                     self.device.send_command(TurntableCommand(action="stop"))
                     deadline = time.monotonic() + 3
                     previous = None
+                    stable = 0
                     while time.monotonic() < deadline:
                         try:
                             status = self.device.read_status()
@@ -445,6 +460,7 @@ class TurntableController:
                             # Retry only observation, never the STOP write. Invalid
                             # reads break the consecutive stable-position evidence.
                             previous = None
+                            stable = 0
                             self.device.snapshot = self.device.unknown(str(exc))
                             logger.warning("Turntable %s stop confirmation read failed: %s",
                                            self.config.device_id, exc)
@@ -452,12 +468,13 @@ class TurntableController:
                             continue
                         if time.monotonic() >= deadline:
                             break
-                        if status["work_state"] == 0x20 and previous == status["position"]:
+                        stable = stable + 1 if self._is_stopped(status) and previous == status["position"] else 1 if self._is_stopped(status) else 0
+                        if stable >= self.stable_reads:
                             self.stop_confirmed = True
                             self._requires_stop = False
                             self._stability_pending = False
                             self._stable_position = status["position"]
-                            self._stable_count, self._stable_at = 2, time.monotonic()
+                            self._stable_count, self._stable_at = self.stable_reads, time.monotonic()
                             with self.gate:
                                 self._read_at = time.monotonic()
                             if self.action and self.action["result"] in PENDING:
@@ -465,7 +482,7 @@ class TurntableController:
                             self._block(None)
                             logger.info("Turntable %s stop confirmed at %s", self.config.device_id, status["position"])
                             return True
-                        previous = status["position"] if status["work_state"] == 0x20 else None
+                        previous = status["position"] if self._is_stopped(status) else None
                         time.sleep(0.1)
                 except Exception as exc:
                     self.device.snapshot = self.device.unknown(str(exc))

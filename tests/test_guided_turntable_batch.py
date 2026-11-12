@@ -21,6 +21,10 @@ from test_guided import (FakeManager, spec, until, fast_timed_flow,
 
 @pytest.fixture(autouse=True)
 def rig(monkeypatch):
+    # Exercise the legacy rig independently of changes to the lab configuration.
+    config = ConfigManager().load()
+    config.turntables = [copy.deepcopy(FakeManager().turntable('turntable1').config)]
+    monkeypatch.setattr(ConfigManager, 'load', lambda *_: copy.deepcopy(config))
     monkeypatch.setattr('serial.Serial.open', Mock(side_effect=AssertionError('No real hardware')))
     monkeypatch.setattr(execution.StepExecutor, '_run_timed_flow', fast_timed_flow)
     monkeypatch.setattr(execution.StepExecutor, '_wait_condition', fast_microwave_stability)

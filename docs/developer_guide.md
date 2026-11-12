@@ -1,5 +1,29 @@
 # Heat 开发者指南
 
+## 四圈接样设备页接入（2026-11-12）
+
+`CollectionAxisController` 位于 `src/web/collection_control.py`，复用同步 `TurntableDevice` 与现有串口管理、REST、Web监督、停止代次和实验互斥。两轴仍注册于 `DeviceManager.turntables`，纳入全局急停与退出清理；配对控制器共享RLock，检查另一轴停止和请求代次后才允许写运动。驱动内未新增轮询、线程或队列，页面/WS生命周期不控制硬件。
+
+`turntables[]` 新增 `collection_axis`（legacy/rotation/radial）、`collection_peer`、`ring_counts`、`ring_positions`、`counts_per_revolution`。默认legacy保留原设备行为；当前四圈配置要求28/20/16/8孔、配对角色与标定一致、bottle_count=0。平台禁机械回零。配置仅对仓库运行生效，不迁移已安装桌面工作区。
+
+沿用 `POST /api/turntable/{device_id}/command`，新增严格命令：
+
+- `select_ring`：ring为1–4，expected_position为当前平台坐标，速度字段5000（待现场复验）；要求两轴状态有效且稳定停止，不要求机械回零或起始角度。
+- `select_bottle`：bottle为1–72，expected_position为当前转盘坐标；只允许平台当前标定圈内瓶号，按144000计数/圈独立取整计算目标，正向到达，不累加单瓶取整误差。
+- `return_start`：仅expected_position；两轴状态有效且稳定停止时，按当前位置选择最近的整圈起始坐标，正反向距离相等时选正向（已在起始角度则保持）；使用整数商余数计算，支持负坐标和多圈累计坐标，不要求平台恰好处于圈位，但须在标定行程内。
+- `platform_absolute`：position与expected_position；`platform_relative`：非零steps与expected_position。仅平台可用；相对目标由后端新鲜坐标计算。两者均要求两轴状态有效且稳定停止，目标限定在标定内圈至0，固定速度字段1000。参数为严格整数，拒绝多余字段和陈旧坐标。
+
+保留stop、转盘负向home及转盘有限move_relative；平台必须使用带expected_position的新高级命令。拒绝原始绝对定位、run和旧瓶位指令。两轴均要求状态0x20、speed_raw=0、连续三次同坐标才确认停止，定位还需目标匹配；平台0x20且速度非零按运动处理。平台普通状态读取最小间隔0.5秒，运动前强制新鲜读取；转盘不使用该缓存，回零命令后立即按底层协议间隔查询一次，降低漏掉短暂回零状态的风险；此限频并非通信故障修复。超时不重放运动，复用监督STOP及未确认阻断，停止会使配对轴排队请求失效。`claim`拒绝自动实验占用，未新增YAML动作或样品语义。
+
+前端 `CollectionControl.vue` 将两轴放在同一栏中，常用区仅显示圈瓶与定位按钮，原始计数及任意平台移动收在高级区。圈位高亮须停止已确认，圈间不推测瓶号。设备控制页采用视口内布局，列表与详情各自overflow/overscroll隔离，仅/control隐藏页尾，不影响其他路由。复用快照版本和6秒过期保护。软件验证见 `tests/test_collection_control.py`，覆盖双轴互斥、陈旧请求、停止取消、状态误判、超时及实验阻断；实物路径与停止仍须实验室确认。
+
+
+`CollectionAxisController._read_status` 仅在查询前已确认静止、无未完成动作/停止阻断且读数有效时，对TimeoutError重查一次；停止代次改变或正在停止则不重查。复用协议间隔，无新增驱动轮询或睡眠；两次请求各受原串口超时约束。回复格式错误不重试，运动中超时仍立即交给原监督STOP路径，不重发运动。停止坐标不匹配错误显示目标和实际值；平台容差规则见下文。
+
+到位判断通过 `TurntableController._target_reached` 扩展点完成，默认精确匹配；接样平台允许±10原始计数，转盘仍为0。摘要 `position_tolerance` 分别返回10/0，前端圈位识别与后端 `_ring_index` 使用同一容差；到位仍要求速度0及连续三次完全相同的坐标，不能将容差内变化当作稳定。完成动作保留 `actual_position` 和 `position_error`（实际减目标），不改写读数、不追加修正运动。平台目标边界仍严格为−444103至0，`expected_position` 仍精确匹配新鲜坐标；`return_start` 允许平台端点读回落在±10容差内。
+
+固定装置按用户要求直接使用当前控制器坐标与既有标定表；取消confirm_reference命令及reference_confirmed状态字段，homed仅记录机械回零事实，不再作为手动定位门槛。静止读数超时仍失效状态并禁用运动，恢复三次稳定停止后可显式操作；运动未知和停止未确认保护不变。坐标清零、复位或机械重装需现场重新校正，软件不检测实际瓶口对准。
+
 ## 搭建式转盘执行（2026-10-26）
 
 `turntable.home_bottle/next_bottle/stop` 贯通动作枚举、parser、源文校验、编辑器和 StepExecutor。参数仅 `device_id`；限定 wait=none、on_error=stop。解析时检查启用步骤的本次回原点顺序及配置瓶数，执行时再次检查，不继承控制器既有可信瓶位。未引用转盘的旧配方不新增液路设备要求。

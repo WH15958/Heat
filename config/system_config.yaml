@@ -166,12 +166,14 @@ valves:
 
 turntables:
   - device_id: "turntable1"
-    name: "转盘接样"
+    name: "接样转盘"
     enabled: true
-    action_timeout: 60.0
+    action_timeout: 180.0
     home_enabled: true
     position_encoding_verified: true
-    bottle_count: 12
+    bottle_count: 0
+    collection_axis: "rotation"
+    collection_peer: "collection_platform1"
     pulses_per_bottle: 12000
     bottle_speed: 4000
     bottle_home_speed: 1000
@@ -188,6 +190,32 @@ turntables:
         vid: 6790
         pid: 29987
         location: "1-3.2.1"
+        fallback_to_port: false
+
+  - device_id: "collection_platform1"
+    name: "接样移动平台"
+    enabled: true
+    collection_axis: "radial"
+    collection_peer: "turntable1"
+    action_timeout: 180.0
+    home_enabled: false
+    position_encoding_verified: true
+    bottle_count: 0
+    ring_counts: [28, 20, 16, 8]
+    ring_positions: [0, -147246, -297396, -444103]
+    counts_per_revolution: 144000
+    connection:
+      port: "COM10"
+      baudrate: 115200
+      parity: "N"
+      bytesize: 8
+      stopbits: 1
+      timeout: 2.0
+      binding:
+        mode: "fingerprint"
+        vid: 6790
+        pid: 29987
+        location: "1-3.2.2"
         fallback_to_port: false
 
 monitor:

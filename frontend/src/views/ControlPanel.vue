@@ -2,21 +2,20 @@
   <div class="control-panel">
     <el-alert v-if="paramsStorageError" :title="paramsStorageError" type="warning" :closable="false" show-icon />
     <section class="connection-bar" aria-label="设备连接">
-      <div class="connection-bar-heading"><div><strong>设备连接</strong><span>已连接 {{ controlDeviceEntries.filter(d => d.connected).length }} / {{ controlDeviceEntries.length }} 台</span></div>
+      <div class="connection-bar-heading"><div><strong>设备控制</strong><span>已连接 {{ controlDeviceEntries.filter(d => d.connected).length }} / {{ controlDeviceEntries.length }} 台</span></div>
+        <div class="connection-actions">
         <el-button type="primary" :loading="connectionBatch.running.value" :disabled="connectionBatch.pending.size > 0" @click="connectAll">一键连接全部设备</el-button>
+        <el-button type="danger" plain @click="emergencyStop">紧急停止所有设备</el-button>
+        </div>
       </div>
       <p v-if="connectionBatch.message.value" role="status" aria-live="polite">{{ connectionBatch.message.value }} <span v-if="connectionBatch.total.value">{{ connectionBatch.results.value.length }} / {{ connectionBatch.total.value }}</span></p>
-      <p v-if="connectionBatch.results.value.length">成功 {{ connectionBatch.results.value.filter(r => r.status === 'success').length }} · 失败 {{ connectionBatch.results.value.filter(r => r.status === 'failed').length }} · 状态未知 {{ connectionBatch.results.value.filter(r => r.status === 'unknown').length }} · 跳过 {{ connectionBatch.results.value.filter(r => r.status === 'skipped').length }}</p>
+      <details v-if="connectionBatch.results.value.length" class="connection-details">
+      <summary>连接结果：成功 {{ connectionBatch.results.value.filter(r => r.status === 'success').length }} · 失败 {{ connectionBatch.results.value.filter(r => r.status === 'failed').length }} · 状态未知 {{ connectionBatch.results.value.filter(r => r.status === 'unknown').length }} · 跳过 {{ connectionBatch.results.value.filter(r => r.status === 'skipped').length }}</summary>
       <ul v-if="connectionBatch.results.value.length" class="connection-results">
         <li v-for="result in connectionBatch.results.value" :key="result.key" :class="result.status"><strong>{{ result.name }}</strong><span>{{ result.detail }}</span></li>
       </ul>
+      </details>
     </section>
-    <div class="emergency-bar">
-      <div class="emergency-description"><strong>全局设备控制</strong><span>停止所有已注册设备</span></div>
-      <el-button type="danger" plain size="large" @click="emergencyStop" class="emergency-button">
-        紧急停止所有设备
-      </el-button>
-    </div>
     <div class="device-workspace">
       <nav class="device-selector" aria-label="选择控制设备">
         <div class="selector-heading">设备列表 <span>{{ controlDeviceEntries.length }} 台</span></div>
@@ -311,7 +310,7 @@ const controlDevices = computed(() => [
   { key: 'pump', name: '蠕动泵' },
   { key: 'microwave', name: '微波仪' },
   { key: 'syringe', name: '注射泵' },
-  { key: 'turntable', name: '接样转盘' },
+  { key: 'turntable', name: '接样系统' },
   { key: 'valve', name: '三通阀' },
 ].map(group => {
   const members = controlDeviceEntries.value.filter(device => device.key.startsWith(group.key + ':'))
@@ -1298,8 +1297,8 @@ function calcFlowRate(ch: ChannelConfig): number {
 .device-detail :deep(.unit-label),.device-detail :deep(.metric-label) { color: #526b83; }
 @container (min-width: 1250px) { .device-detail > section[aria-label="加热器设备"], .device-detail :deep(section[aria-label="注射泵设备"]) { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 
-.control-panel { padding: 0; }
-.connection-bar { padding: 16px 20px; margin-bottom: 18px; border: 1px solid var(--el-border-color-light); border-radius: 8px; background: var(--el-bg-color); }
+.control-panel { padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.connection-bar { padding: 8px 12px; border: 1px solid var(--el-border-color-light); border-radius: 8px; background: var(--el-bg-color); }
 .connection-bar-heading, .connection-bar-heading > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .connection-bar-heading span, .connection-bar p, .connection-results { font-size: 13px; }
 .connection-bar p { margin: 12px 0 0; }
@@ -1307,9 +1306,14 @@ function calcFlowRate(ch: ChannelConfig): number {
 .connection-results li { display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
 .connection-results .failed, .connection-results .unknown { color: var(--el-color-danger); }
 .connection-results .skipped { color: var(--el-text-color-secondary); }
-.emergency-bar { position: sticky; top: 82px; z-index: 5; margin: 0 0 18px; border-radius: 6px; box-shadow: none; }
-.device-workspace { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
-.device-selector { position: sticky; top: 174px; padding: 0 14px 0 0; border-right: 1px solid var(--el-border-color-light); min-width: 0; }
+.connection-bar { flex-shrink: 0; margin-bottom: 10px; }
+.connection-actions { gap: 8px !important; }
+.connection-actions :deep(.el-button + .el-button) { margin-left: 0; }
+.connection-details { margin-top: 8px; font-size: 12px; }
+.connection-details summary { cursor: pointer; }
+.connection-results { max-height: 96px; overflow-y: auto; overscroll-behavior: contain; }
+.device-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; overflow: hidden; }
+.device-selector { overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 0 0; border-right: 1px solid var(--el-border-color-light); min-width: 0; min-height: 0; }
 .selector-heading { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px 14px; font-size: 14px; font-weight: 600; }
 .selector-heading span { color: var(--el-text-color-secondary); font-size: 12px; }
 .device-choice { display: block; width: 100%; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--el-text-color-regular); text-align: left; cursor: pointer; font: inherit; }
@@ -1321,7 +1325,7 @@ function calcFlowRate(ch: ChannelConfig): number {
 .connection-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--el-text-color-placeholder); }
 .connection-dot.online { background: var(--el-color-success); }
 .choice-meta { display: block; margin-top: 5px; color: var(--el-text-color-secondary); font-size: 12px; overflow-wrap: anywhere; }
-.device-detail { min-width: 0; }
+.device-detail { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding-right: 6px; scrollbar-gutter: stable; }
 .device-detail > section, .device-detail :deep(section[aria-label="注射泵设备"]), .device-detail :deep(section[aria-label="接样转盘设备"]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .device-detail :deep(.device-card), .device-detail :deep(.syringe-panel), .device-detail :deep(.turntable-panel) { margin-bottom: 0; width: 100%; box-sizing: border-box; }
 .device-detail :deep(.el-card__header) { min-height: 88px; box-sizing: border-box; display: flex; align-items: center; }
@@ -1338,9 +1342,10 @@ function calcFlowRate(ch: ChannelConfig): number {
   .device-detail :deep(.panel-heading) { flex-wrap: wrap; }
 }
 @media (max-width: 900px) {
-  .device-workspace { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  .device-selector { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--el-border-color-light); }
-  .selector-heading { grid-column: 1 / -1; padding: 0 2px 4px; }
-  .device-choice { margin: 0; padding: 10px; }
+  .device-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+  .device-selector { display: flex; overflow-x: auto; overflow-y: hidden; gap: 6px; padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--el-border-color-light); }
+  .selector-heading { display: none; }
+  .device-choice { width: auto; flex-shrink: 0; margin: 0; padding: 8px 12px; }
+  .choice-meta { display: none; }
 }
 </style>

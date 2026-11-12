@@ -104,7 +104,9 @@ def test_editor_reports_capacity_at_offending_step(rig, monkeypatch):
     assert not rig.device.commands
 
 
-def test_authoring_roundtrip_and_progress_are_read_only(setup):
+def test_authoring_roundtrip_and_progress_are_read_only(setup, rig, monkeypatch):
+    from src.utils.config import ConfigManager, SystemConfig
+    monkeypatch.setattr(ConfigManager, 'load', lambda _: SystemConfig(turntables=[rig.control.config]))
     root, app = setup
     content = yaml.safe_dump({'steps': [dict(raw(a), id=str(i)) for i, a in enumerate(('home_bottle', 'next_bottle', 'stop'))]})
     async def run():

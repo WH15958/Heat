@@ -23,9 +23,34 @@ class BottleCommand(BaseModel):
         return self
 
 
+class CollectionCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["select_ring", "select_bottle", "return_start", "platform_absolute", "platform_relative"]
+    ring: StrictInt | None = Field(default=None, ge=1, le=4)
+    bottle: StrictInt | None = Field(default=None, ge=1, le=72)
+    expected_position: StrictInt
+    position: StrictInt | None = Field(default=None, ge=MIN_POSITION, le=MAX_POSITION)
+    steps: StrictInt | None = Field(default=None, ge=MIN_POSITION, le=MAX_POSITION)
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        allowed = {"action", "expected_position"}
+        required = {"select_ring": "ring", "select_bottle": "bottle",
+                    "return_start": None,
+                    "platform_absolute": "position", "platform_relative": "steps"}[self.action]
+        if ((required is not None and getattr(self, required) is None)
+                or self.model_fields_set - (allowed | ({required} if required else set()))):
+            raise ValueError("接样指令参数不完整或包含无关字段")
+        if self.action == "platform_relative" and self.steps == 0:
+            raise ValueError("相对位移不能为0")
+        return self
+
+
 def parse_turntable_command(request):
-    if isinstance(request, (BottleCommand, TurntableCommand)):
+    if isinstance(request, (BottleCommand, TurntableCommand, CollectionCommand)):
         return request
     if isinstance(request, dict) and request.get("action") in ("home_bottle", "next_bottle"):
         return BottleCommand.model_validate(request)
+    if isinstance(request, dict) and request.get("action") in ("select_ring", "select_bottle", "return_start", "platform_absolute", "platform_relative"):
+        return CollectionCommand.model_validate(request)
     return TurntableCommand.model_validate(request)
