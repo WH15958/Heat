@@ -1,5 +1,7 @@
 """Recipe-scoped bottle reference and fixed-apparatus interlocks."""
 from src.experiment.actions import ActionType
+from src.experiment.guided_collection import GuidedCollection
+from src.experiment.collection_layout import collection_plan
 from src.experiment.turntable_sequence import (
     TurntableSequence, verify_collection_pumps, verify_collection_valve,
 )
@@ -16,6 +18,12 @@ def check_turntable_connections(dm, steps):
         control = dm.turntable(step.params["device_id"])
         if not control.config.enabled or not control.device.is_connected():
             raise RuntimeError("配方转盘未启用或未连接")
+        if control.config.collection_axis == "rotation":
+            from src.utils.config import SystemConfig
+            if control.peer is None or not control.peer.device.is_connected():
+                raise RuntimeError("四圈接样需要已连接的配对平台")
+            collection_plan(SystemConfig(turntables=[control.config, control.peer.config]), 1)
+            continue
         if step.type != ActionType.TURNTABLE_STOP and (
                 not control.config.home_enabled or not control.config.position_encoding_verified
                 or not control.config.bottle_count):
@@ -84,4 +92,52 @@ class RecipeTurntable(TurntableSequence):
             await self.stop()
             return False
         self.bottle = None
+        return await self.stop() and await self.release()
+
+
+class RecipeCollection(GuidedCollection):
+    """Recipe actions reuse the same paired-axis motion and stop supervision."""
+    def __init__(self, dm, stopped, changed, device_id="turntable1"):
+        super().__init__(dm, stopped, changed, self._stage)
+        self.device_id = device_id
+        self.bottle = None
+        self.stopped_by_step = False
+
+    verify_liquid_route = RecipeTurntable.verify_liquid_route
+    execute_action = RecipeTurntable.execute_action
+
+    async def _stage(self, phase, label, bottle, device_id, execute):
+        await self.verify_liquid_route()
+        return await execute()
+
+    def rearm_home(self):
+        if self.stopped_by_step and self._stop_succeeded and not self.needs_stop and not self._stopped():
+            self._invalidated = False
+            self.generations = [self.control.generation, self.platform.generation]
+            self.expected_positions = None
+            self.stopped_by_step = False
+
+    async def home(self):
+        await self.prepare_start()
+        return await super().home()
+
+    async def stop(self):
+        self.bottle = None
+        self._stop_succeeded = await super().stop()
+        return self._stop_succeeded
+
+    async def cleanup(self, normal=False):
+        if not self.claimed:
+            return True
+        if normal and not self.needs_stop:
+            try:
+                # Explicit STOP invalidates motion but still permits idle release.
+                if self.stopped_by_step and self._stop_succeeded:
+                    return await self.release()
+                await self._call(self._read_pair)
+                return await self.release()
+            except Exception as exc:
+                self.last_error = str(exc)
+                await self.stop()
+                return False
         return await self.stop() and await self.release()

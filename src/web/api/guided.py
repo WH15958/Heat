@@ -134,7 +134,11 @@ async def current():
 
 @router.get("/batches")
 async def history():
-    return sorted(records(), key=lambda r: r["created_at"], reverse=True)
+    stored = await asyncio.to_thread(records)
+    fields = ("batch_id", "experiment_name", "state", "created_at", "total_groups",
+              "cleanup_required", "recovery_required", "persistence_status")
+    return [{key: record.get(key) for key in fields}
+            for record in sorted(stored, key=lambda r: r["created_at"], reverse=True)]
 
 
 @router.post("/start")
@@ -221,11 +225,53 @@ async def saved_plan(batch_id: str):
 @router.get("/{batch_id}/charts")
 async def charts(batch_id: str):
     from src.experiment.batch_charts import saved_charts
-    record = await status(batch_id)
+    async with _source_lock:
+        record = await status(batch_id)
+        try:
+            return await asyncio.to_thread(saved_charts, record, guided.BATCH_DIR)
+        except (OSError, ValueError, TypeError) as exc:
+            raise HTTPException(503, "图表生成或保存失败，请检查执行日志及存储后重试") from exc
+
+
+@router.delete("/{batch_id}")
+async def delete_batch(batch_id: str):
+    async with _source_lock:
+        return await delete_batch_locked(batch_id)
+
+
+async def delete_batch_locked(batch_id: str):
+    from src.experiment.experiment_logger import list_experiment_runs, delete_experiment_run, get_experiment_run
+    record = read_record(batch_id)
+    live = _batches.get(batch_id)
+    state = live.snapshot() if live else record
+    if (state.get("state") not in guided.TERMINAL or
+            any(state.get(key) for key in ("cleanup_pending", "cleanup_required", "recovery_required"))):
+        raise HTTPException(409, "运行中或待现场恢复的批次不能删除")
+
+    def remove():
+        runs = list_experiment_runs(summary=True, batch_id=batch_id)
+        ids = {r["run_id"] for r in runs}
+        ids.update(g["run_id"] for g in record.get("groups", []) if g.get("run_id"))
+        if record.get("priming", {}).get("run_id"):
+            ids.add(record["priming"]["run_id"])
+        for run_id in ids:
+            run = get_experiment_run(run_id)
+            if run and run.get("metadata", {}).get("batch_id") not in (None, batch_id):
+                raise HTTPException(409, "批次关联记录不一致，拒绝删除其他批次记录")
+        for run_id in ids:
+            delete_experiment_run(run_id)
+        for folder in ("charts", "plans"):
+            (guided.BATCH_DIR / folder / (batch_id + ".json")).unlink(missing_ok=True)
+        # Keep the batch as a retry anchor until all linked files are removed.
+        (guided.BATCH_DIR / (batch_id + ".json")).unlink()
+
     try:
-        return await asyncio.to_thread(saved_charts, record, guided.BATCH_DIR)
-    except (OSError, ValueError, TypeError) as exc:
-        raise HTTPException(503, "图表生成或保存失败，请检查执行日志及存储后重试") from exc
+        await asyncio.to_thread(remove)
+    except OSError as exc:
+        raise HTTPException(503, "整批删除未完成，请解除文件占用后重试") from exc
+    _batches.pop(batch_id, None)
+    _engines.pop(batch_id, None)
+    return {"success": True, "deleted": batch_id}
 
 
 @router.post("/{batch_id}/pause")

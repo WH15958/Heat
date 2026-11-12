@@ -100,17 +100,13 @@ async function readDetail(id:string){
   if(token!==sequence)return
   detail.value=data
   const ids=batchRunIds(data,[])
-  const results=await Promise.allSettled([axios.get(`/api/guided/${encodeURIComponent(id)}/plan`),...ids.map(runId=>axios.get(`/api/experiments/history/runs/${encodeURIComponent(runId)}`))])
+  const results=await Promise.allSettled([axios.get(`/api/guided/${encodeURIComponent(id)}/plan`),axios.get('/api/experiments/history/runs',{params:{batch_id:id}})])
   if(token!==sequence)return
   const warnings:string[]=[]
   if(results[0].status==='fulfilled')savedPlan.value=results[0].value.data;else warnings.push('完整流程快照读取失败')
-  const missing:string[]=[]
-  results.slice(1).forEach((result,index)=>{
-   if(result.status==='fulfilled'&&result.value.data?.run_id===ids[index]){
-    const run=result.value.data
-    related.value.push({run_id:run.run_id,experiment_name:run.experiment_name,status:run.status})
-   }else missing.push(ids[index]!)
-  })
+  if(results[1].status==='fulfilled')related.value=results[1].value.data
+  else warnings.push('执行记录摘要读取失败')
+  const missing=ids.filter(runId=>!related.value.some(run=>run.run_id===runId))
   if(missing.length)warnings.push('部分执行日志缺失：'+missing.join('、'))
   if(!ids.length)warnings.push('本批未保存执行记录编号；可通过“查看记录详情与曲线”检查历史关联。')
   detailError.value=warnings.join('；')
@@ -121,7 +117,7 @@ async function load(){
  try{
   const [active,list]=await Promise.all([axios.get('/api/guided/current'),axios.get('/api/guided/batches')])
   current.value=active.data;records.value=list.data
-  if(history.value){const id=typeof route.query.batch_id==='string'?route.query.batch_id:records.value[0]?.batch_id;if(id)await readDetail(id)}
+  if(history.value){const requested=route.query.batch_id;const id=records.value.some(r=>r.batch_id===requested)?requested:records.value[0]?.batch_id;if(id)await readDetail(id as string);else{sequence++;detail.value=null;savedPlan.value=null;related.value=[]}}
  }catch{error.value='批次列表或当前状态读取失败，请刷新后重试。'}finally{loading.value=false}
 }
 async function exportAll(){

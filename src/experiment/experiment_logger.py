@@ -434,19 +434,59 @@ class ExperimentLogger:
                 logger.error(f"Log callback error: {e}")
 
 
-def list_experiment_runs() -> List[dict]:
+def list_experiment_runs(*, summary=False, batch_id=None, run_ids=()) -> List[dict]:
     runs = []
     if not LOGS_DIR.exists():
         return runs
     for filepath in sorted(LOGS_DIR.glob("*.json"), reverse=True):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            if summary:
+                data = _run_summary(filepath)
+            else:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            if (batch_id and data.get("metadata", {}).get("batch_id") != batch_id
+                    and data.get("run_id") not in run_ids):
+                continue
             data["log_file"] = filepath.name
             runs.append(data)
         except Exception:
             continue
     return runs
+
+
+def _run_summary(filepath):
+    """Derived summaries survive restarts; source file identity invalidates them."""
+    stat = filepath.stat()
+    identity = [stat.st_mtime_ns, stat.st_size]
+    cache = filepath.parent / "summaries" / filepath.name
+    try:
+        saved = json.loads(cache.read_text(encoding="utf-8"))
+        if saved["identity"] == identity:
+            return saved["summary"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    data = json.loads(filepath.read_text(encoding="utf-8"))
+    fields = ("run_id", "experiment_name", "experiment_file", "status", "started_at",
+              "finished_at", "total_duration", "total_steps", "completed_steps", "failed_steps",
+              "persistence_status", "log_saved", "sample_record_saved", "persistence_errors")
+    result = {key: data[key] for key in fields if key in data}
+    result["metadata"] = {key: value for key, value in data.get("metadata", {}).items()
+                          if key in ("batch_id", "run_kind", "bottle_number", "collection_ring",
+                                     "ring_bottle_number", "collection_device_id", "collection_status")}
+    try:
+        import tempfile
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(dir=cache.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(dict(identity=identity, summary=result), stream, ensure_ascii=False)
+            os.replace(temporary, cache)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    except OSError:
+        pass  # A derived cache failure must not hide a readable source record.
+    return result
 
 
 def get_experiment_run(run_id: str) -> Optional[dict]:
@@ -467,6 +507,7 @@ def delete_experiment_run(run_id: str) -> bool:
         if _run_id_from_log_path(filepath) == run_id:
             # Keep the log as the retry anchor until linked sample removal succeeds.
             remove_sample_records_for_run_ids([run_id])
+            (LOGS_DIR / "summaries" / filepath.name).unlink(missing_ok=True)
             filepath.unlink(missing_ok=True)
             logger.info(f"Experiment log deleted: {filepath}")
             return True

@@ -103,6 +103,7 @@
 </template>
 
 <script setup lang="ts">
+import { collectionCapacity } from '../experiment/guidedCollection'
 import { computed, onBeforeUnmount, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -177,7 +178,7 @@ function addSegment() {
 function removeSegment(index: number) { mutate(doc => doc.deleteIn(['steps', selected.value, 'params', 'segments', index])) }
 function devicesFor(group: string) {
   const key = groups.find(g => g.key === group)?.devices
-  return Object.entries(registry.value[key || ''] || {}).map(([value, d]) => ({ value, label: `${d.name || value} · ${value}${d.connected ? '' : '（离线 / 未连接）'}` }))
+  return Object.entries(registry.value[key || ''] || {}).filter(([, d]) => group !== 'turntable' || d.collection_axis !== 'radial').map(([value, d]) => ({ value, label: `${d.name || value} · ${value}${d.connected ? '' : '（离线 / 未连接）'}` }))
 }
 function waitGroup(type?: string) {
   return type === 'temperature_reached' ? 'heater' : type?.startsWith('microwave') ? 'microwave' : type?.startsWith('syringe') ? 'syringe_pump' : type === 'pump_complete' ? 'pump' : ''
@@ -203,7 +204,7 @@ const localErrors = computed(() => {
           if (bottle == null) errors.push('下一瓶前须在本次配方中回原点')
           else {
             bottleSequence.set(did, bottle + 1)
-            const count = registry.value.turntables?.[did]?.bottle_count
+            const count = collectionCapacity(registry.value.turntables?.[did])
             if (Number.isInteger(count) && bottle + 1 > count) errors.push('已到最后瓶位，不允许循环换瓶')
           }
         }

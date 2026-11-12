@@ -169,9 +169,10 @@ def validate_source(content: str, filename: str = 'untitled.yaml') -> dict:
                 'microwave': {d.device_id for d in config.microwaves if d.enabled},
                 'syringe_pump': {d.device_id for d in config.syringe_pumps if d.enabled},
                 'valve': {d.device_id for d in config.valves if d.enabled},
-                'turntable': {d.device_id for d in config.turntables if d.enabled},
+                'turntable': {d.device_id for d in config.turntables if d.enabled and d.collection_axis != 'radial'},
             }
-            bottle_counts = {d.device_id: d.bottle_count for d in config.turntables if d.enabled}
+            from src.experiment.collection_layout import collection_capacity
+            bottle_counts = {d.device_id: collection_capacity(d) for d in config.turntables if d.enabled}
             bottle_sequence = {}
             for index, step in enumerate(data['steps']):
                 group = step['type'].split('.')[0]

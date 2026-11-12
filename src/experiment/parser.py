@@ -396,6 +396,8 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
                     turntable_configs = {c.device_id: c for c in ConfigManager().load().turntables if c.enabled}
                 if did not in turntable_configs:
                     raise ValueError(f"转盘 {did} 未配置或未启用")
+                if turntable_configs[did].collection_axis == "radial":
+                    raise ValueError("搭建式接样请选择配对转盘，不直接选择移动平台")
             if enabled:
                 if action_type == ActionType.TURNTABLE_HOME:
                     turntable_bottles[did] = 1
@@ -405,7 +407,8 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
                     if did not in turntable_bottles:
                         raise ValueError(f"步骤 {step_id}：下一瓶前须在本次配方中回原点")
                     turntable_bottles[did] += 1
-                    if validate_devices and turntable_bottles[did] > turntable_configs[did].bottle_count:
+                    from src.experiment.collection_layout import collection_capacity
+                    if validate_devices and turntable_bottles[did] > collection_capacity(turntable_configs[did]):
                         raise ValueError(f"步骤 {step_id}：已到最后瓶位，不允许循环换瓶")
         elif enabled and action_type == ActionType.EMERGENCY_STOP:
             turntable_bottles.clear()

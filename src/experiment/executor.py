@@ -9,7 +9,7 @@ from src.experiment.actions import (
     validate_flow_duration,
     validate_turntable_step,
 )
-from src.experiment.recipe_turntable import RecipeTurntable, turntable_steps, check_turntable_connections
+from src.experiment.recipe_turntable import RecipeTurntable, RecipeCollection, turntable_steps, check_turntable_connections
 from src.experiment.progress import ActivityProgress
 from src.devices.microwave import MicrowaveSegment
 from src.devices.syringe_pump import is_initialization_pending
@@ -171,7 +171,8 @@ class StepExecutor:
         for did in sorted({s.params["device_id"] for s in selected}):
             def changed(state, device_id=did):
                 self.activity.device(device_id, state)
-            helper = RecipeTurntable(self._dm, self._should_stop, changed, device_id=did)
+            helper_type = RecipeCollection if self._dm.turntable(did).config.collection_axis == "rotation" else RecipeTurntable
+            helper = helper_type(self._dm, self._should_stop, changed, device_id=did)
             self._turntables[did] = helper
             calibrated = any(s.params["device_id"] == did and s.type != ActionType.TURNTABLE_STOP for s in selected)
             await helper.claim(require_calibration=calibrated)
@@ -190,6 +191,15 @@ class StepExecutor:
                   before + 1 if step.type == ActionType.TURNTABLE_NEXT and before is not None else None)
         details = {"operation": step.type.value, "from_bottle": before,
                    "target_position": (target - 1) * helper.control.config.pulses_per_bottle if target else None}
+        if isinstance(helper, RecipeCollection):
+            from src.experiment.collection_layout import bottle_location
+            details["target_position"] = None
+            if target:
+                location = bottle_location(helper.control.config, target)
+                details.update(target_bottle=target, target_position=location["rotation_offset"],
+                               target_collection_ring=location["collection_ring"],
+                               target_ring_bottle_number=location["ring_bottle_number"],
+                               target_platform_position=location["platform_position"])
         helper._changed = lambda state: self.activity.device(helper.device_id, {**state, **details})
         try:
             if step.type != ActionType.TURNTABLE_STOP:
@@ -207,6 +217,8 @@ class StepExecutor:
             return True
         finally:
             state = await helper._call(helper.control.summary)
+            if isinstance(helper, RecipeCollection):
+                state = helper._summary([state, await helper._call(helper.platform.summary)], helper.bottle)
             self.last_device_result = {**state, **details, "device_type": "turntable",
                                        "to_bottle": helper.bottle}
 

@@ -19,7 +19,7 @@ export const groups = [
   { key: 'microwave', label: '微波仪', image: microwave, devices: 'microwaves' },
   { key: 'syringe_pump', label: '注射泵', image: syringe, devices: 'syringe_pumps' },
   { key: 'valve', label: '三通阀', image: valve, devices: 'valves' },
-  { key: 'turntable', label: '接样转盘', image: turntable, devices: 'turntables' },
+  { key: 'turntable', label: '接样系统（四圈 / 单圈）', image: turntable, devices: 'turntables' },
   { key: 'general', label: '通用', image: '', devices: '' },
 ]
 const names: Record<string, Record<string, string>> = {
@@ -28,7 +28,7 @@ const names: Record<string, Record<string, string>> = {
   microwave: { configure_manual: '配置手动功率', configure_auto_power: '配置自动功率', configure_constant_rate: '配置恒速率', start: '启动微波', stop: '停止微波' },
   syringe_pump: { initialize: '初始化（会运动）', configure: '配置运动参数', move: '绝对定位', aspirate: '吸取', dispense: '排出', valve: '切换阀位', stop: '停止注射泵', resume: '继续 / 释放输入等待', io: '数字输出', program_load: '装载程序', program_store: '存储 EEPROM', program_run: '执行程序', repeat: '重复上次程序' },
   valve: { switch: '选择出液口（NO / NC）' },
-  turntable: { home_bottle: '回原点', next_bottle: '下一瓶', stop: '停止转盘' },
+  turntable: { home_bottle: '回起始瓶（四圈先回零再回外圈）', next_bottle: '下一瓶（自动跨圈）', stop: '停止接样系统' },
   general: { wait: '等待', log: '记录日志', emergency_stop: '紧急停止' },
 }
 export const actions: Action[] = Object.entries(names).flatMap(([group, entries]) => Object.entries(entries).flatMap(([key, label]) => group === 'valve' ? [
@@ -105,8 +105,8 @@ export function segmentFields(type: string): Field[] {
   return fields
 }
 export function executionHint(step: Step) {
-  if (step.type === 'turntable.stop') return '停止并确认；之后如需换瓶，须重新回原点。'
-  if (step.type.startsWith('turntable.')) return '到位并停止后继续；暂停不打断已发送动作。先停泵、切 NC 废液并按需等待滴液；本次配方先回原点，末瓶不循环。'
+  if (step.type === 'turntable.stop') return '四圈配置停止转盘与平台并确认；之后如需换瓶，须重新回起始瓶。'
+  if (step.type.startsWith('turntable.')) return '四圈配置共72瓶，自动跨圈；回起始瓶先转盘机械回零、再平台回外圈。先停泵、切 NC 废液并按需等待滴液；到位停止后继续，暂停不打断当前步骤，末瓶不循环。正常结束不自动回零。'
   if (step.wait?.type === 'microwave_monitored_hold') return '每秒监督微波温度、故障和控制状态；必须启用且失败停止。先配置一致的设备保温时长，到温后等待，结束后显式停止微波。'
   if (step.type === 'valve.switch') return '选择公共入口通向 NO 或 NC 出口：NO 断电，NC 通电；切换后保持该位置，直到下次明确切换。此动作不启动泵，实际出口需现场确认。'
   if (step.type.startsWith('syringe_pump.') && ['initialize', 'configure', 'move', 'aspirate', 'dispense', 'valve', 'program_run', 'repeat'].includes(step.type.split('.')[1]!)) return '动作完成后继续；暂停实验不打断已下发动作'

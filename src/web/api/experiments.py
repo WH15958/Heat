@@ -417,13 +417,20 @@ async def get_current_logs(filename: str):
 
 
 @router.get("/history/runs")
-async def get_history_runs():
-    return list_experiment_runs()
+async def get_history_runs(batch_id: str | None = None):
+    run_ids = set()
+    if batch_id:
+        from src.web.api.guided import read_record
+        record = await asyncio.to_thread(read_record, batch_id)
+        run_ids.update(g["run_id"] for g in record.get("groups", []) if g.get("run_id"))
+        if record.get("priming", {}).get("run_id"):
+            run_ids.add(record["priming"]["run_id"])
+    return await asyncio.to_thread(list_experiment_runs, summary=True, batch_id=batch_id, run_ids=run_ids)
 
 
 @router.get("/history/runs/{run_id}")
 async def get_history_run(run_id: str):
-    data = get_experiment_run(run_id)
+    data = await asyncio.to_thread(get_experiment_run, run_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return data
@@ -431,22 +438,35 @@ async def get_history_run(run_id: str):
 
 @router.delete("/history/runs/{run_id}")
 async def delete_history_run(run_id: str):
-    try:
-        success = delete_experiment_run(run_id)
-    except OSError as exc:
-        raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
-    if not success:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return {"success": True, "deleted": run_id}
+    async with _source_lock:
+        if _get_active_engine()[1] is not None:
+            raise HTTPException(409, "实验运行或清理期间不能删除历史记录")
+        try:
+            success = await asyncio.to_thread(delete_experiment_run, run_id)
+        except OSError as exc:
+            raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
+        if not success:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return {"success": True, "deleted": run_id}
 
 
 @router.delete("/history/runs")
 async def delete_all_history_runs():
-    try:
-        count = delete_all_experiment_runs()
-    except OSError as exc:
-        raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
-    return {"success": True, "deleted_count": count}
+    from src.web.api.guided import records, delete_batch_locked
+    async with _source_lock:
+        if _get_active_engine()[1] is not None:
+            raise HTTPException(409, "实验运行或清理期间不能清空历史记录")
+        batches = await asyncio.to_thread(records)
+        if any(r.get("recovery_required") or r.get("cleanup_required") for r in batches):
+            raise HTTPException(409, "存在待现场恢复的批次，不能清空历史记录")
+        count = len(await asyncio.to_thread(list_experiment_runs, summary=True))
+        for record in batches:
+            await delete_batch_locked(record["batch_id"])
+        try:
+            await asyncio.to_thread(delete_all_experiment_runs)
+        except OSError as exc:
+            raise HTTPException(503, "历史及样品记录删除未完成，请解除文件占用后重试") from exc
+        return {"success": True, "deleted_count": count}
 
 
 async def _broadcast_progress(filename: str, progress):

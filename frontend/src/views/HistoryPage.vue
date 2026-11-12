@@ -53,9 +53,10 @@
           </template>
         </el-table-column>
         <el-table-column prop="experiment_file" label="文件" />
-        <el-table-column label="操作" width="80" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button type="danger" size="small" link @click.stop="deleteRun(row)" :loading="deleting">删除</el-button>
+            <el-button v-if="row.metadata?.batch_id" type="danger" size="small" link @click.stop="deleteBatch(row.metadata.batch_id)" :loading="deleting">删除整批</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -166,7 +167,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import axios from 'axios'
-import {useRoute} from 'vue-router'
+import {useRoute, useRouter} from 'vue-router'
 import {collectionLocationLabel} from '../experiment/guidedCollection'
 import {batchRunIds,collectionStatusLabel} from '../experiment/guidedProgress'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -234,6 +235,7 @@ interface RunData {
 
 const runs = ref<RunData[]>([])
 const route=useRoute()
+const router=useRouter()
 const batchFilter=computed(()=>typeof route.query.batch_id==='string'?route.query.batch_id:'')
 const historyError=ref('')
 let historySequence=0
@@ -688,7 +690,7 @@ async function loadRuns() {
   const sequence=++historySequence, filter=batchFilter.value
   loading.value = true;historyError.value=''
   try {
-    const res = await axios.get('/api/experiments/history/runs')
+    const res = await axios.get('/api/experiments/history/runs', { params: filter ? { batch_id: filter } : {} })
     let data=res.data
     if(filter){
       const {data:batch}=await axios.get(`/api/guided/${encodeURIComponent(filter)}`)
@@ -704,6 +706,22 @@ async function loadRuns() {
   } finally {
     if(sequence===historySequence)loading.value = false
   }
+}
+
+async function deleteBatch(batchId: string) {
+  try {
+    await ElMessageBox.confirm('将删除本批全部预充、实验组、样品记录、参数快照和图表；实验自动化中的对应批次也会删除。此操作不可恢复。', '删除整批实验', { type: 'warning', confirmButtonText: '删除整批', cancelButtonText: '取消' })
+  } catch { return }
+  deleting.value = true
+  try {
+    await axios.delete(`/api/guided/${encodeURIComponent(batchId)}`)
+    selectedRuns.value = []
+    detailVisible.value = false
+    ElMessage.success('整批实验已从两处历史删除')
+    if (batchFilter.value === batchId) await router.replace('/history')
+    else await loadRuns()
+  } catch (e: any) { ElMessage.error(e.response?.data?.detail || '整批删除失败，请刷新后重试') }
+  finally { deleting.value = false }
 }
 
 async function showDetail(row: RunData) {
@@ -839,7 +857,7 @@ async function deleteAll() {
   if (deleting.value) return
   try {
     await ElMessageBox.confirm(
-      '确定要清空所有实验历史记录吗？此操作不可恢复！',
+      '确定要清空所有实验历史及实验自动化中的批次档案、样品记录、参数快照和图表吗？此操作不可恢复！',
       '确认清空',
       { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' },
     )
