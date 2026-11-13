@@ -6,6 +6,7 @@ import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
 import * as confirmations from '../../src/composables/pendingConfirmation'
+import * as collection from '../../src/experiment/guidedCollection'
 
 const require = createRequire(import.meta.url)
 export { vue }
@@ -38,6 +39,7 @@ export function view(file: string, overrides: Record<string, any> = {}, globals:
     'vue-router': { useRoute: () => ({ query: {} }), useRouter: () => ({ push() {}, replace() {} }), onBeforeRouteLeave() {}, onBeforeRouteUpdate() {} },
     'element-plus': { ElMessage: notify, ElMessageBox: { confirm: async () => {}, prompt: async () => ({ value: '' }) } },
     '../composables/pendingConfirmation': confirmations,
+    '../experiment/guidedCollection': collection,
     axios: {}, ...overrides,
   }
   const source = readFileSync(new URL('../../src/' + file, import.meta.url), 'utf8')

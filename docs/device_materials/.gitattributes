@@ -1,2 +1,3 @@
-# Preserve the archived design document byte-for-byte, including CRLF endings.
+# Preserve original and archived design documents byte-for-byte.
 designs/turntable/自动换瓶托盘与支架设计草案.html -text -diff
+collection/archive/designs/自动换瓶托盘与支架设计草案.html -text -diff

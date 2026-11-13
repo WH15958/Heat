@@ -1,5 +1,13 @@
 # Heat 开发者指南
 
+## 审查修复说明（2026-11-13）
+
+`RelayValveDevice.set_energized` 在既有同步设备锁内先用0x03读取通道1模式寄存器0x0096，仅接受0，再执行原0x06写0x0000与读回确认。新增内部可选`before_write`回调，由DeviceManager复查全局停止代次与实验停止意图；在只读模式查询完成后、命令写入前再次核对。无自动模式写入、额外轮询线程或运动重试，REST及YAML参数不变。依据为中盛V3.0手册PDF第15、18页；现场完整型号、模式与通讯检测参数仍待验收。
+
+总历史单条删除复用引导、普通YAML及微波托管恢复检查；清空全部补普通YAML/微波恢复检查。仍由`_source_lock`协调，未改接口路径或返回结构。摘要缓存使用前检查对象结构、run_id与文件名关联、metadata类型，失败回退原始日志；不能用损坏派生缓存隐藏可读历史。
+
+本轮软件检查使用现有`C:/Users/Administrator/miniconda3/envs/heat/python.exe`，默认终端Python缺uvicorn/Pillow，不能把其桌面导入失败认定为产品故障。前端隔离构建：`npm run build -- --mode production --outDir ../output/review-20261113/frontend-dist`，不覆盖在用静态资源。详情见[审查报告](project_review_20261113.md)。
+
 ## 四圈搭建式与历史接口更新（2026-11-12）
 
 `RecipeCollection`复用`GuidedCollection`双轴协调，执行器按`collection_axis`选择；解析器和编辑器共享`collection_capacity`，平台不作为独立配方接样设备。每段运动检查液路，双轴占用、停止代次、目标读回和释放沿用原协调层；STOP后显式回起始瓶重新建立本次基准。驱动不变，正常结束只确认静止并释放。本段取代下文四圈YAML未开放的旧边界。

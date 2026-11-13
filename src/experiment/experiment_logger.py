@@ -462,7 +462,9 @@ def _run_summary(filepath):
     cache = filepath.parent / "summaries" / filepath.name
     try:
         saved = json.loads(cache.read_text(encoding="utf-8"))
-        if saved["identity"] == identity:
+        if (saved["identity"] == identity and isinstance(saved["summary"], dict)
+                and saved["summary"].get("run_id") == _run_id_from_log_path(filepath)
+                and isinstance(saved["summary"].get("metadata"), dict)):
             return saved["summary"]
     except (OSError, ValueError, KeyError, TypeError):
         pass

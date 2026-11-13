@@ -106,3 +106,42 @@ def test_api_batch_filter_includes_legacy_linked_runs(batch_files):
     path.write_text(json.dumps(data), encoding='utf-8')
     result = asyncio.run(experiments.get_history_runs(batch_id))
     assert len(result) == 2 and all('sensor_data' not in run for run in result)
+
+
+@pytest.mark.parametrize('summary', [None, [], {'run_id': 'wrong', 'metadata': {}},
+                                    {'run_id': '20261112_100000_aaaaaa', 'metadata': None}])
+def test_invalid_summary_cache_falls_back_to_source(tmp_path, monkeypatch, summary):
+    monkeypatch.setattr(logs, 'LOGS_DIR', tmp_path)
+    path = write_run(tmp_path, '20261112_100000_aaaaaa', 'one')
+    expected = logs.list_experiment_runs(summary=True)
+    cache = tmp_path / 'summaries' / path.name
+    saved = json.loads(cache.read_text(encoding='utf-8'))
+    saved['summary'] = summary
+    cache.write_text(json.dumps(saved), encoding='utf-8')
+    assert logs.list_experiment_runs(summary=True) == expected
+
+
+def test_single_run_delete_preserves_recovery_batch(batch_files, monkeypatch):
+    from src.web.api import experiments
+    monkeypatch.setattr(experiments, '_engines', {})
+    _, path, record = batch_files
+    record['recovery_required'] = True
+    path.write_text(json.dumps(record), encoding='utf-8')
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(experiments.delete_history_run(record['priming']['run_id']))
+    assert error.value.status_code == 409
+    assert len(logs.list_experiment_runs()) == 2
+
+
+@pytest.mark.parametrize('clear_all', [False, True])
+def test_history_delete_preserves_yaml_recovery(batch_files, monkeypatch, clear_all):
+    from src.web.api import experiments
+    from src.experiment import yaml_recovery
+    monkeypatch.setattr(experiments, '_engines', {})
+    yaml_recovery.write_record(yaml_recovery.new_record('test.yaml', 'source'))
+    operation = (experiments.delete_all_history_runs() if clear_all else
+                 experiments.delete_history_run(batch_files[2]['priming']['run_id']))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(operation)
+    assert error.value.status_code == 409
+    assert len(logs.list_experiment_runs()) == 2

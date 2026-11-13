@@ -79,7 +79,7 @@ class RelayValveDevice(BaseDevice):
             })
             return self._last_data
 
-    def set_energized(self, energized):
+    def set_energized(self, energized, *, before_write=None):
         if type(energized) is not bool:
             raise ValueError("energized 必须为布尔值")
         with self._lock:
@@ -87,6 +87,13 @@ class RelayValveDevice(BaseDevice):
                 raise IOError("阀门未连接")
             self.read_ok = False
             self.relay_energized = None
+            # V3.0 table 2.4: 0/1 are absolute off/on only in normal mode.
+            # Never change the installed module's mode as a side effect of switching.
+            if self._protocol.read_holding_registers(1, 0x96, 1) != [0]:
+                self.status = DeviceStatus.ERROR
+                raise IOError("继电器普通工作模式未确认，禁止切换；请现场核对通道1模式")
+            if before_write is not None:
+                before_write()
             # Never retry a write after a timeout; the relay may already have switched.
             if not self._protocol.write_single_register(1, 0, int(energized)):
                 self.status = DeviceStatus.ERROR

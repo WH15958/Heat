@@ -441,6 +441,10 @@ async def delete_history_run(run_id: str):
     async with _source_lock:
         if _get_active_engine()[1] is not None:
             raise HTTPException(409, "实验运行或清理期间不能删除历史记录")
+        from src.web.api.guided import require_guided_recovered
+        from src.web.api.microwave_program import require_recovered
+        require_guided_recovered()
+        require_recovered()
         try:
             success = await asyncio.to_thread(delete_experiment_run, run_id)
         except OSError as exc:
@@ -456,6 +460,8 @@ async def delete_all_history_runs():
     async with _source_lock:
         if _get_active_engine()[1] is not None:
             raise HTTPException(409, "实验运行或清理期间不能清空历史记录")
+        from src.web.api.microwave_program import require_recovered
+        require_recovered()
         batches = await asyncio.to_thread(records)
         if any(r.get("recovery_required") or r.get("cleanup_required") for r in batches):
             raise HTTPException(409, "存在待现场恢复的批次，不能清空历史记录")

@@ -67,8 +67,8 @@
 | [.trae/skills/word-reader/SKILL.md](../.trae/skills/word-reader/SKILL.md) | 已核对 | 通用Word提取示例与依赖说明保留；本次DOC采用只读复合文档提取，未启动Word或宏。 |
 | [.trae/skills/dll-analyzer/SKILL.md](../.trae/skills/dll-analyzer/SKILL.md) | 已核对 | 通用DLL诊断示例保留；并非Heat运行依赖，不执行附带EXE或加载厂家组件。 |
 | [.trae/skills/pdf-reader/SKILL.md](../.trae/skills/pdf-reader/SKILL.md) | 已核对 | 通用PDF读取示例保留；本次用已提供运行时pypdf及Poppler，不把扫描件空文本当内容缺失。 |
-| [docs/device_materials/微波反应仪通信协议.md](device_materials/%E5%BE%AE%E6%B3%A2%E5%8F%8D%E5%BA%94%E4%BB%AA%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.md) | 已核对 | 核对转换稿性质与关键地址入口；原XLSX缺失，保留原转换表，不由代码反造厂家依据。 |
-| [docs/device_materials/多通道蠕动泵MODBUS通信协议.md](device_materials/%E5%A4%9A%E9%80%9A%E9%81%93%E8%A0%95%E5%8A%A8%E6%B3%B5MODBUS%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.md) | 已核对 | 对照原DOC和既有差异记录；19200/n003与原件不同，正文保留，在索引显式说明。 |
+| [docs/device_materials/microwave/微波反应仪通信协议.md](device_materials/microwave/%E5%BE%AE%E6%B3%A2%E5%8F%8D%E5%BA%94%E4%BB%AA%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.md) | 已核对 | 核对转换稿性质与关键地址入口；原XLSX缺失，保留原转换表，不由代码反造厂家依据。 |
+| [docs/device_materials/peristaltic_pump/多通道蠕动泵MODBUS通信协议.md](device_materials/peristaltic_pump/%E5%A4%9A%E9%80%9A%E9%81%93%E8%A0%95%E5%8A%A8%E6%B3%B5MODBUS%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.md) | 已核对 | 对照原DOC和既有差异记录；19200/n003与原件不同，正文保留，在索引显式说明。 |
 | [.trae/skills/convert-to-md/SKILL.md](../.trae/skills/convert-to-md/SKILL.md) | 已核对 | 通用转换规则保留，非厂家资料权威来源；本次不覆盖原件或批量生成转换稿。 |
 | [.trae/skills/find-skill/SKILL.md](../.trae/skills/find-skill/SKILL.md) | 已核对 | 通用技能检索/安装说明保留；本次无安装或更新技能需求，外部排行数值不作为本次核验事实。 |
 | [docs/archive/dev_tasks/microwave/06_docs_and_smoke_test.md](archive/dev_tasks/microwave/06_docs_and_smoke_test.md) | 历史保留 | 历史微波接入任务；检查归档声明、输入/完成记录与引用，旧控制闸、阶段性范围及测试数字保留；当前操作以活动指南为准。 |
@@ -84,7 +84,7 @@
 | [.trae/rules/heat.md](../.trae/rules/heat.md) | 已核对 | 兼容入口仍指向AGENTS.md与项目上下文，无第二套硬件/提交规则。 |
 | [frontend/README.md](../frontend/README.md) | 已核对 | 前端指南入口存在；构建契约以 package.json、vite.config.ts 和开发指南为准。 |
 | [docs/device_materials/accessories/README.md](device_materials/accessories/README.md) | 已核对 | 逐条核对用户要求及截图：9个有效编号；ACC-008排除；ACC-006长度不登记；材料、单位、数量层级与适配未知保持。 |
-| [docs/device_materials/accessories/microwave_bottle_fittings.md](device_materials/accessories/microwave_bottle_fittings.md) | 已核对；待现场确认 | 复看瓶体图及配件图；M28×2/M44×1.5不是管接头螺纹，M6候选与φ2.6清单不得合并推定。 |
+| [docs/device_materials/microwave/microwave_bottle_fittings.md](device_materials/microwave/microwave_bottle_fittings.md) | 已核对；待现场确认 | 复看瓶体图及配件图；M28×2/M44×1.5不是管接头螺纹，M6候选与φ2.6清单不得合并推定。 |
 
 ## 4. 原件与资料文件核对
 
@@ -94,24 +94,24 @@
 
 | 文件（相对device_materials） | 可读性 / 用途 | SHA-256 |
 | --- | --- | --- |
-| [20260624-出厂检验报告(4).doc](device_materials/20260624-%E5%87%BA%E5%8E%82%E6%A3%80%E9%AA%8C%E6%8A%A5%E5%91%8A%284%29.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `FE29B842D12871457402B788AE5D829FBFF1EF4D5970A2680DE9B08B2EE3543D` |
-| [3758240252Henyon两位三通电磁阀使用说明书.pdf](device_materials/3758240252Henyon%E4%B8%A4%E4%BD%8D%E4%B8%89%E9%80%9A%E7%94%B5%E7%A3%81%E9%98%80%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf) | PDF，3页；可解析/封面渲染，第3页空白 | `CAF67B04023629B4AA76ADF782AD96AA06E411A9C9C53A31079034A47B0B0E31` |
+| [20260624-出厂检验报告(4).doc](device_materials/microwave/20260624-%E5%87%BA%E5%8E%82%E6%A3%80%E9%AA%8C%E6%8A%A5%E5%91%8A%284%29.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `FE29B842D12871457402B788AE5D829FBFF1EF4D5970A2680DE9B08B2EE3543D` |
+| [3758240252Henyon两位三通电磁阀使用说明书.pdf](device_materials/valve/3758240252Henyon%E4%B8%A4%E4%BD%8D%E4%B8%89%E9%80%9A%E7%94%B5%E7%A3%81%E9%98%80%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf) | PDF，3页；可解析/封面渲染，第3页空白 | `CAF67B04023629B4AA76ADF782AD96AA06E411A9C9C53A31079034A47B0B0E31` |
 | [accessories/images/ACC-002-supplier.png](device_materials/accessories/images/ACC-002-supplier.png) | PNG，可解码，1176×2400 | `BA6719601736CB61ABBA48DF79633D9CF279592E76A4B574EE5E5294FF03FFD5` |
-| [accessories/images/microwave-accessories-list-20261105.png](device_materials/accessories/images/microwave-accessories-list-20261105.png) | PNG，可解码，484×98 | `27999BBEBFA0FF949C7A3C3CC96379787FA7EE36ADC728440C0A74B747EFBE43` |
-| [accessories/images/microwave-ptfe-bottle-section.png](device_materials/accessories/images/microwave-ptfe-bottle-section.png) | PNG，可解码，707×519 | `7FC0CD061FC2756D664F5105C60D436313118F2003931F0E95A8D90E923EB767` |
-| [accessories/images/microwave-ptfe-bottle-volume.png](device_materials/accessories/images/microwave-ptfe-bottle-volume.png) | PNG，可解码，798×448 | `043F5AD3D75B4293B9721241D524AF27E7300B6A89555998C87784AEF6BB1C97` |
-| [CL-01A运动控制器说明书.pdf](device_materials/CL-01A%E8%BF%90%E5%8A%A8%E6%8E%A7%E5%88%B6%E5%99%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf) | PDF，18页；可解析/封面渲染 | `2355866BCFA51D4D02117604C3DD93F831B4A01F8AA185DD76EE7C8A8B05D1FB` |
-| [designs/turntable/自动换瓶托盘与支架设计草案.html](device_materials/designs/turntable/%E8%87%AA%E5%8A%A8%E6%8D%A2%E7%93%B6%E6%89%98%E7%9B%98%E4%B8%8E%E6%94%AF%E6%9E%B6%E8%AE%BE%E8%AE%A1%E8%8D%89%E6%A1%88.html) | 设计草案，8瓶示例不替代当前12瓶配置或加工图 | `7E6DCAD01DB21454B25D7339EECD27E99B535E510E3AE0D0ED0635B7E2862979` |
-| [DS0127-Standard-CN-ZH0127(1).pdf](device_materials/DS0127-Standard-CN-ZH0127%281%29.pdf) | PDF，20页；可解析/封面渲染 | `E78FC05FCD4CC6BF563E8566E912B0974A1C5098EC10A345A2356F2D03DED29B` |
-| [LabSmart说明书（中文）.pdf](device_materials/LabSmart%E8%AF%B4%E6%98%8E%E4%B9%A6%EF%BC%88%E4%B8%AD%E6%96%87%EF%BC%89.pdf) | PDF，32页；可解析/封面渲染 | `4F49B79858DBD57F1935AD0DFDB85ED59666B91AEBC53266261CC6CFD9CFC1C7` |
-| [MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc](device_materials/MKM-AH1E%E7%8E%AF%E5%BD%A2%E8%81%9A%E7%84%A6%E5%8D%95%E6%A8%A1%E5%BE%AE%E6%B3%A2%E5%8C%96%E5%AD%A6%E5%90%88%E6%88%90%E4%BB%AA-%E8%AF%B4%E6%98%8E%E4%B9%A6.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `EF73B9E390CDDDA16263EEF0F68DB8B381F6C88F913AC4CD18B871E9BE6C97A8` |
-| [MSP1-CX用户手册 2025.6.4.pdf](device_materials/MSP1-CX%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C%202025.6.4.pdf) | PDF，42页；可解析/封面渲染 | `6BB9FE4189CD398EBBEF695BC54360BE96DA1A9BE599751EB33EDA94B46FAA5A` |
-| [tools/turntable/1_340芯片+USB转串口线+USB转RS232+USB9针串口+340芯片USB转串口线(2).EXE.exe](device_materials/tools/turntable/1_340%E8%8A%AF%E7%89%87%2BUSB%E8%BD%AC%E4%B8%B2%E5%8F%A3%E7%BA%BF%2BUSB%E8%BD%ACRS232%2BUSB9%E9%92%88%E4%B8%B2%E5%8F%A3%2B340%E8%8A%AF%E7%89%87USB%E8%BD%AC%E4%B8%B2%E5%8F%A3%E7%BA%BF%282%29.EXE.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `5C79A8C123D3FA03274FDCCC8FAD722AAF3B703DF35C39B4B42F0B5BFBB26DFD` |
-| [tools/turntable/CL-01A(串口控制_翼宣).exe](device_materials/tools/turntable/CL-01A%28%E4%B8%B2%E5%8F%A3%E6%8E%A7%E5%88%B6_%E7%BF%BC%E5%AE%A3%29.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `BECAE88567D7237E16733C593ECC587FDA8196B13C8119210A037D56D7638410` |
-| [tools/turntable/CL-01A程序下载助手(翼宣).exe](device_materials/tools/turntable/CL-01A%E7%A8%8B%E5%BA%8F%E4%B8%8B%E8%BD%BD%E5%8A%A9%E6%89%8B%28%E7%BF%BC%E5%AE%A3%29.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `73AD2278CB024C83E2E85375AB91C1912A493D9972FDDB34F6BB78FF6A351210` |
-| [多通道蠕动泵MODBUS通信协议.doc](device_materials/%E5%A4%9A%E9%80%9A%E9%81%93%E8%A0%95%E5%8A%A8%E6%B3%B5MODBUS%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `997CEF5A096DBFA839B3FC68DFD47E300F9D4DE85B2FF7306CF408E67BE89541` |
-| [宇电单回路测量控制仪表通讯协议说明(1).pdf](device_materials/%E5%AE%87%E7%94%B5%E5%8D%95%E5%9B%9E%E8%B7%AF%E6%B5%8B%E9%87%8F%E6%8E%A7%E5%88%B6%E4%BB%AA%E8%A1%A8%E9%80%9A%E8%AE%AF%E5%8D%8F%E8%AE%AE%E8%AF%B4%E6%98%8E%281%29.pdf) | PDF，13页；可解析/封面渲染 | `3C2141652DF4980F3F0042333C9561E5F714AD0F841500C945948594A6573172` |
-| [申辰多通道独立控制 LabSmart.pdf](device_materials/%E7%94%B3%E8%BE%B0%E5%A4%9A%E9%80%9A%E9%81%93%E7%8B%AC%E7%AB%8B%E6%8E%A7%E5%88%B6%20LabSmart.pdf) | PDF，2页；可解析/封面渲染 | `103143DAFB04FD1DCD3F866AD8704484042ECF08D0AF05808B16A80E1F2FDA5F` |
+| [accessories/images/microwave-accessories-list-20261105.png](device_materials/microwave/images/microwave-accessories-list-20261105.png) | PNG，可解码，484×98 | `27999BBEBFA0FF949C7A3C3CC96379787FA7EE36ADC728440C0A74B747EFBE43` |
+| [accessories/images/microwave-ptfe-bottle-section.png](device_materials/microwave/images/microwave-ptfe-bottle-section.png) | PNG，可解码，707×519 | `7FC0CD061FC2756D664F5105C60D436313118F2003931F0E95A8D90E923EB767` |
+| [accessories/images/microwave-ptfe-bottle-volume.png](device_materials/microwave/images/microwave-ptfe-bottle-volume.png) | PNG，可解码，798×448 | `043F5AD3D75B4293B9721241D524AF27E7300B6A89555998C87784AEF6BB1C97` |
+| [CL-01A运动控制器说明书.pdf](device_materials/collection/CL-01A%E8%BF%90%E5%8A%A8%E6%8E%A7%E5%88%B6%E5%99%A8%E8%AF%B4%E6%98%8E%E4%B9%A6.pdf) | PDF，18页；可解析/封面渲染 | `2355866BCFA51D4D02117604C3DD93F831B4A01F8AA185DD76EE7C8A8B05D1FB` |
+| [designs/turntable/自动换瓶托盘与支架设计草案.html](device_materials/collection/archive/designs/%E8%87%AA%E5%8A%A8%E6%8D%A2%E7%93%B6%E6%89%98%E7%9B%98%E4%B8%8E%E6%94%AF%E6%9E%B6%E8%AE%BE%E8%AE%A1%E8%8D%89%E6%A1%88.html) | 设计草案，8瓶示例不替代当前12瓶配置或加工图 | `7E6DCAD01DB21454B25D7339EECD27E99B535E510E3AE0D0ED0635B7E2862979` |
+| [DS0127-Standard-CN-ZH0127(1).pdf](device_materials/valve/archive/DS0127-Standard-CN-ZH0127%281%29.pdf) | PDF，20页；可解析/封面渲染 | `E78FC05FCD4CC6BF563E8566E912B0974A1C5098EC10A345A2356F2D03DED29B` |
+| [LabSmart说明书（中文）.pdf](device_materials/peristaltic_pump/LabSmart%E8%AF%B4%E6%98%8E%E4%B9%A6%EF%BC%88%E4%B8%AD%E6%96%87%EF%BC%89.pdf) | PDF，32页；可解析/封面渲染 | `4F49B79858DBD57F1935AD0DFDB85ED59666B91AEBC53266261CC6CFD9CFC1C7` |
+| [MKM-AH1E环形聚焦单模微波化学合成仪-说明书.doc](device_materials/microwave/MKM-AH1E%E7%8E%AF%E5%BD%A2%E8%81%9A%E7%84%A6%E5%8D%95%E6%A8%A1%E5%BE%AE%E6%B3%A2%E5%8C%96%E5%AD%A6%E5%90%88%E6%88%90%E4%BB%AA-%E8%AF%B4%E6%98%8E%E4%B9%A6.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `EF73B9E390CDDDA16263EEF0F68DB8B381F6C88F913AC4CD18B871E9BE6C97A8` |
+| [MSP1-CX用户手册 2025.6.4.pdf](device_materials/syringe_pump/MSP1-CX%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C%202025.6.4.pdf) | PDF，42页；可解析/封面渲染 | `6BB9FE4189CD398EBBEF695BC54360BE96DA1A9BE599751EB33EDA94B46FAA5A` |
+| [tools/turntable/1_340芯片+USB转串口线+USB转RS232+USB9针串口+340芯片USB转串口线(2).EXE.exe](device_materials/collection/archive/tools/1_340%E8%8A%AF%E7%89%87%2BUSB%E8%BD%AC%E4%B8%B2%E5%8F%A3%E7%BA%BF%2BUSB%E8%BD%ACRS232%2BUSB9%E9%92%88%E4%B8%B2%E5%8F%A3%2B340%E8%8A%AF%E7%89%87USB%E8%BD%AC%E4%B8%B2%E5%8F%A3%E7%BA%BF%282%29.EXE.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `5C79A8C123D3FA03274FDCCC8FAD722AAF3B703DF35C39B4B42F0B5BFBB26DFD` |
+| [tools/turntable/CL-01A(串口控制_翼宣).exe](device_materials/collection/archive/tools/CL-01A%28%E4%B8%B2%E5%8F%A3%E6%8E%A7%E5%88%B6_%E7%BF%BC%E5%AE%A3%29.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `BECAE88567D7237E16733C593ECC587FDA8196B13C8119210A037D56D7638410` |
+| [tools/turntable/CL-01A程序下载助手(翼宣).exe](device_materials/collection/archive/tools/CL-01A%E7%A8%8B%E5%BA%8F%E4%B8%8B%E8%BD%BD%E5%8A%A9%E6%89%8B%28%E7%BF%BC%E5%AE%A3%29.exe) | EXE，副本哈希与MZ头核对；未运行/安装，版本签名未验 | `73AD2278CB024C83E2E85375AB91C1912A493D9972FDDB34F6BB78FF6A351210` |
+| [多通道蠕动泵MODBUS通信协议.doc](device_materials/peristaltic_pump/%E5%A4%9A%E9%80%9A%E9%81%93%E8%A0%95%E5%8A%A8%E6%B3%B5MODBUS%E9%80%9A%E4%BF%A1%E5%8D%8F%E8%AE%AE.doc) | DOC，复合文档及正文可读取；原图结论以查看原图为准 | `997CEF5A096DBFA839B3FC68DFD47E300F9D4DE85B2FF7306CF408E67BE89541` |
+| [宇电单回路测量控制仪表通讯协议说明(1).pdf](device_materials/heaters/%E5%AE%87%E7%94%B5%E5%8D%95%E5%9B%9E%E8%B7%AF%E6%B5%8B%E9%87%8F%E6%8E%A7%E5%88%B6%E4%BB%AA%E8%A1%A8%E9%80%9A%E8%AE%AF%E5%8D%8F%E8%AE%AE%E8%AF%B4%E6%98%8E%281%29.pdf) | PDF，13页；可解析/封面渲染 | `3C2141652DF4980F3F0042333C9561E5F714AD0F841500C945948594A6573172` |
+| [申辰多通道独立控制 LabSmart.pdf](device_materials/peristaltic_pump/%E7%94%B3%E8%BE%B0%E5%A4%9A%E9%80%9A%E9%81%93%E7%8B%AC%E7%AB%8B%E6%8E%A7%E5%88%B6%20LabSmart.pdf) | PDF，2页；可解析/封面渲染 | `103143DAFB04FD1DCD3F866AD8704484042ECF08D0AF05808B16A80E1F2FDA5F` |
 
 图表结论：瓶体M28×2、M44×1.5为瓶体端部螺纹，不是顶部/底部接头规格；图中未给管路接口密封座及瓶体温度—压力额定曲线。商品M6/2.0 mm候选与另一截图φ2.6接头分别登记，不能认定互配。原始三行配件截图保留作来源，第一项继续排除，不恢复ACC-008。用户提供的1 m PTFE管、1个ETFE锁紧锥、1个PEEK接头作为本次需求登记，不推定每台用量；截图3个/3套不是已购或待购数量。蠕动泵氟橡胶软管长度不登记。
 

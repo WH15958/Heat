@@ -116,12 +116,14 @@ class DeviceManager:
             if action in ("switch", "disconnect", "connect") and current_owner is not None and current_owner is not owner:
                 raise RuntimeError("实验正在占用阀门，禁止手动切换或断开")
             if action == "switch":
-                if should_stop is not None and should_stop():
-                    raise RuntimeError("实验已停止，取消阀门切换")
-                with self._lock:
-                    if self._global_stop_depth or generation != self._valve_stop_generations[device_id]:
-                        raise RuntimeError("全局停止中或切换请求已取消")
-                v.set_energized(energized)
+                def before_write():
+                    if should_stop is not None and should_stop():
+                        raise RuntimeError("实验已停止，取消阀门切换")
+                    with self._lock:
+                        if self._global_stop_depth or generation != self._valve_stop_generations[device_id]:
+                            raise RuntimeError("全局停止中或切换请求已取消")
+                before_write()
+                v.set_energized(energized, before_write=before_write)
             elif action == "connect":
                 self._refresh_binding_if_needed(device_id, "Valve", self._valve_bindings[device_id], v)
                 self._require_binding_resolved(device_id, "Valve", self._valve_bindings[device_id])

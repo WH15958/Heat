@@ -17,6 +17,7 @@ class FakeProtocol:
         self.write_ok = True
         self.mismatch = False
         self.writes = []
+        self.mode = [0]
 
     def connect(self):
         self.is_connected = True
@@ -26,6 +27,8 @@ class FakeProtocol:
         self.is_connected = False
 
     def read_holding_registers(self, address, start, count):
+        if (address, start, count) == (1, 0x96, 1):
+            return self.mode
         assert (address, start, count) == (1, 0, 1)
         return None if self.read_failed else [self.value]
 
@@ -96,6 +99,33 @@ class RelayValveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.valve.set_energized('false')
         self.assertEqual(self.protocol.writes, [])
+
+    def test_non_normal_or_unknown_mode_never_switches(self):
+        for mode in ([1], [2], [3], [4], None, [], [65535]):
+            with self.subTest(mode=mode):
+                self.protocol.mode = mode
+                with self.assertRaises(IOError):
+                    self.valve.set_energized(True)
+                self.assertEqual(self.protocol.writes, [])
+                self.assertFalse(self.valve.read_ok)
+                self.assertIsNone(self.valve.relay_energized)
+        self.protocol.mode = [0]
+        self.assertTrue(self.valve.set_energized(True))
+
+    def test_stop_during_mode_read_cancels_pending_write(self):
+        dm = DeviceManager()
+        dm.add_valve(ValveDeviceConfig(), dm._normalize_binding_info(None, 'FAKE'))
+        dm.valve_operation('valve1', 'connect')
+        protocol = dm.valves['valve1']._protocol
+        original = protocol.read_holding_registers
+        def read(address, start, count):
+            if start == 0x96:
+                dm.cancel_valve_operations(['valve1'])
+            return original(address, start, count)
+        protocol.read_holding_registers = read
+        with self.assertRaises(RuntimeError):
+            dm.valve_operation('valve1', 'switch', True)
+        self.assertEqual(protocol.writes, [])
 
     def test_api_validation_and_failure_propagation(self):
         from fastapi import FastAPI

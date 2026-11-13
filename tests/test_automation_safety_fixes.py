@@ -135,7 +135,8 @@ def test_heaters_remain_on_through_reaction_cleaning_and_next_group():
 def test_paused_guided_heaters_stay_on_and_stop_turns_them_off():
     async def scenario():
         dm = FakeManager()
-        batch = guided.GuidedBatch(dm, spec(axes=[[30], [30], [.1], [.2], [60], [0]]))
+        # Stay above the current 100 C collection gate so cooling can be paused.
+        batch = guided.GuidedBatch(dm, spec(axes=[[30], [30], [.1], [.2], [110], [0]]))
         await batch.start()
         await until(lambda: batch.record.get('last_step') == 'cool_before_collection')
         await batch.pause()
