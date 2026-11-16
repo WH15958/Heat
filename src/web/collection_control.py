@@ -109,7 +109,7 @@ class CollectionAxisController(TurntableController):
         try:
             return self.device.read_status()
         except TimeoutError as exc:
-            port = self.device.snapshot.get("connection_port") or self.config.connection.port
+            port = self.binding.resolved_port if self.binding else self.config.connection.port
             error = f"{self.config.device_id} ({port}): {exc}"
             # Include protocol pacing, write budget and final short serial read.
             timeout = self.config.connection.timeout

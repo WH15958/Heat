@@ -1,5 +1,6 @@
 """Paired manual controls tested against fake devices; never open serial ports."""
 import threading
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -103,6 +104,15 @@ def test_guided_motion_status_retry_is_bounded(pair, clock, failure):
     else:
         assert not result['read_ok']
     assert calls == (1 if failure in ('other_error', 'stop', 'deadline') else 2)
+
+
+def test_retry_error_identifies_resolved_port(pair):
+    _, p = pair
+    p.binding = SimpleNamespace(resolved_port='COM99')
+    p.device.reads.extend([TimeoutError('missing reply'), TimeoutError('missing again')])
+    state = p.read(force=True)
+    assert not state['read_ok']
+    assert 'p (COM99)' in state['read_error']
 
 
 def test_configuration_pair_and_legacy_isolation():
