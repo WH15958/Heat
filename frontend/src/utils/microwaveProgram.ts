@@ -7,6 +7,9 @@ export interface MicrowaveSegmentConfig {
   hours: number
   minutes: number
   seconds: number
+  rampHours?: number | null
+  rampMinutes?: number | null
+  rampSeconds?: number | null
 }
 
 export interface MicrowaveProgram {
@@ -35,6 +38,12 @@ export function microwaveProgramPayload(program: MicrowaveProgram): MicrowaveSeg
         || (program.mode === 'manual_power' && (!Number.isInteger(segment.powerPercent) || !inRange(segment.powerPercent, 100)))) {
       throw new Error(`第 ${index + 1} 段参数不合法，请检查温度、功率和时间`)
     }
+    if (program.mode === 'constant_rate' && (
+      ![segment.rampHours, segment.rampMinutes, segment.rampSeconds].every(v => typeof v === 'number' && Number.isInteger(v))
+      || !inRange(segment.rampHours!, 99) || !inRange(segment.rampMinutes!, 59) || !inRange(segment.rampSeconds!, 59)
+      || segment.rampHours! * 3600 + segment.rampMinutes! * 60 + segment.rampSeconds! <= 0)) {
+      throw new Error(`第 ${index + 1} 段请填写有效升温时间（正整数秒）`)
+    }
     return {
       segment: segment.segment,
       heating_temperature: segment.temperature,
@@ -44,9 +53,9 @@ export function microwaveProgramPayload(program: MicrowaveProgram): MicrowaveSeg
       hours: segment.hours,
       minutes: segment.minutes,
       seconds: segment.seconds,
-      ramp_hours: 0,
-      ramp_minutes: 0,
-      ramp_seconds: 0,
+      ramp_hours: program.mode === 'constant_rate' ? segment.rampHours! : 0,
+      ramp_minutes: program.mode === 'constant_rate' ? segment.rampMinutes! : 0,
+      ramp_seconds: program.mode === 'constant_rate' ? segment.rampSeconds! : 0,
       ...(program.mode === 'manual_power' ? {
         heating_power_percent: segment.powerPercent,
         holding_power_percent: segment.powerPercent,
@@ -69,13 +78,13 @@ export function microwaveProgramConfigured(program: MicrowaveProgram): boolean {
 
 export function hostedMicrowavePayload(program: MicrowaveProgram, requestId: string, confirmed = false) {
   const segments = microwaveProgramPayload(program)
-  if (program.mode === 'constant_rate') throw new Error('电脑托管目前支持自动功率和手动功率模式')
   return {
     request_id: requestId, mode: program.mode, hardware_confirmed: confirmed,
     stages: segments.map(s => ({
       temperature: s.heating_temperature,
       hold_seconds: s.hours * 3600 + s.minutes * 60 + s.seconds,
       power_percent: s.heating_power_percent ?? 0,
+      ...(program.mode === 'constant_rate' ? { ramp_seconds: s.ramp_hours! * 3600 + s.ramp_minutes! * 60 + s.ramp_seconds! } : {}),
     })),
   }
 }

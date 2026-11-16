@@ -16,7 +16,7 @@ const source = readFileSync(new URL('../src/views/ControlPanel.vue', import.meta
 const script = compileScript(parse(source).descriptor, { id: 'microwave-control-test' }).content
 const compiled = ts.transpileModule(script, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
-function page() {
+function page(storage = new Map<string, string>()) {
   const calls: any[][] = [], dialogs: string[] = [], errors: string[] = []
   const stopped = { status_confirmed: true, stop_confirmed: true, control_active: false,
     output_active: false, fault_code: 0, power_percent: 0, current: 0 }
@@ -48,7 +48,7 @@ function page() {
     if (!(name in imports)) throw new Error('Unexpected dependency: ' + name)
     return imports[name]
   }, crypto: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) },
-    localStorage: { getItem: () => null, setItem: () => {} } })
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) } })
   const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
   state.applyDeviceData({ microwaves: { microwave1: { connected: true, connection_port: 'FAKE', binding_resolved: true } } })
   const microwave = state.devices.microwaves.microwave1
@@ -180,5 +180,45 @@ test('double click is suppressed and uncertain network start retries the same re
     p.confirmation(async () => {})
     await p.state.startMicrowave('microwave1')
     assert.deepEqual(received, [requestId, requestId])
+  } finally { p.dispose() }
+})
+
+
+test('constant-rate program checks all per-stage ramps and invalidates stale confirmation',async()=>{
+ const p=page()
+ try{
+  p.microwave.mode='constant_rate'
+  assert.equal(p.microwave.segments[1].rampMinutes,null)
+  await p.state.configureMicrowave('microwave1');assert.equal(p.calls.length,0)
+  for(const s of Object.values(p.microwave.segments) as any[])Object.assign(s,{rampHours:0,rampMinutes:s.segment,rampSeconds:0})
+  await p.state.configureMicrowave('microwave1')
+  assert.equal(p.calls[0][2].mode,'constant_rate')
+  assert.deepEqual(Array.from(p.calls[0][2].stages,(s:any)=>s.ramp_seconds),[60,120])
+  p.microwave.segments[2].rampMinutes=3
+  assert.equal(program.microwaveProgramConfigured(p.microwave),false)
+  await p.state.startMicrowave('microwave1');assert.equal(p.calls.length,1)
+  await p.state.configureMicrowave('microwave1');await p.state.startMicrowave('microwave1')
+  assert.equal(p.calls.at(-1)[0],'start');assert.equal(p.calls.at(-1)[2].stages[1].ramp_seconds,180)
+ }finally{p.dispose()}
+})
+
+
+test('saved constant-rate mode and ramp restore without restoring checks or starting hardware', async () => {
+  const storage = new Map<string, string>(), p = page(storage)
+  try {
+    p.microwave.mode = 'constant_rate'
+    Object.assign(p.microwave.segments[1], { rampHours: 0, rampMinutes: 2, rampSeconds: 30 })
+    p.state.saveParams()
+    const q = page(storage)
+    try {
+      q.state.restoreParams()
+      assert.equal(q.microwave.mode, 'constant_rate')
+      assert.equal(q.microwave.segments[1].rampHours, 0)
+      assert.equal(q.microwave.segments[1].rampMinutes, 2)
+      assert.equal(q.microwave.segments[1].rampSeconds, 30)
+      assert.equal(program.microwaveProgramConfigured(q.microwave), false)
+      await q.state.startMicrowave('microwave1')
+      assert.equal(q.calls.length, 0)
+    } finally { q.dispose() }
   } finally { p.dispose() }
 })

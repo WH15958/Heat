@@ -65,10 +65,11 @@ function page(fill = true, fresh = false, storage = new Map<string,string>()) {
   const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
   state.registry.value = { heaters: { heater1: {}, heater2: {} }, syringe_pumps: { syringe_pump1: {}, syringe_pump2: {} }, microwaves: { microwave1: {} }, pumps: { pump1: {} }, valves: { valve1: {} }, turntables: { turntable1: {configured:true,enabled:true,bottle_count:12,pulses_per_bottle:12000,home_enabled:true,position_encoding_verified:true} } }
   if(fill) {
+    state.microwaveMode.value='auto_power'
     state.experimentName.value='测试实验'
     state.primeHeatMinutes.value=0
     state.turntableDripSeconds.value=5
-    state.axes.value.forEach((a:any,i:number)=>{a.start=[30,30,0.1,0.1,30,1][i]})
+    state.axes.value.forEach((a:any,i:number)=>{a.start=[30,30,0.1,0.1,30,1][i]??null})
     state.speedA.value=state.speedB.value=100
     state.repeats.value=1
     state.fixed.value.forEach((s:any)=>{s.value=['productTime','cleanTime'].includes(s.key)?60:1})
@@ -303,6 +304,8 @@ test('blank defaults permit stepwise entry without coercing empty fields to zero
     s.speedA.value=s.speedB.value=100
     s.nextStage();assert.equal(s.stage.value,2)
     s.axes.value[4].start=80;s.axes.value[5].start=0
+    s.nextStage();assert.equal(s.stage.value,2)
+    s.axes.value[6].start=5
     s.nextStage();assert.equal(s.stage.value,3)
     s.fixed.value[0].value=10;s.fixed.value[1].value=60
     s.nextStage();assert.equal(s.stage.value,4)
@@ -765,4 +768,183 @@ test('collection labels preserve old history and show new ring metadata', () => 
  assert.equal(collection.collectionLocationLabel({bottle_number:29,collection_ring:2,ring_bottle_number:1}),'第2圈 · 29 号瓶（圈内1号）')
  assert.equal(collection.collectionLocationLabel({bottle_number:5}),'5 号瓶')
  assert.equal(collection.collectionLocationLabel({}),'未确认')
+})
+
+
+test('constant-rate defaults require a ramp, combine it as axis seven, and preserve it across mode changes',async()=>{
+ const p=page(),s=p.state
+ try{
+  s.microwaveMode.value='constant_rate'
+  assert.equal(s.drainDirection.value,'CCW');assert.equal(s.cleanDirection.value,'CW')
+  assert.equal(s.axes.value[6].start,null)
+  assert.ok(s.fieldIssues(2).some((i:any)=>i.key==='ramp'&&i.stage===2))
+  s.axes.value[4].mode='list';s.axes.value[4].list='60,70'
+  const ramp=s.axes.value[6];ramp.mode='range';ramp.start=2;ramp.end=3;ramp.interval=1
+  s.repeats.value=2
+  assert.deepEqual(JSON.parse(JSON.stringify(s.plan.value.rows.map((r:number[])=>[r[4],r[6]]))),[[60,2],[60,2],[60,3],[60,3],[70,2],[70,2],[70,3],[70,3]])
+  assert.equal(s.requestBody.value.axes.length,7)
+  await vue.nextTick();p.ready();ramp.end=4;await vue.nextTick()
+  assert.equal(s.validatedKey.value,'');assert.equal(s.bottlesConfirmed.value,false)
+  s.microwaveMode.value='auto_power'
+  assert.equal(s.requestBody.value.axes.length,6);assert.equal(s.plan.value.rows.length,4)
+  s.microwaveMode.value='constant_rate'
+  assert.equal(ramp.end,4);assert.equal(s.plan.value.rows.length,12)
+  ramp.end=5
+  assert.match(s.plan.value.error,/最多/)
+  ramp.mode='fixed'
+  for(const v of [null,'',0,-1,0.001,6000]){ramp.start=v;assert.ok(s.fieldIssues(2).some((i:any)=>i.key==='ramp'))}
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
+})
+
+test('new/reset uses constant rate and CCW while v1 drafts retain auto power and enter with CCW',async()=>{
+ const storage=new Map<string,string>(),p=page(false,true,storage),s=p.state
+ try{
+  assert.equal(s.microwaveMode.value,'constant_rate');assert.equal(s.drainDirection.value,'CCW')
+  s.saveDraft()
+  const old=JSON.parse(storage.get('heat.guided-draft.v1')!)
+  old.version=1;delete old.microwaveMode;old.axes=old.axes.slice(0,6);old.drainDirection='CW'
+  storage.set('heat.guided-draft.v1',JSON.stringify(old))
+  const q=page(false,true,storage)
+  try{
+   q.state.restoreDraft()
+   assert.equal(q.state.microwaveMode.value,'auto_power');assert.equal(q.state.drainDirection.value,'CCW')
+   assert.equal(q.state.axes.value[6].start,null)
+   q.state.batch.value={state:'completed'};q.state.returnToSetup()
+   assert.equal(q.state.microwaveMode.value,'constant_rate');assert.equal(q.state.drainDirection.value,'CCW')
+  }finally{q.dispose()}
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
+})
+
+test('constant-rate drafts and history retain ramp conditions but never execution confirmations',async()=>{
+ const storage=new Map<string,string>(),p=page(true,true,storage),s=p.state
+ try{
+  s.microwaveMode.value='constant_rate';s.axes.value[6].mode='list';s.axes.value[6].list='2,3'
+  await vue.nextTick();p.ready();s.saveDraft()
+  const q=page(false,true,storage)
+  try{q.state.restoreDraft();assert.equal(q.state.microwaveMode.value,'constant_rate');assert.equal(q.state.axes.value[6].list,'2,3');assert.equal(q.state.validatedKey.value,'');assert.equal(q.state.bottlesConfirmed.value,false)}finally{q.dispose()}
+  const request=JSON.parse(s.requestKey.value)
+  const draft=history.guidedHistoryDraft(request,'恒速率历史')
+  assert.equal(draft.request.microwave_mode,'constant_rate');assert.equal(draft.request.axes.length,7)
+  storage.set('heat.guided-draft.v1',JSON.stringify(draft))
+  const r=page(false,true,storage)
+  try{r.state.restoreDraft();assert.equal(r.state.microwaveMode.value,'constant_rate');assert.equal(r.state.plan.value.rows.length,2);assert.equal(r.state.drainDirection.value,'CCW')}finally{r.dispose()}
+  const groups=history.guidedHistoryGroups({total_groups:2,request},null)
+  assert.deepEqual(groups.map(g=>g.parameters?.[6]),[2,3]);assert.ok(groups.every(g=>g.microwave_mode==='constant_rate'))
+ }finally{p.dispose()}
+})
+
+
+test('manual power is required, combines as axis seven, and preserves independent mode drafts',async()=>{
+ const p=page(),s=p.state
+ try{
+  s.microwaveMode.value='manual_power'
+  assert.equal(s.activeAxes.value[6].key,'power')
+  assert.ok(s.fieldIssues(2).some((i:any)=>i.key==='power'))
+  const power=s.axes.value[7]
+  for(const value of [null,'',-1,100.1,101,NaN]){power.start=value;assert.ok(s.fieldIssues(2).some((i:any)=>i.key==='power'));assert.equal(s.plan.value.rows.length,0)}
+  for(const value of [0,100]){power.start=value;assert.equal(s.fieldIssues(2).length,0)}
+  power.mode='range';power.start=40;power.end=70;power.interval=30
+  s.axes.value[4].mode='list';s.axes.value[4].list='60,70';s.repeats.value=2
+  assert.equal(s.plan.value.rows.length,8)
+  assert.deepEqual(Array.from(s.plan.value.rows,(r:any)=>[r[4],r[6]]),[[60,40],[60,40],[60,70],[60,70],[70,40],[70,40],[70,70],[70,70]])
+  assert.equal(s.requestBody.value.axes.length,7);assert.equal(s.requestBody.value.microwave_mode,'manual_power')
+  await vue.nextTick();p.ready();power.end=100;await vue.nextTick()
+  assert.equal(s.validatedKey.value,'');assert.equal(s.primingConfirmed.value,false);assert.equal(s.bottlesConfirmed.value,false)
+  power.end=101;power.interval=1;assert.match(s.plan.value.error,/最多|超过/)
+  power.mode='list';power.list='40,70'
+  s.microwaveMode.value='constant_rate';s.axes.value[6].start=2
+  assert.equal(s.activeAxes.value[6].key,'ramp');assert.equal(s.requestBody.value.axes[6][0],2)
+  s.microwaveMode.value='auto_power';assert.equal(s.requestBody.value.axes.length,6)
+  s.microwaveMode.value='manual_power';assert.equal(power.list,'40,70');assert.equal(s.axes.value[6].start,2)
+  assert.equal(s.microwaveModeLabel('manual_power'),'手动功率')
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
+})
+
+test('manual power drafts and history restore power instead of interpreting it as ramp minutes',async()=>{
+ const storage=new Map<string,string>(),p=page(true,true,storage),s=p.state
+ try{
+  s.microwaveMode.value='manual_power';s.axes.value[7].mode='list';s.axes.value[7].list='40,70';s.axes.value[6].start=2
+  s.drainDirection.value='CW';await vue.nextTick();p.ready();s.saveDraft()
+  assert.equal(JSON.parse(storage.get('heat.guided-draft.v1')!).version,3)
+  const q=page(false,true,storage)
+  try{q.state.restoreDraft();assert.equal(q.state.microwaveMode.value,'manual_power');assert.equal(q.state.axes.value[7].list,'40,70');assert.equal(q.state.axes.value[6].start,2);assert.equal(q.state.validatedKey.value,'');assert.equal(q.state.bottlesConfirmed.value,false)}finally{q.dispose()}
+  const request=JSON.parse(s.requestKey.value)
+  const draft=history.guidedHistoryDraft(request,'手动功率历史')
+  storage.set('heat.guided-draft.v1',JSON.stringify(draft))
+  const r=page(false,true,storage)
+  try{
+   r.state.restoreDraft();assert.equal(r.state.microwaveMode.value,'manual_power');assert.equal(r.state.axes.value[6].start,null)
+   assert.equal(r.state.axes.value[7].list,'40,70');assert.equal(r.state.plan.value.rows.length,2);assert.equal(r.state.drainDirection.value,'CCW')
+  }finally{r.dispose()}
+  const groups=history.guidedHistoryGroups({total_groups:2,request},null)
+  assert.deepEqual(groups.map(g=>g.parameters?.[6]),[40,70]);assert.ok(groups.every(g=>g.microwave_mode==='manual_power'))
+ }finally{p.dispose()}
+})
+
+test('entering v2 draft defaults to CCW without losing other values; direction changes invalidate validation',async()=>{
+ const storage=new Map<string,string>(),p=page(true,true,storage)
+ try{
+  p.state.microwaveMode.value='constant_rate';p.state.axes.value[6].start=2;p.state.drainDirection.value='CW'
+  await vue.nextTick();p.state.saveDraft()
+  const old=JSON.parse(storage.get('heat.guided-draft.v1')!);old.version=2;old.axes=old.axes.slice(0,7)
+  storage.set('heat.guided-draft.v1',JSON.stringify(old))
+  const q=page(false,true,storage),s=q.state
+  try{
+   s.restoreDraft();await vue.nextTick();assert.equal(s.microwaveMode.value,'constant_rate');assert.equal(s.axes.value[7].start,null)
+   assert.equal(s.drainDirection.value,'CCW')
+   q.ready();s.drainDirection.value='CW';await vue.nextTick()
+   assert.equal(s.validatedKey.value,'');assert.equal(s.primingConfirmed.value,false)
+   s.drainDirection.value='CCW';await vue.nextTick()
+   assert.equal(s.drainDirection.value,'CCW');assert.equal(s.requestBody.value.drain_direction,'CCW')
+   assert.equal(s.cleanDirection.value,'CW');assert.equal(s.axes.value[6].start,2);assert.equal(s.experimentName.value,'测试实验')
+   assert.equal(s.validatedKey.value,'');assert.equal(s.primingConfirmed.value,false);assert.equal(s.bottlesConfirmed.value,false)
+   assert.equal(q.calls.length,0)
+  }finally{q.dispose()}
+ }finally{p.dispose()}
+})
+
+
+test('reactive render survives switching from complete axes to blank manual power or ramp',async()=>{
+ const p=page(),s=p.state
+ let stop=()=>{}
+ try{
+  s.stage.value=2
+  const renderKeys:string[]=[]
+  stop=vue.watchEffect(()=>{renderKeys.push(s.requestKey.value);void s.plan.value.error})
+  await vue.nextTick()
+  assert.notEqual(renderKeys.at(-1),'')
+  for(const [mode,index] of [['manual_power',7],['constant_rate',6]] as const){
+   s.microwaveMode.value=mode
+   await vue.nextTick()
+   assert.equal(renderKeys.at(-1),'')
+   s.axes.value[index].start=mode==='manual_power'?70:2
+   await vue.nextTick()
+   assert.notEqual(renderKeys.at(-1),'')
+   s.axes.value[index].mode='list';s.axes.value[index].list=''
+   await vue.nextTick()
+   assert.equal(renderKeys.at(-1),'')
+   s.axes.value[index].list=mode==='manual_power'?'40,70':'2,3'
+   await vue.nextTick()
+   assert.notEqual(renderKeys.at(-1),'')
+  }
+  assert.equal(p.calls.length,0)
+ }finally{stop();p.dispose()}
+})
+
+
+test('saved batch direction is displayed faithfully but reuse enters a new form with CCW',async()=>{
+ const p=page(),s=p.state
+ try{
+  const request=JSON.parse(s.requestKey.value);request.drain_direction='CW'
+  s.restoreParameters(request)
+  assert.equal(s.drainDirection.value,'CW')
+  s.batch.value={state:'completed',request};s.returnToSetup(true)
+  assert.equal(s.drainDirection.value,'CCW');assert.equal(s.batch.value.request.drain_direction,'CW')
+  assert.equal(s.cleanDirection.value,'CW')
+  assert.equal(s.requestBody.value.drain_direction,'CCW')
+  assert.equal(p.calls.length,0)
+ }finally{p.dispose()}
 })

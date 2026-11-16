@@ -4,6 +4,14 @@ export interface Variable { key: string; label: string; paths: Path[]; value: nu
 export interface Axis extends Variable { mode: 'fixed' | 'range' | 'list'; start: number; end: number; interval: number; list: string }
 export const MAX_RUNS = 200
 
+export function microwaveRampSeconds(minutes: number): number {
+  const seconds = minutes * 60
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 359999 || Math.abs(seconds - Math.round(seconds)) > 1e-9) {
+    throw new Error('升温时间须为正数、能转换为整秒，且不超过99小时59分59秒')
+  }
+  return Math.round(seconds)
+}
+
 export function microwaveHoldSeconds(minutes: number): number {
   const seconds = minutes * 60
   if (!Number.isFinite(seconds) || minutes < 0 || minutes > 1440 || Math.abs(seconds - Math.round(seconds)) > 1e-9) {
@@ -72,4 +80,9 @@ export function generateSource(source: string, axes: Axis[], values: number[], b
     doc.deleteIn(['metadata', 'sample_id'])
     doc.set('name', `${doc.get('name') || '实验'} · ${batch} / ${index + 1}`)
   })
+}
+
+export function microwavePowerPercent(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error('手动功率须为0–100的整数百分比')
+  return value
 }

@@ -1227,6 +1227,12 @@ class StepExecutor:
             if not _is_nonnegative_finite_number(stable_required):
                 self._last_error = "微波连续稳定时间必须为非负数"
                 return False
+            minimum_seconds = condition.minimum_seconds
+            if (not _is_nonnegative_finite_number(minimum_seconds)
+                    or minimum_seconds != round(minimum_seconds)
+                    or (minimum_seconds and (cooling or minimum_seconds + stable_required > condition.timeout))):
+                self._last_error = "微波最短升温时间须为非负整秒，且升温加稳定时间不超过到温超时"
+                return False
             budget_getter = getattr(self._dm, "microwave_read_budget", None)
             budget = budget_getter(condition.device_id) if callable(budget_getter) else 7.0
             if not _is_nonnegative_finite_number(budget) or budget <= 0:
@@ -1281,7 +1287,7 @@ class StepExecutor:
                         return False
                     if self._should_stop():
                         return False
-                    if stable_required and (read_duration > budget or
+                    if (stable_required or minimum_seconds) and (read_duration > budget or
                             (previous_sample is not None and sampled - previous_sample > budget)):
                         self._last_error = f"微波稳定到温状态超过通讯预算 {budget:g} 秒"
                         return False
@@ -1316,7 +1322,7 @@ class StepExecutor:
                         if material_temperature <= target_temperature:
                             logger.info(f"Cooling complete: {material_temperature}C <= {target_temperature}C")
                             return True
-                    if not cooling and material_temperature is not None and abs(
+                    if not cooling and sampled - start_time >= minimum_seconds and material_temperature is not None and abs(
                         float(material_temperature) - float(target_temperature)
                     ) <= condition.tolerance:
                         if stable_since is None:

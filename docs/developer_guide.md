@@ -349,11 +349,11 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - 绑定刷新：`POST /api/devices/refresh_bindings` 会重新运行串口解析并更新已注册设备实例的最终端口；控制页发现“未匹配”时会自动调用一次，用于处理设备晚于后端启动才被 Windows 枚举出来的情况。
 - API：`/api/microwave/{device_id}/connect`、`disconnect`、`data`、`configure/manual`、`configure/auto_power`、`configure/constant_rate`、`start`、`stop` 只桥接到同步 `DeviceManager` 方法，返回 `False` 时不能包装成成功。配置请求必须包含 1-5 段，数值字段拒绝布尔值；请求体仍兼容 `confirm_real_hardware_write` 字段，但后端不再把它作为拒绝条件。
 
-手动页默认 1 个逻辑段，可添加至 5 段，只能移除末段。草稿段数不持久化，页面刷新恢复 1 段并只读恢复后端托管进度。`hostedMicrowavePayload` 校验所有使用段并转换时分秒为保温整秒；只支持 `auto_power` / `manual_power`。`configuredProgramKey` 是当前会话的预检查证据，模式、使用段参数、段数或连接变化即失效；迟到的校验响应不能恢复失效证据。预检查不访问硬件，启动后消费证据；网络重试沿用 `request_id` 防重放，重新检查产生新标识。
+手动页默认 1 个逻辑段，可添加至 5 段，只能移除末段。草稿段数不持久化，页面刷新恢复 1 段并只读恢复后端托管进度。`hostedMicrowavePayload` 校验所有使用段并转换时分秒为保温整秒；支持 `auto_power` / `manual_power` / `constant_rate`；恒速率每段另填升温时间。`configuredProgramKey` 是当前会话的预检查证据，模式、使用段参数、段数或连接变化即失效；迟到的校验响应不能恢复失效证据。预检查不访问硬件，启动后消费证据；网络重试沿用 `request_id` 防重放，重新检查产生新标识。
 
-电脑托管 API 前缀为 `/api/microwave-program/{device_id}`：`POST /preview` 仅编译校验；`POST /start` 接收 `request_id`（32位小写十六进制）、`mode`、`stages`（1–5个 `{temperature, hold_seconds, power_percent}`）、可选 `heating_timeout`（默认600，1–3600秒）及显式 `hardware_confirmed=true`；`GET /current` 返回状态、逻辑段、阶段、错误和恢复/清理锁；`POST /stop` 停止本服务中的执行；`POST /acknowledge-interrupted` 要求 `{devices_stopped_confirmed: true}`，只解除现场确认后的锁，不重放。重复标识和相同请求返回原记录，参数不同返回409；旧标识即使完成、停止或解除锁定也不能再次执行。连接、有限非负温度、无故障、控制位清除和输出停止均需后端只读检查，不自动连接。
+电脑托管 API 前缀为 `/api/microwave-program/{device_id}`：`POST /preview` 仅编译校验；`POST /start` 接收 `request_id`（32位小写十六进制）、`mode`、`stages`（1–5个 `{temperature, hold_seconds, power_percent, ramp_seconds?}`）、可选 `heating_timeout`（默认600，1–3600秒）及显式 `hardware_confirmed=true`；`GET /current` 返回状态、逻辑段、阶段、错误和恢复/清理锁；`POST /stop` 停止本服务中的执行；`POST /acknowledge-interrupted` 要求 `{devices_stopped_confirmed: true}`，只解除现场确认后的锁，不重放。重复标识和相同请求返回原记录，参数不同返回409；旧标识即使完成、停止或解除锁定也不能再次执行。连接、有限非负温度、无故障、控制位清除和输出停止均需后端只读检查，不自动连接。
 
-`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段编译 configure/start/monitored_hold/stop 四步，start 的到温等待要求目标±5℃连续稳定15秒，之后按设定时长普通计时保温。稳定期间越界或实际暂停重置稳定窗口；计时保温期间温度偏离仅提示记录，不冻结或清零计时。确认停止后切换下一目标。五个硬件段为同一目标及 `ceil(heating_timeout) + hold_seconds + 60` 秒保护时长，连续稳定包含在 heating_timeout 内，最大99时59分59秒，超出则写入前拒绝。启动后复核本次已知参数块，读回一致不能证明未公开的运行方案。段间停机，方案映射及计时重置仍须实机验收；原始REST/YAML不自动改用此计时策略。
+`src/experiment/microwave_program.py` 使用既有 `ExperimentEngine`、`StepExecutor` 和运行日志：每个逻辑段编译 configure/start/monitored_hold/stop 四步，start 的到温等待要求目标±5℃连续稳定15秒，之后按设定时长普通计时保温。稳定期间越界或实际暂停重置稳定窗口；计时保温期间温度偏离仅提示记录，不冻结或清零计时。确认停止后切换下一目标。五个硬件段为同一目标及 `ramp_seconds + ceil(heating_timeout) + hold_seconds + 60` 秒保护时长（非恒速率的 ramp_seconds 为0），连续稳定包含在 heating_timeout 内，最大99时59分59秒，超出则写入前拒绝。启动后复核本次已知参数块，读回一致不能证明未公开的运行方案。段间停机，方案映射及计时重置仍须实机验收；原始REST/YAML不自动改用此计时策略。
 
 完整程序注册在共享 `_engines`，与普通/引导实验互斥，运行和清理期间保留占用，阻止手动写控制和断开；手动停止及全局急停先禁止后续步骤。托管不暴露暂停/恢复，通用实验暂停/恢复端点对此返回409，避免冻结电脑计时而固件仍加热。原子记录位于 `output/microwave_programs/mwprogram_<request_id>.json`，启动意图必须先落盘，每步先保存进度；存储失败停止并保留锁，日志保存失败也显式报告。重启后未完成或待清理记录视为中断，锁住实验和手动运动控制；可连接、读取、停止后人工确认解除，解除记录保存失败仍锁定。页面/WS生命周期只读，服务正常关闭等待托管停机；进程崩溃无法保证立即停机，长硬件计时不能替代独立联锁。
 
@@ -764,3 +764,18 @@ DeviceConnectionControls 统一连接按钮，利用页面提供的批量运行�
 驱动首次连接失败后，即使句柄关闭失败而仍打开，也不报告已连接；重连先成功释放旧资源，再创建句柄和重新查询。退出清理由控制器区分“从未连通、未发运动”和“连接丢失或运动未知”：前者可直接释放，后者保留停止保护；释放失败继续阻止退出并允许重试。
 
 状态包括 `read_ok/read_at/read_error`、坐标和原始速度/输入值、工作状态、`busy`、`stop_confirmed`、`homed`、`motion_blocked` 及动作结果。`connection_error` 保留连接失败原因，自动资源清理与未连接状态读取不清除，成功连接或明确断开后清除；原始错误进入日志。控制视图按实际读数时间保留 6 秒有效期，监测视图保留 15 秒；状态失效不发送停止。运动结果未知或停止未确认时禁止新动作，已连接的停止入口继续可用。协议字节序、默认禁用项、桌面配置更新和实机验收见 [转盘接入说明](turntable_integration.md)。
+
+
+### 恒速率托管与引导参数（2026-11-16）
+
+托管API路径不变，ProgramRequest.mode新增constant_rate；LogicalStage.ramp_seconds为可选正整数1–359999，恒速率每段必填，其他模式不使用。恒速率heating_timeout至少15秒。compile_steps复用configure_constant_rate，五槽均写入同一目标、升温时分秒及保护时间，启动核验和段间停机沿用原实现。
+
+GuidedRequest.microwave_mode接受auto_power/constant_rate/manual_power。新前端明确提交模式且默认constant_rate；缺省模式的旧请求按auto_power解释。axes前六项顺序不变，恒速率必须附加第七项升温分钟数组，手动功率必须附加第七项功率百分比数组（0–100整数），自动功率必须恰为六项。手动功率复用microwave.configure_manual，五槽升温及保温功率相同，holding_deviation=0；start明确使用manual_power，minimum_seconds=0，保护时长为ceil(heating_timeout)+hold_seconds+60。第七项为最内层条件轴，重复次数仍在完整条件后展开；容量、耗液、最多200组和实际瓶位限制均包含它。模式及对应的升温/功率轴自动纳入完整请求校验键和预充签名，不匹配的旧预充资格不可复用。
+
+WaitCondition.minimum_seconds默认0，仅微波到温等待可设为正整秒。恒速率使用启动确认后开始的暂停感知单调时钟，计满minimum_seconds后才累计稳定15秒，等待timeout为升温秒数+heating_timeout。监督及停止检查在最短等待期间仍执行；不新增驱动轮询或电脑PID。activity新增ramp_seconds、ramp_remaining_seconds；非恒速率为null，终态冻结，进入保温步骤后清除。
+
+正式组metadata记录microwave_mode、microwave_ramp_seconds（非恒速率为null）、microwave_power_percent（非手动功率为null），guided_parameters保留六项或扩展为七项；批次请求与托管各段保存原参数。历史显示、未执行组重建和条件复用兼容两种长度，不迁移既有日志/YAML。引导本机草稿格式升级version=3，保留heat.guided-draft.v1存储键以便发现旧草稿；version=1在内存迁移为auto_power、升温留空；version=2保留模式及升温条件，追加留空功率轴。草稿内部八轴分别保留升温/功率输入，请求只发送当前模式的六或七轴。恢复只带参数，不恢复校验、人工确认和预充资格。
+
+GuidedRequest.drain_direction默认CCW；新建/重置前端一致，清洗进液clean_direction仍为CW。进入新实验草稿（含v1/v2/v3恢复、历史复用及沿用本次参数）统一将排液方向设为CCW，其他条件保留；不改写已保存批次/YAML，查看原批次仍恢复其方向。移除额外方向来源提示和恢复按钮。方向变更沿用请求键、确认及预充签名失效机制。
+
+模式切换/编辑时，requestAxes在自身computed内捕获未填或非法条件并返回null，requestKey随之为空，阻止预览/启动。不能只在外层requestKey捕获异常：Vue刷新依赖可能先执行内层computed，异常会绕过外层catch导致整块表单消失。测试覆盖真实响应式刷新及浏览器三模式切换、空值、列表/范围编辑。

@@ -79,8 +79,9 @@
         <el-radio-group v-model="microwave.mode" :disabled="settingsDisabled">
           <el-radio-button value="auto_power">自动功率</el-radio-button>
           <el-radio-button value="manual_power">手动功率</el-radio-button>
+          <el-radio-button value="constant_rate">恒速率</el-radio-button>
         </el-radio-group>
-        <span class="mode-help">{{ microwave.mode === 'auto_power' ? '设置目标温度，设备自动调节功率' : '设置目标温度与输出功率' }}</span>
+        <span class="mode-help">{{ microwave.mode === 'constant_rate' ? '设置升温时间与目标温度，由设备执行恒速率模式' : microwave.mode === 'auto_power' ? '设置目标温度，设备自动调节功率' : '设置目标温度与输出功率' }}</span>
       </el-form-item>
 
       <el-form-item label="程序段">
@@ -119,6 +120,14 @@
           <span class="unit-label">%</span>
         </el-form-item>
 
+        <el-form-item v-if="microwave.mode === 'constant_rate'" label="升温时间">
+          <div class="time-row">
+            <el-input-number v-model="segment.rampHours" :disabled="settingsDisabled" :min="0" :max="99" :step="1" size="small" placeholder="必填" style="width: 86px" /><span class="unit-label">时</span>
+            <el-input-number v-model="segment.rampMinutes" :disabled="settingsDisabled" :min="0" :max="59" :step="1" size="small" placeholder="必填" style="width: 86px" /><span class="unit-label">分</span>
+            <el-input-number v-model="segment.rampSeconds" :disabled="settingsDisabled" :min="0" :max="59" :step="1" size="small" placeholder="必填" style="width: 86px" /><span class="unit-label">秒</span>
+          </div>
+        </el-form-item>
+        <p v-if="microwave.mode === 'constant_rate'">启动确认后计满升温时间，再连续稳定 15 秒后开始保温。</p>
         <el-form-item label="保温时间">
           <div class="time-row">
             <el-input-number v-model="segment.hours" :disabled="settingsDisabled" :min="0" :max="99" :step="1" size="small" style="width: 86px" />
@@ -226,7 +235,7 @@ const settingsDisabled = computed(() => props.microwave.configuring || props.mic
   || props.hostProgram?.state === 'running' || props.hostProgram?.state === 'paused')
 const hostStateLabel = computed(() => ({ running: '运行中', completed: '完成', failed: '失败',
   stopped: '已停止', interrupted: '服务中断，需恢复确认' }[props.hostProgram?.state || ''] || props.hostProgram?.state))
-const phaseLabel = computed(() => ({ configure: '配置当前逻辑段', heat: '等待稳定到温', hold: '定时保温', stop: '确认停止',
+const phaseLabel = computed(() => ({ configure: '配置当前逻辑段', heat: (props.hostProgram?.activity?.ramp_remaining_seconds ?? 0) > 0 ? '恒速率升温' : '等待稳定到温', hold: '定时保温', stop: '确认停止',
   completed: '全部段完成', failed: '失败', stopped: '已停止', acknowledged: '已人工解除锁定' }[props.hostProgram?.phase || ''] || '等待确认'))
 function addSegment() {
   if (!settingsDisabled.value && props.microwave.usedSegments < 5) props.microwave.usedSegments++

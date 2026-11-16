@@ -90,3 +90,13 @@ test('microwave stable phase uses backend thirty-second progress without claimin
   const unknown = await renderToString(vue.createSSRApp(component, { activity: { ...stable, stable_seconds: null } }))
   assert.match(unknown, /连续稳定 未知 \/ 30 秒/)
 })
+
+
+test('ramp countdown is distinct from stability and formal hold',async()=>{
+ const ramp={state:'waiting',wait_type:'microwave_temperature_reached',ramp_seconds:120,ramp_remaining_seconds:30,stable_required_seconds:15,stable_seconds:0,readings:activity.readings}
+ const html=await renderToString(vue.createSSRApp(component,{activity:ramp}))
+ assert.match(html,/恒速率升温剩余 30 秒/);assert.match(html,/不代表设备实际升温阶段读回/)
+ assert.doesNotMatch(html,/等待反应液连续稳定|正在定时保温/)
+ const stable=await renderToString(vue.createSSRApp(component,{activity:{...ramp,ramp_remaining_seconds:0,stable_seconds:5}}))
+ assert.match(stable,/连续稳定 5 \/ 15 秒/);assert.doesNotMatch(stable,/恒速率升温剩余/)
+})

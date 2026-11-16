@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.experiment.actions import ActionType, ExperimentStep, WaitCondition, WaitType
 from src.experiment.engine import ExperimentEngine, ExperimentState
@@ -27,15 +27,25 @@ class LogicalStage(BaseModel):
     temperature: float = Field(ge=0, le=300, allow_inf_nan=False, multiple_of=1)
     hold_seconds: int = Field(ge=0, le=359999)
     power_percent: int = Field(default=0, ge=0, le=100)
+    ramp_seconds: int | None = Field(default=None, ge=1, le=359999)
 
 
 class ProgramRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-    mode: Literal["auto_power", "manual_power"]
+    mode: Literal["auto_power", "manual_power", "constant_rate"]
     stages: list[LogicalStage] = Field(min_length=1, max_length=5)
     heating_timeout: int = Field(default=600, ge=1, le=3600)
     hardware_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def check_ramp(self):
+        if self.mode == "constant_rate":
+            if any(stage.ramp_seconds is None for stage in self.stages):
+                raise ValueError("恒速率每段必须填写正整数秒的升温时间")
+            if self.heating_timeout < 15:
+                raise ValueError("恒速率到温超时须至少容纳15秒稳定时间")
+        return self
 
 
 def compile_steps(device_id, spec):
@@ -47,7 +57,8 @@ def compile_steps(device_id, spec):
     for index, stage in enumerate(spec.stages, 1):
         # All five firmware slots share one logical target, regardless of HMI range.
         # Device hold exceeds the entire host stage; zero-time skipping is not used.
-        guard = spec.heating_timeout + stage.hold_seconds + 60
+        ramp = stage.ramp_seconds if spec.mode == "constant_rate" else 0
+        guard = ramp + spec.heating_timeout + stage.hold_seconds + 60
         if guard > 99 * 3600 + 59 * 60 + 59:
             raise ValueError("阶段时间加设备保护计时超出99小时59分59秒")
         params = dict(heating_temperature=stage.temperature, target_temperature=stage.temperature,
@@ -56,15 +67,21 @@ def compile_steps(device_id, spec):
         if spec.mode == "manual_power":
             params.update(heating_power_percent=stage.power_percent,
                           holding_power_percent=stage.power_percent, holding_deviation=0)
-        config_action = (ActionType.MICROWAVE_CONFIGURE_AUTO_POWER if spec.mode == "auto_power"
-                         else ActionType.MICROWAVE_CONFIGURE_MANUAL)
+        if spec.mode == "constant_rate":
+            params.update(ramp_hours=ramp // 3600, ramp_minutes=ramp % 3600 // 60, ramp_seconds=ramp % 60)
+        config_action = {
+            "auto_power": ActionType.MICROWAVE_CONFIGURE_AUTO_POWER,
+            "manual_power": ActionType.MICROWAVE_CONFIGURE_MANUAL,
+            "constant_rate": ActionType.MICROWAVE_CONFIGURE_CONSTANT_RATE,
+        }[spec.mode]
         steps.extend([
             ExperimentStep(f"stage_{index}_configure", config_action, dict(device_id=device_id,
                 segments=[dict(segment=n, **params) for n in range(1, 6)])),
             ExperimentStep(f"stage_{index}_heat", ActionType.MICROWAVE_START,
                 dict(device_id=device_id, mode=spec.mode), WaitCondition(
                     type=WaitType.MICROWAVE_TEMPERATURE_REACHED, device_id=device_id,
-                    target_temperature=stage.temperature, tolerance=5, seconds=15, timeout=spec.heating_timeout)),
+                    target_temperature=stage.temperature, tolerance=5, seconds=15,
+                    minimum_seconds=ramp, timeout=ramp + spec.heating_timeout)),
             ExperimentStep(f"stage_{index}_hold", ActionType.WAIT, wait=WaitCondition(
                 type=WaitType.MICROWAVE_MONITORED_HOLD, device_id=device_id, seconds=stage.hold_seconds,
                 target_temperature=stage.temperature, tolerance=5, hold_mode="timed", timeout=max(1, stage.hold_seconds))),

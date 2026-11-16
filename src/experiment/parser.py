@@ -155,6 +155,13 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         timeout = _validate_nonnegative_finite_number(
             wait_data.get("timeout", 3600), "wait.timeout", step_label
         )
+        minimum_seconds = _validate_nonnegative_finite_number(
+            wait_data.get("minimum_seconds", 0), "wait.minimum_seconds", step_label
+        )
+        if minimum_seconds and (wait_type_name != "microwave_temperature_reached"
+                                or minimum_seconds != round(minimum_seconds)
+                                or minimum_seconds + seconds > timeout):
+            raise ValueError("minimum_seconds 仅用于微波到温等待，须为整秒且升温加稳定时间不超过 timeout")
         tolerance = wait_data.get("tolerance", 1.0)
         target_temperature = wait_data.get(
             "target_temperature", wait_data.get("temperature")
@@ -181,6 +188,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
             target_temperature=target_temperature,
             targets=wait_data.get("targets", []),
             hold_mode=wait_data.get("hold_mode", "qualified"),
+            minimum_seconds=minimum_seconds,
         )
         action_type = ACTION_MAP.get(s.get("type", ""))
         if action_type is None:
@@ -220,7 +228,7 @@ def parse_experiment_data(data, filename: str = "untitled.yaml", *, validate_dev
         step_ids.add(step_id)
 
         on_error = s.get("on_error", "stop")
-        if wait_type_name == "microwave_temperature_reached" and seconds > 0:
+        if wait_type_name == "microwave_temperature_reached" and (seconds > 0 or minimum_seconds > 0):
             if not enabled or on_error != "stop":
                 raise ValueError("微波稳定到温等待必须启用且失败停止（on_error=stop）")
         if wait_type_name == "microwave_monitored_hold":
