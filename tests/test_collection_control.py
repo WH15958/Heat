@@ -94,6 +94,7 @@ def test_guided_motion_status_retry_is_bounded(pair, clock, failure):
             assert r.read(force=True)['read_ok']
             assert r.device.read_count == count + 2
         assert len(p.action['status_retries']) == 3
+        assert len(result['action']['status_retries']) == 1  # Earlier snapshots stay historical.
         assert all(item['result'] == 'received' for item in p.action['status_retries'])
         r.device.reads.append(TimeoutError('fourth timeout in segment'))
         count = r.device.read_count

@@ -122,7 +122,7 @@ class CollectionAxisController(TurntableController):
                 raise TimeoutError(error) from exc
             retry = dict(device_id=self.config.device_id, port=port, first_error=error, result="retrying")
             if retry_motion:
-                motion.setdefault("status_retries", []).append(retry)
+                motion["status_retries"] = [*motion.get("status_retries", []), retry]
                 motion["status_retry"] = retry
                 if self.action is motion:
                     self._reset_stability()
