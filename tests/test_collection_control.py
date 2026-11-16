@@ -87,9 +87,18 @@ def test_guided_motion_status_retry_is_bounded(pair, clock, failure):
         assert p.action['status_retry']['result'] == 'received'
         assert p._stable_count == 1
         # Budget is shared with the stationary peer for this same segment.
-        r.device.reads.append(TimeoutError('second timeout in segment'))
+        for _ in range(2):
+            r.device.reads.append(TimeoutError('isolated timeout in segment'))
+            count = r.device.read_count
+            assert r.read(force=True)['read_ok']
+            assert r.device.read_count == count + 2
+        assert len(p.action['status_retries']) == 3
+        assert all(item['result'] == 'received' for item in p.action['status_retries'])
+        r.device.reads.append(TimeoutError('fourth timeout in segment'))
         count = r.device.read_count
-        assert not r.read(force=True)['read_ok']
+        exhausted = r.read(force=True)
+        assert not exhausted['read_ok']
+        assert 'r (' in exhausted['read_error']
         assert r.device.read_count == count + 1
     else:
         assert not result['read_ok']

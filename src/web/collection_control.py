@@ -89,7 +89,7 @@ class CollectionAxisController(TurntableController):
             return self.summary()
 
     def _read_status(self):
-        # Guided motion shares one retry budget across both axes per segment.
+        # Guided motion shares three isolated timeout recoveries per segment.
         retry_idle = (self.stop_confirmed and not self._requires_stop
                       and not self._stability_pending and not self.stopping
                       and self.device.snapshot.get("read_ok") is True
@@ -109,17 +109,20 @@ class CollectionAxisController(TurntableController):
         try:
             return self.device.read_status()
         except TimeoutError as exc:
+            port = self.device.snapshot.get("connection_port") or self.config.connection.port
+            error = f"{self.config.device_id} ({port}): {exc}"
             # Include protocol pacing, write budget and final short serial read.
             timeout = self.config.connection.timeout
             query_budget = timeout + min(1.0, timeout) + min(0.05, timeout) + STATUS_QUERY_GAP_SECONDS
-            retry_motion = (motion is not None and not motion.get("status_retry")
+            retry_motion = (motion is not None and len(motion.get("status_retries", [])) < 3
                             and time.monotonic() + query_budget < motion["deadline"])
             if (not (retry_idle or retry_motion) or self.stopping or self.generation != generation
                     or not self.device.is_connected()
                     or (self.peer is not None and (self.peer.stopping or self.peer.generation != peer_generation))):
-                raise
-            retry = dict(device_id=self.config.device_id, first_error=str(exc), result="retrying")
+                raise TimeoutError(error) from exc
+            retry = dict(device_id=self.config.device_id, port=port, first_error=error, result="retrying")
             if retry_motion:
+                motion.setdefault("status_retries", []).append(retry)
                 motion["status_retry"] = retry
                 if self.action is motion:
                     self._reset_stability()
@@ -138,6 +141,8 @@ class CollectionAxisController(TurntableController):
             except Exception as retry_error:
                 retry.update(result="failed", error=str(retry_error))
                 logger.warning("Collection %s status retry failed: %s", self.config.device_id, retry_error)
+                if isinstance(retry_error, TimeoutError):
+                    raise TimeoutError(f"{self.config.device_id} ({port}): {retry_error}") from retry_error
                 raise
             logger.info("Collection %s status retry received: position=%s speed=%s",
                         self.config.device_id, status.get("position"), status.get("speed_raw"))

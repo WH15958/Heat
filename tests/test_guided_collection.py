@@ -414,3 +414,36 @@ def test_stationary_peer_timeout_during_motion_recovers_once(rig, queried_axis):
         assert c.current_bottle == 29
         assert [w[1] for w in writes] == ['move_absolute', 'move_absolute']
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('timeouts', [2, 3, 4])
+def test_home_with_separate_platform_timeouts(rig, timeouts):
+    async def run():
+        _, r, p, c, writes, *_ = rig
+        await established(rig, 10)
+        original = r.device.send_command
+
+        def send(request):
+            original(request)
+            if request.action == 'home':
+                # Keep rotation moving while separate platform reads lose replies.
+                r.device.reads.clear()
+                r.device.reads.extend([(46286, 8)] * (timeouts * 2 + 2))
+                r.device.reads.extend([(0, 32)] * 3)
+                for _ in range(timeouts):
+                    p.device.reads.extend([TimeoutError('lost platform reply'), (0, 32), (0, 32)])
+
+        r.device.send_command = send
+        if timeouts <= 3:
+            await c.home()
+            assert c.current_bottle == 1
+            assert len(r.action['status_retries']) == timeouts
+            assert [w[1] for w in writes] == ['home', 'move_absolute']
+        else:
+            with pytest.raises(Exception, match='collection_platform1'):
+                await c.home()
+            assert c.current_bottle is None
+            assert len(r.action['status_retries']) == 3
+            assert [w[1] for w in writes].count('home') == 1
+            assert {w[0] for w in writes if w[1] == 'stop'} == {r.config.device_id, p.config.device_id}
+    asyncio.run(run())
