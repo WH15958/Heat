@@ -70,6 +70,7 @@ class WaitCondition:
         target_temperature: 目标温度（MICROWAVE_TEMPERATURE_REACHED使用）
         targets: 两路设备及目标温度（HEATER_PAIR_REACHED/HEATER_PAIR_STABLE使用）
         hold_mode: 微波保温计时方式，qualified兼容旧YAML，timed为固定计时
+        minimum_seconds: 微波到温判断前的最短升温整秒数，默认0
     """
     type: WaitType = WaitType.NONE
     seconds: float = 0
@@ -80,6 +81,7 @@ class WaitCondition:
     target_temperature: Optional[float] = None
     targets: list[dict] = field(default_factory=list)
     hold_mode: str = "qualified"
+    minimum_seconds: float = 0
 
 
 @dataclass

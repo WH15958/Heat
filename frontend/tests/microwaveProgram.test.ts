@@ -25,7 +25,7 @@ test('one to five logical stages are validated without mutating the draft', () =
   }
 })
 
-test('host request converts hold time, preserves manual power, and rejects constant rate', () => {
+test('host request converts hold time and requires a separate ramp for constant rate', () => {
   const state = program()
   state.segments[1]!.hours = 1
   const body = hostedMicrowavePayload(state, 'a'.repeat(32), true)
@@ -35,7 +35,12 @@ test('host request converts hold time, preserves manual power, and rejects const
   state.mode = 'manual_power'
   assert.equal(hostedMicrowavePayload(state, 'b'.repeat(32)).stages[0]!.power_percent, 20)
   state.mode = 'constant_rate'
-  assert.throws(() => hostedMicrowavePayload(state, 'c'.repeat(32)), /模式/)
+  assert.throws(() => hostedMicrowavePayload(state, 'c'.repeat(32)), /升温时间/)
+  for (const s of Object.values(state.segments)) Object.assign(s, {rampHours:0,rampMinutes:5,rampSeconds:10})
+  const rampBody=hostedMicrowavePayload(state,'c'.repeat(32))
+  assert.equal(rampBody.mode,'constant_rate')
+  assert.equal(rampBody.stages[0]!.ramp_seconds,310)
+  assert.equal(rampBody.stages[0]!.hold_seconds,3670)
 })
 
 test('manual power and constant-rate programs retain their existing parameter semantics', () => {
@@ -43,7 +48,8 @@ test('manual power and constant-rate programs retain their existing parameter se
   state.mode = 'manual_power'
   assert.ok(microwaveProgramPayload(state).every(s => s.heating_power_percent === 20 && s.holding_power_percent === 20))
   state.mode = 'constant_rate'
-  assert.ok(microwaveProgramPayload(state).every(s => s.ramp_seconds === 0 && s.target_temperature === s.holding_temperature))
+  for (const s of Object.values(state.segments)) Object.assign(s, {rampHours:0,rampMinutes:2,rampSeconds:15})
+  assert.ok(microwaveProgramPayload(state).every(s => s.ramp_seconds === 15 && s.ramp_minutes === 2 && s.target_temperature === s.holding_temperature))
 })
 
 test('invalid later used segment prevents configuring the entire program; invalid unused segment is ignored', () => {

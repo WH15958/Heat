@@ -37,6 +37,7 @@ class Manager(FakeManager):
         return super().configure_microwave_auto_power(did, segments) and self.config_ok
 
     configure_microwave_manual = configure_microwave_auto_power
+    configure_microwave_constant_rate = configure_microwave_auto_power
 
     def start_microwave(self, did, mode, **kwargs):
         return super().start_microwave(did, mode) and self.start_ok
@@ -82,13 +83,16 @@ def app(dm):
     return result
 
 
-@pytest.mark.parametrize('mode', ['auto_power', 'manual_power'])
+@pytest.mark.parametrize('mode', ['auto_power', 'manual_power', 'constant_rate'])
 def test_host_stages_stop_between_targets_and_replace_all_five_slots(mode):
     async def scenario():
         dm = Manager()
         body = spec().model_dump()
         body['mode'] = mode
         body['stages'][0]['power_percent'] = 20
+        if mode == 'constant_rate':
+            for stage in body['stages']:
+                stage['ramp_seconds'] = 60
         run = program.MicrowaveProgramRun(dm, 'microwave1', program.ProgramRequest(**body))
         await program.preflight(dm, 'microwave1')
         await run.start()
@@ -98,7 +102,10 @@ def test_host_stages_stop_between_targets_and_replace_all_five_slots(mode):
         assert [c[0] for c in dm.calls] == ['microwave_config', 'microwave_start', 'microwave_stop'] * 2
         assert [[s.segment for s in config] for config in dm.configurations] == [list(range(1, 6))] * 2
         assert [{s.heating_temperature for s in config} for config in dm.configurations] == [{30}, {40}]
-        assert all(s.hours == 0 and s.minutes == 11 and s.seconds == 0 for config in dm.configurations for s in config)
+        assert all(s.hours == 0 and s.minutes == (12 if mode == 'constant_rate' else 11) and s.seconds == 0
+                   for config in dm.configurations for s in config)
+        if mode == 'constant_rate':
+            assert all(s.ramp_minutes == 1 for config in dm.configurations for s in config)
         record = program.stored_records({run.record['program_id']: run})[0]
         assert record['current_stage'] == 2
         assert record['state'] == 'completed'
@@ -110,7 +117,8 @@ def test_host_stages_stop_between_targets_and_replace_all_five_slots(mode):
 
 
 @pytest.mark.parametrize('failure', ['config', 'start', 'stop', 'read'])
-def test_failure_stops_and_blocks_next_stage(failure):
+@pytest.mark.parametrize('mode', ['auto_power', 'constant_rate'])
+def test_failure_stops_and_blocks_next_stage(failure, mode):
     async def scenario():
         dm = Manager()
         if failure != 'read':
@@ -122,7 +130,12 @@ def test_failure_stops_and_blocks_next_stage(failure):
                 dm.fail_read = True
                 return result
             dm.start_microwave = start
-        run = program.MicrowaveProgramRun(dm, 'microwave1', spec())
+        body = spec().model_dump()
+        body['mode'] = mode
+        if mode == 'constant_rate':
+            for stage in body['stages']:
+                stage['ramp_seconds'] = 60
+        run = program.MicrowaveProgramRun(dm, 'microwave1', program.ProgramRequest(**body))
         await run.start()
         await run.task
         assert run.state.value == 'failed'

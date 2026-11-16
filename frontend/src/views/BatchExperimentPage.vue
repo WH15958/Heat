@@ -50,11 +50,11 @@
       </div>
       <div v-if="terminalRun&&!batchCompleted" class="result-summary"><h4>批次结果</h4><p>完成 {{ resultCounts.completed }} 组 · 失败 {{ resultCounts.failed }} 组 · 未执行 {{ resultCounts.unexecuted }} 组<span v-if="batch.state==='stopped'"> · 中途停止的组请查看下方记录</span></p><p>记录：{{ batch.persistence_status==='ok'?'已保存':batch.persistence_status==='error'?'保存失败，请处理记录恢复':'保存状态未确认' }} · {{ batch.recovery_required?'需现场检查并解除恢复锁定':batch.cleanup_pending?'设备清理未确认':'无待处理恢复事项' }}</p><el-button @click="openBatchHistory">查看本批历史</el-button><el-button :loading="exportingBatch" @click="exportBatch">导出本批记录</el-button></div>
       <div v-if="batch.phase==='priming'||batch.phase==='ready'" class="notice">已完成预充循环：A {{ batch.priming?.completed_cycles?.[0] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次，B {{ batch.priming?.completed_cycles?.[1] || 0 }} / {{ batch.request?.prime_cycles || '—' }} 次。初始化与预充每批只执行一次。</div>
-      <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>样品编号</th><th>产物瓶</th><th>收取状态</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ g.sample_id || '—' }}</td><td>{{ g.bottle_number==null ? '未记录' : collectionLocationLabel(g) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<small v-if="g.collection_error" class="collection-error">{{ g.collection_error }}</small></td></tr></tbody></table></div>
+      <div class="group-toolbar"><h4>各组进度与实验条件</h4><el-button @click="showCompleted=!showCompleted">{{ showCompleted?'折叠已完成组':'展开全部' }}</el-button><el-button @click="locateCurrent">定位当前组</el-button></div><div class="table run-table"><table><thead><tr><th>组号</th><th>状态</th><th>A / B 温度（℃）</th><th>A / B 进料量（mL）</th><th>反应温度（℃）</th><th>保温（分钟）</th><th>微波模式 / 升温时间或功率</th><th>样品编号</th><th>产物瓶</th><th>收取状态</th></tr></thead><tbody><tr v-for="g in visibleGroups" :key="g.index" :class="{selected:g.index===batch.current_group}"><td>{{ g.index }}</td><td>{{ labels[g.state] || g.state }}</td><td>{{ g.parameters[0] ?? '—' }} / {{ g.parameters[1] ?? '—' }}</td><td>{{ g.parameters[2] ?? '—' }} / {{ g.parameters[3] ?? '—' }}</td><td>{{ g.parameters[4] ?? '—' }}</td><td>{{ g.parameters[5] ?? '—' }}</td><td>{{ microwaveModeLabel(batch.request?.microwave_mode) }}<span v-if="g.parameters[6]!=null"> · {{ g.parameters[6] }} {{ batch.request?.microwave_mode==='manual_power'?'%':'分钟' }}</span></td><td>{{ g.sample_id || '—' }}</td><td>{{ g.bottle_number==null ? '未记录' : collectionLocationLabel(g) }}</td><td>{{ collectionStatusLabel(g.collection_status) }}<small v-if="g.collection_error" class="collection-error">{{ g.collection_error }}</small></td></tr></tbody></table></div>
       <p><small>整批进度按完成组数统计。升温和降温耗时取决于实测温度；不估算剩余完成时间。每组使用独立瓶位；清洗、停泵和滴液等待完成后自动换瓶，最后一组结束后回零。</small></p>
     </section>
     <div v-else class="layout"><main :inert="activeRun">
-      <section v-if="stage<=2"><label v-if="stage===0" class="experiment-name">实验名称<input data-field="experimentName" :aria-invalid="!!fieldErrors.experimentName" v-model="experimentName" placeholder="请输入实验名称" /><small v-if="fieldErrors.experimentName" class="field-error" role="alert">{{ fieldErrors.experimentName }}</small></label><h3>{{ stages[stage] }}</h3><p>{{ stageDescriptions[stage] }}</p><div class="notice device-summary">{{ deviceSummary }}</div><div v-for="a in stageAxes" :key="a.key" class="axis" :data-field="a.key"><div class="axis-heading"><strong>{{ a.label }}</strong><span>实验条件</span></div><p v-if="fieldErrors[a.key]" class="field-error" role="alert">{{ fieldErrors[a.key] }}</p><div class="axis-controls"><label>设置方式<select v-model="a.mode"><option value="fixed">固定值</option><option value="range">范围与间隔</option><option value="list">指定数值</option></select></label><label v-if="a.mode!=='list'">{{ a.mode==='fixed'?'数值':'起点' }}<span class="number-unit"><input v-model.number="a.start" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><template v-if="a.mode==='range'"><label>终点<span class="number-unit"><input v-model.number="a.end" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><label>间隔<span class="number-unit"><input v-model.number="a.interval" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label></template><label v-if="a.mode==='list'">逗号分隔<span class="number-unit"><input v-model="a.list" :aria-invalid="!!fieldErrors[a.key]" placeholder="多个数值用逗号分隔" /><span>{{ a.unit }}</span></span></label></div></div><div v-if="stage===1" class="grid settings"><label>A 进料速度<span class="number-unit"><input data-field="speedA" :aria-invalid="!!fieldErrors.speedA" v-model.number="speedA" type="number" placeholder="请输入" /><span>Hz</span></span><small v-if="fieldErrors.speedA" class="field-error" role="alert">{{ fieldErrors.speedA }}</small></label><label>B 进料速度<span class="number-unit"><input data-field="speedB" :aria-invalid="!!fieldErrors.speedB" v-model.number="speedB" type="number" placeholder="请输入" /><span>Hz</span></span><small v-if="fieldErrors.speedB" class="field-error" role="alert">{{ fieldErrors.speedB }}</small></label></div><p>支持固定值、范围与间隔或指定数值。请按实际实验填写。</p></section>
+      <section v-if="stage<=2"><label v-if="stage===0" class="experiment-name">实验名称<input data-field="experimentName" :aria-invalid="!!fieldErrors.experimentName" v-model="experimentName" placeholder="请输入实验名称" /><small v-if="fieldErrors.experimentName" class="field-error" role="alert">{{ fieldErrors.experimentName }}</small></label><h3>{{ stages[stage] }}</h3><p>{{ stageDescriptions[stage] }}</p><div class="notice device-summary">{{ deviceSummary }}</div><label v-if="stage===2" class="settings">微波模式<select v-model="microwaveMode"><option value="constant_rate">恒速率</option><option value="auto_power">自动功率</option><option value="manual_power">手动功率</option></select><small>{{ microwaveMode==='constant_rate'?'启动确认后计满升温时间，再稳定到温15秒后保温。':microwaveMode==='manual_power'?'升温和保温均使用填写的功率；目标±5℃连续稳定15秒后开始保温，未稳定到温会超时停止。':'稳定到温15秒后开始保温。' }}</small></label><div v-for="a in stageAxes" :key="a.key" class="axis" :data-field="a.key"><div class="axis-heading"><strong>{{ a.label }}</strong><span>实验条件</span></div><p v-if="fieldErrors[a.key]" class="field-error" role="alert">{{ fieldErrors[a.key] }}</p><div class="axis-controls"><label>设置方式<select v-model="a.mode"><option value="fixed">固定值</option><option value="range">范围与间隔</option><option value="list">指定数值</option></select></label><label v-if="a.mode!=='list'">{{ a.mode==='fixed'?'数值':'起点' }}<span class="number-unit"><input v-model.number="a.start" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><template v-if="a.mode==='range'"><label>终点<span class="number-unit"><input v-model.number="a.end" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label><label>间隔<span class="number-unit"><input v-model.number="a.interval" :aria-invalid="!!fieldErrors[a.key]" type="number" step="any" placeholder="请输入" /><span>{{ a.unit }}</span></span></label></template><label v-if="a.mode==='list'">逗号分隔<span class="number-unit"><input v-model="a.list" :aria-invalid="!!fieldErrors[a.key]" placeholder="多个数值用逗号分隔" /><span>{{ a.unit }}</span></span></label></div></div><div v-if="stage===1" class="grid settings"><label>A 进料速度<span class="number-unit"><input data-field="speedA" :aria-invalid="!!fieldErrors.speedA" v-model.number="speedA" type="number" placeholder="请输入" /><span>Hz</span></span><small v-if="fieldErrors.speedA" class="field-error" role="alert">{{ fieldErrors.speedA }}</small></label><label>B 进料速度<span class="number-unit"><input data-field="speedB" :aria-invalid="!!fieldErrors.speedB" v-model.number="speedB" type="number" placeholder="请输入" /><span>Hz</span></span><small v-if="fieldErrors.speedB" class="field-error" role="alert">{{ fieldErrors.speedB }}</small></label></div><p>支持固定值、范围与间隔或指定数值。请按实际实验填写。</p></section>
       <section v-if="stage===3"><h3>降温与产物收集</h3>
         <div class="notice compact-notice"><strong>反应液 ≤100℃ 后自动收集</strong><p>NO 收产物，NC 排废液；转盘自动切换产物瓶，每组独立用瓶。</p><small>流量和时间按现场标定，时间需覆盖死体积与排空余量。</small></div>
         <p><small>三通阀：{{ valveConfigured ? '已配置' : '配置缺失' }} · {{ registry.valves?.valve1?.connected ? '已连接' : '未连接' }}（继电器读回）</small></p>
@@ -63,7 +63,7 @@
         <div class="grid compact-fields"><label v-for="item in fixed.slice(0,2)" :key="item.key">{{ item.label }}<span class="number-unit"><input :data-field="item.key" :aria-invalid="!!fieldErrors[item.key]" v-model.number="item.value" type="number" step="any" placeholder="请输入" /><span>{{ item.unit }}</span></span><small v-if="fieldErrors[item.key]" class="field-error" role="alert">{{ fieldErrors[item.key] }}</small></label></div>
         <p><small>建议流量 15 mL/min，抽液 200 秒（3 分 20 秒）。</small></p>
         <p><small>清洗排液沿用此流量，排液时间分别设置。</small></p>
-        <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CW">顺时针（CW）</option><option value="CCW">逆时针（CCW）</option></select></label>
+        <label class="direction-field">排液方向<select v-model="drainDirection"><option value="CCW">逆时针（CCW）</option><option value="CW">顺时针（CW）</option></select></label>
       </section>
       <section v-if="stage===4"><h3>清洗与排液</h3><p>通道三进液，通道四排液。</p>
         <div class="form-group"><h4>清洗进液 · 通道三</h4>
@@ -97,7 +97,7 @@
         <p v-if="primeReady">已有本批次预充结果，开始自动实验时将沿用，不重复初始化或预充。修改参数或维护设备前请先停止批次。</p>
         <details><summary>预充流程预览</summary><pre>{{ previewPrime }}</pre></details>
       </section>
-      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组 / {{ bottleCount || '—' }} 瓶</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in axes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ previewCollection?.bottle_locations?.[i] ? collectionLocationLabel(previewCollection.bottle_locations[i]) : `${i+1} 号瓶（待校验）` }}</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先将转盘机械回零；四圈系统再将平台移到最外圈1号瓶，随后执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 100℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤100℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。跨圈时先转盘回共同零点线，再将平台移入下一圈。最后一组结束后停机，转盘机械回零，再退平台至最外圈（旧单圈只回转盘）。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
+      <section v-if="stage===6"><p>实验名称：{{ experimentName.trim() }}</p><p>微波模式：{{ microwaveModeLabel(microwaveMode) }}</p><h3>批次确认<span v-if="!plan.error"> · {{ plan.rows.length }} 组 / {{ bottleCount || '—' }} 瓶</span></h3><label class="settings">每个条件重复次数<span class="number-unit"><input data-field="repeats" :aria-invalid="!!fieldErrors.repeats" v-model.number="repeats" type="number" min="1" placeholder="请输入" /><span>次</span></span><small v-if="fieldErrors.repeats" class="field-error" role="alert">{{ fieldErrors.repeats }}</small></label><div class="table"><table><thead><tr><th>组号</th><th v-for="a in activeAxes" :key="a.key">{{ a.label }} / {{ a.unit }}</th><th>产物排液时间（秒）</th><th>产物瓶</th></tr></thead><tbody><tr v-for="(row,i) in plan.rows" :key="i" :class="{selected:selected===i}" @click="selected=i"><td>{{ i+1 }}</td><td v-for="(v,j) in row" :key="j">{{ v }}</td><td>{{ setting('productTime') }}</td><td>{{ previewCollection?.bottle_locations?.[i] ? collectionLocationLabel(previewCollection.bottle_locations[i]) : `${i+1} 号瓶（待校验）` }}</td></tr></tbody></table></div><p>本批 {{ plan.rows.length || '—' }} 组，对应 1–{{ plan.rows.length || '—' }} 号瓶；最多 {{ bottleCount || '—' }} 组，不循环复用。启动先将转盘机械回零；四圈系统再将平台移到最外圈1号瓶，随后执行初始化与预充。</p><h4>每组固定流程</h4><ol><li>前驱体 A/B 加热，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。</li><li>两泵各自吸取剂量，再并行进料、各自完成；任一路失败停止两路。</li><li>两路进料完成后微波升温，到温后保温，结束后停止微波；前驱体 A/B 加热器持续保温。</li><li>产物留在微波仪中降温，等待反应液实测温度降至 100℃及以下；读取失败或超时不进入抽液。</li><li>收取前复查温度 ≤100℃，阀切 NO 产物端，按填写时间抽取产物。</li><li>先切 NC 废液端，再注清洗液、停留、按填写时间排清洗液，按次数重复。</li><li>本组清洗完成后确认泵停止、阀在 NC，等待设定滴液时间，再转到下一瓶并确认到位；加热器保持运行，新组按目标调整温度。跨圈时先转盘回共同零点线，再将平台移入下一圈。最后一组结束后停机，转盘机械回零，再退平台至最外圈（旧单圈只回转盘）。失败或停止时原位停机，不自动回零。</li></ol><el-button :loading="validating" :disabled="!!plan.error" @click="validate">生成并校验完整批次</el-button><p role="status">{{ report }}</p><details><summary>第 {{ selected+1 }} 组操作预览</summary><p>此处仅预览本组操作；批次回零与换瓶由整批流程执行。校验不连接或启动硬件。</p><pre>{{ fragment }}</pre></details></section>
     </main><aside class="batch-sidebar">
       <h3>本批实验</h3>
       <template v-if="validatedKey===requestKey&&!plan.error">
@@ -136,10 +136,10 @@ import {ElMessageBox} from 'element-plus'
 import {useRoute,useRouter} from 'vue-router'
 import axios from 'axios'
 import {usePendingConfirmation} from '../composables/pendingConfirmation'
-import {guidedHistoryDraft} from '../experiment/guidedHistory'
+import {guidedHistoryDraft,hasGuidedAxes,microwaveModeLabel} from '../experiment/guidedHistory'
 const confirmations=usePendingConfirmation()
 import {collectionCapacity,collectionConfigError,collectionLocationLabel} from '../experiment/guidedCollection'
-import {combinations,valuesFor as axisValues,microwaveHoldSeconds,type Axis} from '../experiment/batch'
+import {combinations,valuesFor as axisValues,microwaveHoldSeconds,microwaveRampSeconds,microwavePowerPercent,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
 import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed,collectionStatusLabel,batchElapsedLabel} from '../experiment/guidedProgress'
@@ -147,7 +147,7 @@ const router=useRouter(),stage=ref(0),selected=ref(0),error=ref(''),report=ref('
 const route=useRoute(),newDraft=ref(route.query.new==='1'),experimentName=ref('')
 const stages=['前驱体加热','前驱体进料','微波反应','产物收集','清洗与排液','预充与排气','批次确认']
 const stageDescriptions=['设置加热器 A/B 的目标温度，两路同时在各自目标 ±5℃ 内持续 30 秒后才开始吸液与进料。同批次持续保温（含反应、清洗、组间和暂停），下一组按新目标调整；结束、失败或停止时关闭。','分别设置 A/B 进样量和速度；双泵同时开始、各自完成。','两路进料完成后启动微波；反应液在目标 ±5℃ 内连续稳定 15 秒后开始定时保温，之后温度偏离不暂停计时，仍持续检查故障和控制状态。保温分钟须可转换为整秒，例如 0.5 分钟为 30 秒。']
-const stageAxes=computed(()=>axes.value.slice(stage.value*2,stage.value*2+2))
+const stageAxes=computed(()=>activeAxes.value.slice(stage.value*2,stage.value===2?undefined:stage.value*2+2))
 const deviceSummary=computed(()=>stage.value===0?'加热器一：前驱体 A　｜　加热器二：前驱体 B':stage.value===1?'注射泵一：前驱体 A　｜　注射泵二：前驱体 B':'微波仪一：反应温区')
 const roles=[{key:'heaterA',label:'前驱体 A 加热器',group:'heaters',description:'前驱体储液加热'},{key:'heaterB',label:'前驱体 B 加热器',group:'heaters',description:'独立温区'},{key:'pumpA',label:'前驱体 A 注射泵',group:'syringe_pumps',description:'进样量与速度独立设置'},{key:'pumpB',label:'前驱体 B 注射泵',group:'syringe_pumps',description:'同时进料、各自完成'},{key:'reaction',label:'微波反应装置',group:'microwaves',description:'测得物料到温后计时'},{key:'liquid',label:'清洗与排液蠕动泵',group:'pumps',description:'不同通道负责进液和排液'},{key:'turntable',label:'产物收集转盘',group:'turntables',description:'每组使用独立产物瓶'}]
 const registry=ref<Record<string,Record<string,any>>>({}),chosen=reactive<Record<string,string>>({heaterA:'heater1',heaterB:'heater2',pumpA:'syringe_pump1',pumpB:'syringe_pump2',reaction:'microwave1',liquid:'pump1',turntable:'turntable1'})
@@ -156,7 +156,9 @@ type FormAxis = Omit<Axis,'start'|'end'|'interval'> & {start:InputNumber;end:Inp
 const numeric=(value:InputNumber):number=>typeof value==='number'&&Number.isFinite(value)?value:NaN
 const completeAxis=(a:FormAxis):Axis=>({...a,start:numeric(a.start),end:numeric(a.end),interval:numeric(a.interval)})
 const valuesFor=(a:FormAxis)=>axisValues(completeAxis(a))
-const axes=ref<FormAxis[]>([['ta','前驱体 A 温度','℃'],['tb','前驱体 B 温度','℃'],['va','A 进样量','mL'],['vb','B 进样量','mL'],['tr','微波反应温度','℃'],['time','保温时间','分钟']].map(([key,label,unit])=>({key:key!,label:label!,unit:unit!,value:0,paths:[],mode:'fixed',start:null,end:null,interval:null,list:''})))
+const axes=ref<FormAxis[]>([['ta','前驱体 A 温度','℃'],['tb','前驱体 B 温度','℃'],['va','A 进样量','mL'],['vb','B 进样量','mL'],['tr','微波反应温度','℃'],['time','保温时间','分钟'],['ramp','升温时间','分钟'],['power','微波功率','%']].map(([key,label,unit])=>({key:key!,label:label!,unit:unit!,value:0,paths:[],mode:'fixed',start:null,end:null,interval:null,list:''})))
+const microwaveMode=ref<'constant_rate'|'auto_power'|'manual_power'>('constant_rate')
+const activeAxes=computed(()=>[...axes.value.slice(0,6),...(microwaveMode.value==='auto_power'?[]:[axes.value[microwaveMode.value==='constant_rate'?6:7]!])])
 const productPort='NO'
 const wastePort='NC'
 const valveConfigured=computed(()=>!!registry.value.valves?.valve1)
@@ -176,7 +178,7 @@ const fixed=ref<NumberField[]>([
  {key:'cleanTime',label:'清洗排液时间',unit:'秒',value:null}
 ])
 const setting=(key:string)=>numeric(fixed.value.find(s=>s.key===key)!.value)
-const plan=computed(()=>{try{if(!Number.isInteger(repeats.value)||numeric(repeats.value)<1)throw new Error('重复次数须为正整数');const rows=combinations(axes.value.map(completeAxis));if(turntableConfigError.value)throw new Error(turntableConfigError.value);if(rows.length*numeric(repeats.value)>bottleCount.value)throw new Error(`本批最多 ${bottleCount.value} 组，每组独立用瓶，不循环复用`);if(rows.some(r=>r.some((v,i)=>i===2||i===3?v<=0:v<0)))throw new Error('进样量须大于零，温度与时间不能为负');if(rows.some(r=>!Number.isInteger(r[4])))throw new Error('微波目标温度须为整数℃');rows.forEach(r=>microwaveHoldSeconds(r[5]!));return{rows:rows.flatMap(r=>Array.from({length:numeric(repeats.value)},()=>r)),counts:axes.value.map(a=>valuesFor(a).length),error:''}}catch(e){return{rows:[] as number[][],counts:[] as number[],error:String(e)}}})
+const plan=computed(()=>{try{if(!Number.isInteger(repeats.value)||numeric(repeats.value)<1)throw new Error('重复次数须为正整数');const rows=combinations(activeAxes.value.map(completeAxis));if(turntableConfigError.value)throw new Error(turntableConfigError.value);if(rows.length*numeric(repeats.value)>bottleCount.value)throw new Error(`本批最多 ${bottleCount.value} 组，每组独立用瓶，不循环复用`);if(rows.some(r=>r.some((v,i)=>i===2||i===3?v<=0:v<0)))throw new Error('进样量须大于零，温度与时间不能为负');if(rows.some(r=>!Number.isInteger(r[4])))throw new Error('微波目标温度须为整数℃');rows.forEach(r=>{const hold=microwaveHoldSeconds(r[5]!);if(microwaveMode.value==='manual_power')microwavePowerPercent(r[6]!);const ramp=microwaveMode.value==='constant_rate'?microwaveRampSeconds(r[6]!):0;if(ramp+600+hold+60>359999)throw new Error('升温与保温时间加设备保护计时超出99小时59分59秒')});return{rows:rows.flatMap(r=>Array.from({length:numeric(repeats.value)},()=>r)),counts:activeAxes.value.map(a=>valuesFor(a).length),error:''}}catch(e){return{rows:[] as number[][],counts:[] as number[],error:String(e)}}})
 function goBack(i:number){if(i>=0&&i<=stage.value){stage.value=i;error.value=''}}
 const fieldErrors=ref<Record<string,string>>({})
 type FieldIssue={key:string;stage:number;message:string}
@@ -184,8 +186,8 @@ function fieldIssues(through:number):FieldIssue[]{
  const issues:FieldIssue[]=[]
  const add=(key:string,page:number,message:string)=>issues.push({key,stage:page,message})
  if(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(experimentName.value)||Array.from(experimentName.value.trim()).length<1||Array.from(experimentName.value.trim()).length>80)add('experimentName',0,'请填写 1–80 个字符的实验名称，不含换行或控制字符')
- axes.value.slice(0,Math.min(through+1,3)*2).forEach((a,i)=>{
-  try{const values=valuesFor(a);if(values.some(v=>i===2||i===3?v<=0:v<0))throw new Error('请填写有效数值');if(i===4&&values.some(v=>!Number.isInteger(v)))throw new Error('微波目标温度须为整数℃');if(i===5)values.forEach(microwaveHoldSeconds)}catch(e){add(a.key,Math.floor(i/2),(e as Error).message)}
+ activeAxes.value.slice(0,through>=2?undefined:(through+1)*2).forEach((a,i)=>{
+  try{const values=valuesFor(a);if(values.some(v=>i===2||i===3?v<=0:v<0))throw new Error('请填写有效数值');if(i===4&&values.some(v=>!Number.isInteger(v)))throw new Error('微波目标温度须为整数℃');if(i===6)values.forEach(microwaveMode.value==='manual_power'?microwavePowerPercent:microwaveRampSeconds);if(i===5)values.forEach(microwaveHoldSeconds)}catch(e){add(a.key,Math.min(2,Math.floor(i/2)),(e as Error).message)}
  })
  if(through>=1)for(const [key,value] of [['speedA',speedA.value],['speedB',speedB.value]] as const)if(!Number.isInteger(value)||numeric(value)<5||numeric(value)>5000)add(key,1,'速度须为 5–5000 的整数步频')
  if(through>=3)for(const f of fixed.value.filter(f=>through>=4||['drainFlow','productTime'].includes(f.key))){
@@ -222,10 +224,10 @@ function stepError(step:number):string {
  if(turntableConfigError.value)return turntableConfigError.value
  if(chosen.heaterA===chosen.heaterB||chosen.pumpA===chosen.pumpB)return '两路须选择不同的加热器和注射泵'
  try{
-  for(const [i,a] of axes.value.slice(0,Math.min(step+1,3)*2).entries()){
+  for(const [i,a] of activeAxes.value.slice(0,step>=2?undefined:(step+1)*2).entries()){
    const values=valuesFor(a)
    if(values.some(v=>i===2||i===3?v<=0:v<0))return `${a.label}：请填写有效数值`
-   if(i===5)values.forEach(microwaveHoldSeconds)
+   if(i===6)values.forEach(microwaveMode.value==='manual_power'?microwavePowerPercent:microwaveRampSeconds);if(i===5)values.forEach(microwaveHoldSeconds)
   }
  }catch(e){return (e as Error).message}
  if(step>=1&&!([speedA.value,speedB.value].every(v=>Number.isInteger(v)&&numeric(v)>=5&&numeric(v)<=5000)))return '请填写进料速度：5–5000 的整数步频'
@@ -248,7 +250,7 @@ function stepError(step:number):string {
 }
 function nextStage(){error.value=stepError(stage.value);if(error.value)focusIssues(stage.value);else if(stage.value<6)stage.value++}
 const total=(i:number)=>Number(plan.value.rows.reduce((s,r)=>s+r[i]!,0).toPrecision(10))
-const plumbingConfirmed=ref(false),drainDirection=ref('CW'),cleanDirection=ref('CW')
+const plumbingConfirmed=ref(false),drainDirection=ref('CCW'),cleanDirection=ref('CW')
 const previewCollection=ref<any>(null)
 const previewPrime=ref(''),previewYaml=ref<string[]>([]),validatedKey=ref(''),controlling=ref(false),batch=ref<any>({state:'idle'})
 const activeRun=computed(()=>['running','paused'].includes(batch.value.state)&&batch.value.phase!=='ready')
@@ -317,7 +319,7 @@ const currentDevice=computed(()=>{
 const progressGroups=computed(()=>{
  const r=batch.value.request
  let rows:number[][]=[[]]
- if(r?.axes?.length===6){
+ if(hasGuidedAxes(r)){
   for(const values of r.axes)rows=rows.flatMap(row=>values.map((v:number)=>[...row,v]))
   rows=rows.flatMap(row=>Array.from({length:r.repeats||1},()=>row))
  }else rows=[]
@@ -346,12 +348,15 @@ const primeValue=(key:string)=>numeric(priming.value.find(p=>p.key===key)!.value
 const primeTotal=computed(()=>(primeValue('prime_volume_a')+primeValue('prime_volume_b'))*primeValue('prime_cycles'))
 const advancedOpen=ref(false)
 const advancedMissing=computed(()=>priming.value.slice(5).some(p=>!Number.isFinite(p.value)||numeric(p.value)<=0))
-const primeReady=computed(()=>!newDraft.value&&batch.value.request?.experiment_name!=null&&batch.value.request?.prime_heat_minutes!=null&&batch.value.request?.initialization_a!=null&&batch.value.request?.initialization_b!=null&&batch.value.request?.product_port==='NO'&&batch.value.request?.product_drain_seconds!=null&&batch.value.request?.clean_drain_seconds!=null&&batch.value.request?.prime_drain_seconds!=null&&batch.value.request?.prime_drain_flow!=null&&batch.value.request?.turntable_drip_seconds!=null&&batch.value.phase==='ready'&&batch.value.state==='paused'&&!batch.value.recovery_required&&batch.value.priming?.status==='completed'&&JSON.stringify(batch.value.request&&requestWithoutFlags(batch.value.request))===JSON.stringify(requestWithoutFlags(requestBody.value)))
+const primeReady=computed(()=>!!requestKey.value&&!newDraft.value&&batch.value.request?.experiment_name!=null&&batch.value.request?.prime_heat_minutes!=null&&batch.value.request?.initialization_a!=null&&batch.value.request?.initialization_b!=null&&batch.value.request?.product_port==='NO'&&batch.value.request?.product_drain_seconds!=null&&batch.value.request?.clean_drain_seconds!=null&&batch.value.request?.prime_drain_seconds!=null&&batch.value.request?.prime_drain_flow!=null&&batch.value.request?.turntable_drip_seconds!=null&&batch.value.phase==='ready'&&batch.value.state==='paused'&&!batch.value.recovery_required&&batch.value.priming?.status==='completed'&&JSON.stringify(batch.value.request&&requestWithoutFlags(batch.value.request))===JSON.stringify(requestWithoutFlags(requestBody.value)))
 function requestWithoutFlags(r:any){const keys=Object.keys(requestBody.value).filter(k=>!['plumbing_confirmed','priming_confirmed','initialization_confirmed','bottles_confirmed','priming_batch_id'].includes(k));return Object.fromEntries(keys.map(k=>[k,r[k]]))}
 const labels:Record<string,string>={idle:'未运行',pending:'待执行',running:'执行中',paused:'已暂停',completed:'已完成',failed:'失败',stopped:'已停止',interrupted:'服务中断'}
 const stateLabel=computed(()=>labels[batch.value.state]||batch.value.state)
-const requestBody=computed(()=>({experiment_name:experimentName.value.trim(),prime_heat_minutes:primeHeatMinutes.value,turntable_drip_seconds:turntableDripSeconds.value,bottles_confirmed:false,axes:axes.value.map(a=>valuesFor(a)),repeats:repeats.value,initialization_a:initialization.value[0],initialization_b:initialization.value[1],speed_a:speedA.value,speed_b:speedB.value,product_port:productPort,drain_flow:setting('drainFlow'),product_drain_seconds:setting('productTime'),clean_drain_seconds:setting('cleanTime'),clean_volume:setting('volume'),clean_flow:setting('flow'),clean_dwell:setting('wait'),clean_cycles:setting('cycles'),drain_direction:drainDirection.value,clean_direction:cleanDirection.value,...Object.fromEntries(priming.value.map(p=>[p.key,p.value]))}))
-const requestKey=computed(()=>{try{return JSON.stringify(requestBody.value)}catch{return ''}})
+// Validation may fail while editing. Catch inside the dependency itself: Vue can
+// refresh nested computed values before entering requestKey's getter.
+const requestAxes=computed(()=>{try{return activeAxes.value.map(valuesFor)}catch{return null}})
+const requestBody=computed(()=>({experiment_name:experimentName.value.trim(),prime_heat_minutes:primeHeatMinutes.value,turntable_drip_seconds:turntableDripSeconds.value,bottles_confirmed:false,microwave_mode:microwaveMode.value,axes:requestAxes.value??[],repeats:repeats.value,initialization_a:initialization.value[0],initialization_b:initialization.value[1],speed_a:speedA.value,speed_b:speedB.value,product_port:productPort,drain_flow:setting('drainFlow'),product_drain_seconds:setting('productTime'),clean_drain_seconds:setting('cleanTime'),clean_volume:setting('volume'),clean_flow:setting('flow'),clean_dwell:setting('wait'),clean_cycles:setting('cycles'),drain_direction:drainDirection.value,clean_direction:cleanDirection.value,...Object.fromEntries(priming.value.map(p=>[p.key,p.value]))}))
+const requestKey=computed(()=>requestAxes.value?JSON.stringify(requestBody.value):'')
 const startBlockReason=computed(()=>{
  if(stage.value!==6)return '请前往批次确认页'
  if(activeRun.value)return '已有批次运行中，请先停止或查看实验进度'
@@ -372,7 +377,7 @@ const startBlockReason=computed(()=>{
  return missing.length?'待确认：'+missing.join('；'):''
 })
 const fragment=computed(()=>previewYaml.value[selected.value]||'请先生成并校验完整批次。')
-watch([experimentName,axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,primeHeatMinutes,initialization,turntableDripSeconds],()=>{fieldErrors.value={};report.value='';selected.value=0;validatedKey.value='';previewCollection.value=null;previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false;bottlesConfirmed.value=false},{deep:true})
+watch([experimentName,microwaveMode,axes,chosen,repeats,speedA,speedB,fixed,drainDirection,cleanDirection,priming,primeHeatMinutes,initialization,turntableDripSeconds],()=>{fieldErrors.value={};report.value='';selected.value=0;validatedKey.value='';previewCollection.value=null;previewYaml.value=[];previewPrime.value='';plumbingConfirmed.value=false;primingConfirmed.value=false;initializationConfirmed.value=false;bottlesConfirmed.value=false},{deep:true})
 function showError(e:any){
  const detail=e.response?.data?.detail
  error.value=Array.isArray(detail)?detail.map(d=>`${d.loc?.slice(1).join('.') || '参数'}：${d.msg}`).join('；'):String(detail||e.message||e)
@@ -381,7 +386,7 @@ function showError(e:any){
  priming.value.forEach(p=>{mapping[p.key]=[p.key,5]})
  mapping.turntable_drip_seconds=['turntableDripSeconds',4]
  mapping.bottles_confirmed=['bottlesConfirmed',6]
- const issues:FieldIssue[]=detail.flatMap(d=>{const loc=d.loc?.slice(1)||[];const field=loc[0]==='axes'&&axes.value[loc[1]]?[axes.value[loc[1]]!.key,Math.floor(loc[1]/2)]:mapping[loc[0]];return field?[{key:field[0] as string,stage:field[1] as number,message:d.msg}]:[]})
+ const issues:FieldIssue[]=detail.flatMap(d=>{const loc=d.loc?.slice(1)||[];const field=loc[0]==='axes'&&activeAxes.value[loc[1]]?[activeAxes.value[loc[1]]!.key,Math.min(2,Math.floor(loc[1]/2))]:mapping[loc[0]];return field?[{key:field[0] as string,stage:field[1] as number,message:d.msg}]:[]})
  if(!issues.length)return
  fieldErrors.value=Object.fromEntries(issues.map(i=>[i.key,i.message]))
  const first=issues[0]!;stage.value=first.stage
@@ -390,10 +395,11 @@ function showError(e:any){
 }
 async function validate(){validating.value=true;report.value='';try{const issue=stepError(6);if(issue){focusIssues(6);throw new Error(issue);}if(advancedMissing.value)throw new Error('请在可用容量中填写有效的容积和储液量');const key=requestKey.value;const {data}=await axios.post('/api/guided/preview',requestBody.value);if(key!==requestKey.value)return;previewCollection.value=data.collection;previewYaml.value=data.yaml;previewPrime.value=JSON.stringify(data.priming,null,2);validatedKey.value=key;report.value=`后端已生成并校验 ${data.total_groups} 组完整流程，尚未启动设备。`}catch(e){advancedOpen.value=advancedMissing.value;showError(e)}finally{validating.value=false}}
 let restoredBatchId:string|null=null, refreshSequence=0
-function restoreParameters(r:any){
+function restoreParameters(r:any,forNewExperiment=false){
  experimentName.value=r.experiment_name??''
+ microwaveMode.value=r.microwave_mode??'auto_power'
  turntableDripSeconds.value=r.turntable_drip_seconds??null
- primeHeatMinutes.value=r.prime_heat_minutes??null;axes.value.forEach((a,i)=>{const values=r.axes[i];a.mode=values.length===1?'fixed':'list';a.start=values[0];a.end=a.interval=null;a.list=values.join(',')});repeats.value=r.repeats;speedA.value=r.speed_a;speedB.value=r.speed_b;drainDirection.value=r.drain_direction;cleanDirection.value=r.clean_direction;const mapping:Record<string,string>={drainFlow:'drain_flow',productTime:'product_drain_seconds',cleanTime:'clean_drain_seconds',volume:'clean_volume',flow:'clean_flow',wait:'clean_dwell',cycles:'clean_cycles'};fixed.value.forEach(s=>s.value=r[mapping[s.key]!]??null);const displayDrain=primingDrainForDisplay(r);priming.value.forEach(p=>p.value=displayDrain[p.key as keyof typeof displayDrain]??r[p.key]??null);if(r.initialization_a&&r.initialization_b)initialization.value=[{...r.initialization_a},{...r.initialization_b}]
+ primeHeatMinutes.value=r.prime_heat_minutes??null;axes.value.forEach(a=>{a.mode='fixed';a.start=a.end=a.interval=null;a.list=''});activeAxes.value.forEach((a,i)=>{const values=r.axes[i]||[];a.mode=values.length<=1?'fixed':'list';a.start=values[0]??null;a.end=a.interval=null;a.list=values.join(',')});repeats.value=r.repeats;speedA.value=r.speed_a;speedB.value=r.speed_b;drainDirection.value=forNewExperiment?'CCW':r.drain_direction??'CW';cleanDirection.value=r.clean_direction??'CW';const mapping:Record<string,string>={drainFlow:'drain_flow',productTime:'product_drain_seconds',cleanTime:'clean_drain_seconds',volume:'clean_volume',flow:'clean_flow',wait:'clean_dwell',cycles:'clean_cycles'};fixed.value.forEach(s=>s.value=r[mapping[s.key]!]??null);const displayDrain=primingDrainForDisplay(r);priming.value.forEach(p=>p.value=displayDrain[p.key as keyof typeof displayDrain]??r[p.key]??null);if(r.initialization_a&&r.initialization_b)initialization.value=[{...r.initialization_a},{...r.initialization_b}]
 }
 function requiresAttention(value:any){return ['running','paused'].includes(value.state)||value.recovery_required||value.cleanup_pending||value.cleanup_required||value.persistence_status==='error'}
 async function refreshBatch(force=false){
@@ -456,13 +462,13 @@ function defaultInitializationCode(i:number){const capacity=registry.value.syrin
 function returnToSetup(reuse=false){
  if(controlsBusy.value||!terminalRun.value||batch.value.recovery_required||batch.value.cleanup_pending||batch.value.cleanup_required||batch.value.persistence_status==='error')return
  ++refreshSequence
- if(reuse&&batch.value.request)restoreParameters(batch.value.request)
+ if(reuse&&batch.value.request)restoreParameters(batch.value.request,true)
  else{
   axes.value.forEach(a=>{a.mode='fixed';a.start=a.end=a.interval=null;a.list=''})
   fixed.value.forEach(f=>{f.value=null});priming.value.forEach(p=>{p.value=null})
   repeats.value=speedA.value=speedB.value=primeHeatMinutes.value=turntableDripSeconds.value=null
   initialization.value=[0,1].map(i=>({direction:'Z',initialization_code:defaultInitializationCode(i)}))
-  drainDirection.value=cleanDirection.value='CW';cleanChannel.value=3;drainChannel.value=4
+  microwaveMode.value='constant_rate';drainDirection.value='CCW';cleanDirection.value='CW';cleanChannel.value=3;drainChannel.value=4
   Object.assign(chosen,{heaterA:'heater1',heaterB:'heater2',pumpA:'syringe_pump1',pumpB:'syringe_pump2',reaction:'microwave1',liquid:'pump1',turntable:'turntable1'})
  }
  experimentName.value=''
@@ -480,7 +486,7 @@ let draftEnabled=newDraft.value, draftRestored=false
 function removeDraft(){try{if(typeof window!=='undefined')window.localStorage.removeItem(draftKey)}catch{draftNotice.value='无法清除本机草稿，请检查浏览器存储。'}}
 function saveDraft(){
  if(!draftEnabled||showProgress.value)return
- try{if(typeof window!=='undefined')window.localStorage.setItem(draftKey,JSON.stringify({version:1,experimentName:experimentName.value,stage:stage.value,axes:axes.value,fixed:fixed.value,priming:priming.value,repeats:repeats.value,speedA:speedA.value,speedB:speedB.value,primeHeatMinutes:primeHeatMinutes.value,turntableDripSeconds:turntableDripSeconds.value,initialization:initialization.value,drainDirection:drainDirection.value,cleanDirection:cleanDirection.value,cleanChannel:cleanChannel.value,drainChannel:drainChannel.value,chosen:{...chosen},advancedOpen:advancedOpen.value}))}
+ try{if(typeof window!=='undefined')window.localStorage.setItem(draftKey,JSON.stringify({version:3,microwaveMode:microwaveMode.value,experimentName:experimentName.value,stage:stage.value,axes:axes.value,fixed:fixed.value,priming:priming.value,repeats:repeats.value,speedA:speedA.value,speedB:speedB.value,primeHeatMinutes:primeHeatMinutes.value,turntableDripSeconds:turntableDripSeconds.value,initialization:initialization.value,drainDirection:drainDirection.value,cleanDirection:cleanDirection.value,cleanChannel:cleanChannel.value,drainChannel:drainChannel.value,chosen:{...chosen},advancedOpen:advancedOpen.value}))}
  catch{draftNotice.value='草稿保存失败，离开页面前请保留已填参数。'}
 }
 function restoreDraft(){
@@ -489,9 +495,9 @@ function restoreDraft(){
   const raw=typeof window!=='undefined'?window.localStorage.getItem(draftKey):null
   if(!raw)return
   const d=JSON.parse(raw)
-  if(d.version===1&&d.kind==='guided-history'){
+  if([1,2,3].includes(d.version)&&d.kind==='guided-history'){
    const {request}=guidedHistoryDraft(d.request,d.sourceName)
-   restoreParameters(request)
+   restoreParameters(request,true)
    // Missing legacy fields remain blank instead of deriving a new drain duration.
    priming.value.forEach(p=>{p.value=request[p.key]??null})
    experimentName.value='';stage.value=0
@@ -502,8 +508,10 @@ function restoreDraft(){
    saveDraft()
    return
   }
+  if(d.version===1&&Array.isArray(d.axes)&&d.axes.length===6){d.axes.push({...axes.value[6]});d.microwaveMode='auto_power';d.drainDirection??='CW';d.cleanDirection??='CW';d.version=2}
+  if(d.version===2&&Array.isArray(d.axes)&&d.axes.length===7){d.axes.push({...axes.value[7]});d.version=3}
   const number=(v:unknown)=>v===null||v===''||(typeof v==='number'&&Number.isFinite(v))
-  if(d.version!==1||typeof d.experimentName!=='string'||!Number.isInteger(d.stage)||d.stage<0||d.stage>6||!Array.isArray(d.axes)||d.axes.length!==6)throw new Error('invalid')
+  if(d.version!==3||!['auto_power','constant_rate','manual_power'].includes(d.microwaveMode)||typeof d.experimentName!=='string'||!Number.isInteger(d.stage)||d.stage<0||d.stage>6||!Array.isArray(d.axes)||d.axes.length!==8)throw new Error('invalid')
   for(const [key,fields] of [['axes',axes.value],['fixed',fixed.value],['priming',priming.value]] as const){
    if(!Array.isArray(d[key])||d[key].length!==fields.length)throw new Error('invalid')
    fields.forEach((f,i)=>{const item=d[key][i];if(!item||item.key!==f.key)throw new Error('invalid')})
@@ -511,12 +519,12 @@ function restoreDraft(){
   if(![d.repeats,d.speedA,d.speedB,d.primeHeatMinutes].every(number)||!Array.isArray(d.initialization)||d.initialization.length!==2||d.initialization.some((x:any)=>!['Z','Y'].includes(x.direction)||![0,1,2].includes(x.initialization_code)))throw new Error('invalid')
   if(d.turntableDripSeconds!==undefined&&!number(d.turntableDripSeconds))throw new Error('invalid')
    if(d.axes.some((a:any)=>!['fixed','range','list'].includes(a.mode)||![a.start,a.end,a.interval].every(number)||typeof a.list!=='string')||[...d.fixed,...d.priming].some((f:any)=>!number(f.value)))throw new Error('invalid')
-  experimentName.value=d.experimentName;stage.value=d.stage
+  microwaveMode.value=d.microwaveMode;experimentName.value=d.experimentName;stage.value=d.stage
   axes.value.forEach((a,i)=>{const v=d.axes[i];Object.assign(a,{mode:v.mode,start:v.start,end:v.end,interval:v.interval,list:v.list})})
   fixed.value.forEach((f,i)=>f.value=d.fixed[i].value);priming.value.forEach((f,i)=>f.value=d.priming[i].value)
   repeats.value=d.repeats;speedA.value=d.speedA;speedB.value=d.speedB;primeHeatMinutes.value=d.primeHeatMinutes;turntableDripSeconds.value=d.turntableDripSeconds??null
   initialization.value=d.initialization.map((v:any)=>({direction:v.direction,initialization_code:v.initialization_code}))
-  if(['CW','CCW'].includes(d.drainDirection))drainDirection.value=d.drainDirection
+  drainDirection.value='CCW'
   if(['CW','CCW'].includes(d.cleanDirection))cleanDirection.value=d.cleanDirection
   if(Number.isInteger(d.cleanChannel))cleanChannel.value=d.cleanChannel
   if(Number.isInteger(d.drainChannel))drainChannel.value=d.drainChannel
@@ -525,7 +533,7 @@ function restoreDraft(){
   draftNotice.value='已恢复本机草稿；参数须重新校验，现场确认与预充资格不随草稿恢复。'
  }catch{draftNotice.value='本机草稿无法恢复，请重新填写；原草稿未删除。'}
 }
-watch([experimentName,stage,axes,fixed,priming,repeats,speedA,speedB,primeHeatMinutes,turntableDripSeconds,initialization,drainDirection,cleanDirection,cleanChannel,drainChannel,chosen,advancedOpen],saveDraft,{deep:true})
+watch([experimentName,stage,microwaveMode,axes,fixed,priming,repeats,speedA,speedB,primeHeatMinutes,turntableDripSeconds,initialization,drainDirection,cleanDirection,cleanChannel,drainChannel,chosen,advancedOpen],saveDraft,{deep:true})
 onUnmounted(saveDraft)
 
 let statusTimer:ReturnType<typeof setInterval>|undefined

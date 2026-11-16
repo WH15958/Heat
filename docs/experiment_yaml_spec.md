@@ -629,6 +629,7 @@ steps:
 | `target_temperature` | 是 | 目标温度 |
 | `tolerance` | 否 | 容差，默认 `1.0` |
 | `seconds` | 否 | 目标容差内连续稳定秒数，默认 `0`，兼容旧YAML的首次到温即通过 |
+| `minimum_seconds` | 否 | 开始判断稳定到温前的最短等待整秒数，默认 `0`；恒速率生成流程填入升温秒数 |
 | `timeout` | 否 | 超时秒数，默认 `3600` |
 
 说明：
@@ -967,7 +968,7 @@ interval_time: 0
 
 填写目标时必须明确填写 `tolerance` 和 `timeout`，数值须有效非负，超时须为正且不小于 `seconds`；timed 示例将 timeout 设为 seconds，零秒保温使用正数timeout（新流程取1秒），仍先核验有效状态。默认qualified不会自动套用新稳定等待或改成普通计时；旧YAML须显式改写才能切换策略。实际暂停不计入两种保温计时及超时。`metadata.microwave_hold_policy` 记录新流程的稳定容差、15秒稳定要求、定时方式及计时后温漂继续规则；旧历史不改写。
 
-新流程设备计时须覆盖升温和连续稳定等待、普通保温及保护余量。引导式五个自动功率段使用同一目标及 `ceil(heating_timeout) + 保温秒数 + 60` 秒保护时长；托管模式采用同一规则，超出99小时59分59秒在写入前拒绝。搭建式不自动扩展硬件段，由编排者配置。`microwave.start` 先读取并确认空闲、无输出、无故障，单独选择模式后复查空闲及本次参数块，再复查空闲并发送START；启动确认后还会有限读回同一参数块和运行状态。不一致或读回失败不能开始保温，且不自动重新写入或重启。读取及写入边界检查停止请求，失败进入引擎清理；新增等待字段可选，旧YAML默认语义保留。读回一致仅证明已知参数区一致，不能证明未公开的本机运行方案；只写模式位和未知模式原码不能用于确认实际执行模式。
+新流程设备计时须覆盖升温和连续稳定等待、普通保温及保护余量。引导式五个所选模式硬件段使用同一目标及 `升温秒数 + ceil(heating_timeout) + 保温秒数 + 60` 秒保护时长（自动功率的升温秒数为0）；托管模式采用同一规则，超出99小时59分59秒在写入前拒绝。搭建式不自动扩展硬件段，由编排者配置。`microwave.start` 先读取并确认空闲、无输出、无故障，单独选择模式后复查空闲及本次参数块，再复查空闲并发送START；启动确认后还会有限读回同一参数块和运行状态。不一致或读回失败不能开始保温，且不自动重新写入或重启。读取及写入边界检查停止请求，失败进入引擎清理；新增等待字段可选，旧YAML默认语义保留。读回一致仅证明已知参数区一致，不能证明未公开的本机运行方案；只写模式位和未知模式原码不能用于确认实际执行模式。
 
 普通 `duration` 保持普通等待语义，不提供微波故障监督。所有固定等待及通用等待超时采用单调时钟，按实际经过时间计算，调度延迟不补时，实际暂停不计时。引导式微波启动后，暂停请求只设置 `pause_pending=true`，升温和保护保温继续计时及监督；显式停止微波后才真正暂停。停止请求始终可中断。搭建式保持原暂停语义，不自动采用整段反应延后暂停策略。
 
@@ -1012,3 +1013,25 @@ interval_time: 0
 START 确认后按单调时钟计时；期间约每秒检查运行状态，读取失败或提前停机视为失败并停止。暂停不冻结本次泵运行计时，到时仍主动停止并确认，再等待恢复进入下一步；停止请求可提前中断。停止未确认不会记作完成。此模式依赖软件和通信，不提供进程异常退出或掉电后的设备自主停止保障，必须现场处置；旧保存计划不改写。
 
 2026-11-12：四圈引导式生成的正式组metadata可含collection_ring、ring_bottle_number、collection_platform_id，总瓶号仍为bottle_number。双轴换圈由引导式协调层执行，不新增YAML动作；旧单圈turntable动作不能用于四圈配置。旧metadata缺项保持缺项，不进行历史推算。
+
+
+### 恒速率生成流程与最短升温等待（2026-11-16）
+
+设备控制托管和引导恒速率均使用已有microwave.configure_constant_rate，其ramp_hours/ramp_minutes/ramp_seconds填写升温时长，target_temperature及holding_temperature为本段目标。五个硬件段覆盖规则延续，保温寄存器使用覆盖整个电脑阶段的保护时长，不用设备计时替代电脑正式保温。
+
+生成的microwave.start使用mode: constant_rate，并携带下列到温等待（结构示例，不是实验推荐参数）：
+
+```yaml
+wait:
+  type: microwave_temperature_reached
+  device_id: microwave1
+  target_temperature: 70
+  tolerance: 5
+  minimum_seconds: 300
+  seconds: 15
+  timeout: 900
+```
+
+minimum_seconds必须为非负有限整秒，非零时只允许用于microwave_temperature_reached；minimum_seconds + seconds不得超过timeout。非零minimum_seconds或稳定seconds要求步骤启用且on_error为stop。从进入该等待（启动动作确认后）计满minimum_seconds才开始累计稳定时间；最短等待期间仍读取并监督微波状态，实际暂停扣时，停止可中断。引导式待暂停沿用反应完成后再暂停的规则。旧YAML省略该字段按0解释。
+
+引导metadata的guided_parameters在恒速率下追加第七项升温分钟数，前六项不变；新增microwave_mode及microwave_ramp_seconds供追踪。手动功率下第七项是功率百分比（0–100整数），同时记录microwave_power_percent；升温时间与功率由microwave_mode区分，自动功率仍为六项。手动功率生成microwave.configure_manual，五槽heating_power_percent和holding_power_percent均取该组功率，holding_deviation为0；随后microwave.start明确mode: manual_power，到温等待minimum_seconds为0、稳定15秒后正式保温。新建引导排液方向默认CCW，预充、产物、清洗排液均使用同一显式方向；历史YAML不改写。

@@ -1,5 +1,11 @@
 <template>
-  <div v-if="activity?.wait_type === 'microwave_temperature_reached' && activity.stable_required_seconds != null" class="hold-progress">
+  <div v-if="activity?.wait_type === 'microwave_temperature_reached' && (activity.ramp_remaining_seconds ?? 0) > 0" class="hold-progress">
+    <strong>{{ activity.state === 'failed' ? '恒速率升温未完成' : activity.paused ? '已暂停，升温计时暂停' : '恒速率升温' }}</strong>
+    <span>恒速率升温剩余 {{ value(activity.ramp_remaining_seconds) }} 秒 / 设定 {{ value(activity.ramp_seconds) }} 秒</span>
+    <span>从启动确认后计时；不代表设备实际升温阶段读回。计满后再判断连续稳定 15 秒。</span>
+    <span v-for="reading in activity.readings || []" :key="reading.device_id">实际 {{ reading.read_ok ? value(reading.value) + '℃' : '温度未知' }} · 目标 {{ value(reading.target) }}℃</span>
+  </div>
+  <div v-else-if="activity?.wait_type === 'microwave_temperature_reached' && activity.stable_required_seconds != null" class="hold-progress">
     <strong>{{ activity.state === 'failed' ? '稳定到温未完成' : activity.state === 'completed' ? '稳定到温已确认' : activity.paused ? '已暂停，恢复后重新稳定计时' : '等待反应液连续稳定' }}</strong>
     <span>连续稳定 {{ value(activity.stable_seconds) }} / {{ value(activity.stable_required_seconds) }} 秒</span>
     <span v-for="reading in activity.readings || []" :key="reading.device_id">实际 {{ reading.read_ok ? value(reading.value) + '℃' : '温度未知' }} · 目标 {{ value(reading.target) }} ±{{ value(reading.tolerance) }}℃</span>
@@ -20,6 +26,7 @@ defineProps<{ activity?: {
   hold_mode?: 'timed' | 'qualified'; qualified_seconds?: number | null; duration_seconds?: number | null
   hold_in_band?: boolean | null; elapsed_seconds?: number | null; hold_timeout_seconds?: number | null
   remaining_seconds?: number | null
+  ramp_seconds?: number | null; ramp_remaining_seconds?: number | null
   readings?: { device_id: string; read_ok: boolean; value?: number | null; target?: number | null; tolerance?: number | null }[]
 } | null }>()
 function value(number: number | null | undefined) {

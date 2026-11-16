@@ -342,7 +342,8 @@ function createPumpChannels(): Record<number, ChannelConfig> {
 function createMicrowaveSegments(): Record<number, MicrowaveSegmentConfig> {
   const segments: Record<number, MicrowaveSegmentConfig> = {}
   for (let i = 1; i <= 5; i++) {
-    segments[i] = { segment: i, temperature: 25.0, powerPercent: 0, hours: 0, minutes: 1, seconds: 0 }
+    segments[i] = { segment: i, temperature: 25.0, powerPercent: 0, hours: 0, minutes: 1, seconds: 0,
+      rampHours: null, rampMinutes: null, rampSeconds: null }
   }
   return segments
 }
@@ -485,13 +486,16 @@ function restoreParams() {
     const microwaveParams = params.microwaves || {}
     for (const [microwaveId, cfg] of Object.entries(microwaveParams as Record<string, any>)) {
       if (!devices.microwaves[microwaveId]) continue
-      if (cfg.mode === 'auto_power' || cfg.mode === 'manual_power') devices.microwaves[microwaveId].mode = cfg.mode
+      if (cfg.mode === 'auto_power' || cfg.mode === 'manual_power' || cfg.mode === 'constant_rate') devices.microwaves[microwaveId].mode = cfg.mode
       for (const [segmentId, segmentCfg] of Object.entries(cfg.segments || {})) {
         const segment = devices.microwaves[microwaveId].segments[Number(segmentId)]
         if (!segment) continue
         const saved = segmentCfg as any
         if (saved.temperature !== undefined) segment.temperature = saved.temperature
         if (saved.powerPercent !== undefined) segment.powerPercent = saved.powerPercent
+        if (saved.rampHours !== undefined) segment.rampHours = saved.rampHours
+        if (saved.rampMinutes !== undefined) segment.rampMinutes = saved.rampMinutes
+        if (saved.rampSeconds !== undefined) segment.rampSeconds = saved.rampSeconds
         if (saved.hours !== undefined) segment.hours = saved.hours
         if (saved.minutes !== undefined) segment.minutes = saved.minutes
         if (saved.seconds !== undefined) segment.seconds = saved.seconds

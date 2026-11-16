@@ -61,7 +61,9 @@ class GuidedRequest(BaseModel):
         return value
 
     # A/B temperatures, A/B volumes, reaction temperature, holding minutes.
-    axes: list[list[float]] = Field(min_length=6, max_length=6)
+    axes: list[list[float]] = Field(min_length=6, max_length=7)
+    # Missing mode preserves the meaning of legacy six-axis clients.
+    microwave_mode: Literal["auto_power", "constant_rate", "manual_power"] = "auto_power"
     repeats: int = Field(default=1, ge=1, le=200)
     speed_a: int = Field(default=100, ge=5, le=5000)
     speed_b: int = Field(default=100, ge=5, le=5000)
@@ -75,7 +77,7 @@ class GuidedRequest(BaseModel):
     clean_cycles: int = Field(ge=1, le=10)
     turntable_drip_seconds: float = Field(ge=0, le=3600)
     bottles_confirmed: bool = False
-    drain_direction: Literal["CW", "CCW"] = "CW"
+    drain_direction: Literal["CW", "CCW"] = "CCW"
     clean_direction: Literal["CW", "CCW"] = "CW"
     heating_timeout: float = Field(default=600, gt=0, le=7200)
     precursor_timeout: float = Field(default=3600, gt=0, le=7200)
@@ -101,6 +103,17 @@ class GuidedRequest(BaseModel):
     @model_validator(mode="after")
     def check_axes(self):
         hold_seconds(self.prime_heat_minutes)
+        expected_axes = 6 if self.microwave_mode == "auto_power" else 7
+        if len(self.axes) != expected_axes:
+            raise ValueError(f"{self.microwave_mode} 需要 {expected_axes} 项实验条件")
+        if self.microwave_mode == "constant_rate":
+            if self.heating_timeout < 15:
+                raise ValueError("恒速率到温超时须至少容纳15秒稳定时间")
+            for minutes in self.axes[6]:
+                ramp_seconds(minutes)
+        if self.microwave_mode == "manual_power":
+            if any(not 0 <= value <= 100 or value != int(value) for value in self.axes[6]):
+                raise ValueError("手动功率须为0–100的整数百分比")
         count = self.repeats
         for index, values in enumerate(self.axes):
             if not values or len(values) > 200:
@@ -150,6 +163,14 @@ def drain_seconds(volume, flow):
     if not math.isfinite(seconds) or not 0.1 <= seconds <= 9999:
         raise ValueError("泵液时长须为 0.1–9999 秒，请调整体积或流量")
     return seconds
+
+
+def ramp_seconds(minutes):
+    seconds = minutes * 60
+    if (not math.isfinite(seconds) or not 1 <= seconds <= 359999
+            or not math.isclose(seconds, round(seconds), rel_tol=0, abs_tol=1e-9)):
+        raise ValueError("升温时间须为正数、能转换为整秒，且不超过99小时59分59秒")
+    return int(round(seconds))
 
 
 def priming_signature(spec):
@@ -247,16 +268,23 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     add("feed_both", "syringe_pair.dispense", dict(feeds=feeds))
     seconds = hold_seconds(row[5])
     # Cover retained HMI slot selections; the host owns the actual hold and stop.
-    guard = math.ceil(spec.heating_timeout) + seconds + 60
+    ramp = ramp_seconds(row[6]) if spec.microwave_mode == "constant_rate" else 0
+    guard = ramp + math.ceil(spec.heating_timeout) + seconds + 60
     if guard > 99*3600 + 59*60 + 59:
         raise ValueError("阶段时间加设备保护计时超出99小时59分59秒")
-    add("microwave_config", "microwave.configure_auto_power", dict(device_id="microwave1",
-        segments=[dict(segment=n, heating_temperature=row[4], holding_temperature=row[4],
-                       hours=guard//3600, minutes=guard%3600//60, seconds=guard%60)
-                  for n in range(1, 6)]))
-    add("microwave_start", "microwave.start", dict(device_id="microwave1", mode="auto_power"),
+    segment = dict(heating_temperature=row[4], target_temperature=row[4], holding_temperature=row[4],
+                   hours=guard//3600, minutes=guard%3600//60, seconds=guard%60)
+    if spec.microwave_mode == "constant_rate":
+        segment.update(ramp_hours=ramp//3600, ramp_minutes=ramp%3600//60, ramp_seconds=ramp%60)
+    if spec.microwave_mode == "manual_power":
+        segment.update(heating_power_percent=int(row[6]), holding_power_percent=int(row[6]), holding_deviation=0)
+    config_action = "microwave.configure_manual" if spec.microwave_mode == "manual_power" else f"microwave.configure_{spec.microwave_mode}"
+    add("microwave_config", config_action, dict(device_id="microwave1",
+        segments=[dict(segment=n, **segment) for n in range(1, 6)]))
+    add("microwave_start", "microwave.start", dict(device_id="microwave1", mode=spec.microwave_mode),
         dict(type="microwave_temperature_reached", device_id="microwave1",
-             target_temperature=row[4], tolerance=5, seconds=15, timeout=spec.heating_timeout))
+             target_temperature=row[4], tolerance=5, seconds=15, minimum_seconds=ramp,
+             timeout=ramp + spec.heating_timeout))
     add("hold", "wait", wait=dict(type="microwave_monitored_hold", device_id="microwave1", seconds=seconds,
         target_temperature=row[4], tolerance=5, hold_mode="timed", timeout=max(1, seconds)))
     add("microwave_stop", "microwave.stop", dict(device_id="microwave1"))
@@ -277,6 +305,8 @@ def recipe(row, spec: GuidedRequest, batch_id, index):
     return dict(name=f"{spec.experiment_name} · 第 {index+1} 组", steps=steps, metadata=dict(
         batch_id=batch_id, experiment_name=spec.experiment_name, condition_id=f"C{index//spec.repeats+1:03d}", sample_index=index+1,
         guided_parameters=row, product_port=spec.product_port,
+        microwave_mode=spec.microwave_mode, microwave_ramp_seconds=ramp or None,
+        microwave_power_percent=int(row[6]) if spec.microwave_mode == "manual_power" else None,
         bottle_number=index+1, collection_device_id="turntable1",
         collection_status="pending",
         microwave_hold_policy=dict(hold_mode="timed", tolerance=5, stable_seconds=15, excursion="continue_timing"),

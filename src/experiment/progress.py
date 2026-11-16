@@ -22,6 +22,7 @@ class ActivityProgress:
         self.reference = False
         self.stable_seconds = 0.0
         self.stable_required = None
+        self.minimum_seconds = 0
         self.qualified_seconds = None
         self.hold_mode = None
         self.hold_in_band = None
@@ -32,6 +33,7 @@ class ActivityProgress:
 
     def wait(self, condition):
         self.wait_type = condition.type.value
+        self.minimum_seconds = condition.minimum_seconds
         self.state = "waiting"
         if not self.reference:
             self.started = self.clock()
@@ -76,6 +78,8 @@ class ActivityProgress:
             qualified_seconds=self.qualified_seconds, hold_mode=self.hold_mode, hold_in_band=self.hold_in_band,
             hold_timeout_seconds=self.hold_timeout_seconds,
             reference=self.reference, stable_seconds=self.stable_seconds,
+            ramp_seconds=self.minimum_seconds or None,
+            ramp_remaining_seconds=max(0, self.minimum_seconds - elapsed) if self.minimum_seconds and elapsed is not None else None,
             stable_required_seconds=self.stable_required, readings=copy.deepcopy(self.readings),
             devices=copy.deepcopy(self.devices))
 
@@ -128,6 +132,8 @@ def guided_activity(step, observation):
             activity["description"] = f"目标 ±{step.wait.tolerance:g}℃ 内累计有效保温，越界暂停累计、回温后继续；总等待上限 {step.wait.timeout:g} 秒。前驱体持续保温。"
         elif sid == "hold" and observation.get("hold_mode") == "timed":
             activity.update(title="微波反应定时保温", description="按设定时长保温；已配置目标温度时，温度偏离仅提示，计时继续。前驱体持续保温。")
+        elif sid == "microwave_start" and (observation.get("ramp_remaining_seconds") or 0) > 0:
+            activity.update(title="恒速率升温", description="启动确认后计满设定升温时间，再判断连续稳定到温；倒计时不是设备阶段读回。")
         elif sid == "microwave_start" and step.wait.seconds > 0:
             activity.update(title="等待微波反应液稳定到温", description=f"目标 ±{step.wait.tolerance:g}℃ 内连续稳定{step.wait.seconds:g}秒后开始保温计时；越界或实际暂停后重新累计稳定时间。")
     elif sid.startswith("clean_"):
