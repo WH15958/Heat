@@ -148,6 +148,7 @@ def _fake_pump(
         pump.get_tube_model(channel)
         == readback_overrides.get(requested, requested)
     )
+    pump.read_register_value.return_value = 1
     pump.wait_for_register_value.return_value = True
     pump.wait_for_float_value.return_value = True
     pump.set_direction.return_value = True

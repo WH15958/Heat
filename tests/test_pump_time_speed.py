@@ -55,10 +55,17 @@ class RegisterPump:
         if address == self.fail_write or (address == 4001 and values == [0] and self.started and self.fail_stop):
             return False
         self.registers.update({address+i: value for i, value in enumerate(values)})
-        # Model mode/time coupling to expose order dependence, not a firmware claim.
-        if address in (4006, 4107, 4109) and self.registers[4006] == 2:
+        # Model documented mode-1 calculation and possible mode/input coupling.
+        # Coupling outside mode 1 is a fault model, not a firmware claim.
+        mode = self.registers[4006]
+        if ((mode == 1 and address in (4006, 4104, 4106, 4107, 4109))
+                or (mode == 2 and address in (4006, 4107, 4109))
+                or (mode == 3 and address in (4006, 4104, 4106))):
             minutes = self.get_float(4107) * {0: 1/60, 1: 1, 2: 60}[self.registers[4109]]
-            self.put_float(4110, self.get_float(4104) / minutes)
+            volume = self.get_float(4104) * {0: .001, 1: 1, 2: 1000}[self.registers[4106]]
+            unit = self.registers[4112]
+            if unit in (0, 1, 2):
+                self.put_float(4110, volume / minutes / {0: .001, 1: 1, 2: 1000}[unit])
         if address == 4001 and values == [1]:
             self.started = True
         self.after_write(address)
@@ -230,10 +237,10 @@ def test_stop_during_configuration_cancels_start(rig):
 
 
 @pytest.mark.parametrize('mode', [PumpRunMode.FLOW_MODE, PumpRunMode.TIME_QUANTITY, PumpRunMode.QUANTITY_SPEED])
-def test_other_modes_keep_existing_setup(rig, mode):
+def test_other_modes_configure_directly_in_target_mode(rig, mode):
     dm, pump, wire = rig
     assert start(dm, mode=mode, dispense_volume=75)
-    assert writes(wire, 4006) == ([(0,)] if mode == PumpRunMode.FLOW_MODE else [(0,), (int(mode),)])
+    assert writes(wire, 4006) == [(int(mode),)]
     assert bool(writes(wire, 4104)) == (mode != PumpRunMode.FLOW_MODE)
 
 

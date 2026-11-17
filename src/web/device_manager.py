@@ -1498,81 +1498,50 @@ class DeviceManager:
         effective_volume_unit = VolumeUnit(volume_unit) if volume_unit is not None else VolumeUnit.ML
         effective_interval_time_unit = TimeUnit(interval_time_unit) if interval_time_unit is not None else TimeUnit.SECOND
 
-        if mode == PumpRunMode.TIME_SPEED:
-            return self._start_pump_time_speed(
-                pump, device_id, channel, flow_rate, effective_flow_unit,
-                run_time, effective_time_unit, repeat_count, interval_time,
-                effective_interval_time_unit, abort_event,
-            )
+        return self._start_pump_verified(
+            pump, device_id, channel, mode, flow_rate, effective_flow_unit,
+            run_time, effective_time_unit, dispense_volume, effective_volume_unit,
+            repeat_count, interval_time, effective_interval_time_unit, abort_event,
+        )
 
-        if not self._set_pump_flow_and_mode(pump, device_id, channel, flow_rate, effective_flow_unit, mode):
-            return False
+    def _start_pump_verified(self, pump, device_id, channel, mode, flow_rate, flow_unit,
+                             run_time, time_unit, dispense_volume, volume_unit,
+                             repeat_count, interval_time, interval_time_unit, abort_event) -> bool:
+        """Configure only the selected mode's inputs, then verify before/after START.
 
-        if not self._set_pump_mode_params(pump, device_id, channel, mode, run_time, dispense_volume,
-                                          effective_time_unit, effective_volume_unit):
-            return False
-
-        if repeat_count is not None:
-            if not pump.set_repeat_count(channel, repeat_count):
-                logger.warning(f"Pump {device_id} CH{channel} set_repeat_count({repeat_count}) failed")
-                return False
-            if not pump.wait_for_register_value(
-                get_channel_address(100, channel), int(repeat_count),
-                label=f"Pump {device_id} CH{channel} repeat_count",
-            ):
-                return False
-
-        if interval_time is not None:
-            if not pump.set_interval_time(channel, interval_time, effective_interval_time_unit):
-                logger.warning(f"Pump {device_id} CH{channel} set_interval_time({interval_time} {effective_interval_time_unit}) failed")
-                return False
-            if not pump.wait_for_float_value(
-                get_channel_address(101, channel), interval_time,
-                label=f"Pump {device_id} CH{channel} interval_time",
-            ):
-                return False
-            if not pump.wait_for_register_value(
-                get_channel_address(103, channel), int(effective_interval_time_unit),
-                label=f"Pump {device_id} CH{channel} interval_time_unit",
-            ):
-                return False
-
-        if abort_event and abort_event.is_set():
-            logger.warning(f"Pump {device_id} CH{channel}: start cancelled before start command")
-            return False
-        result = pump.start_channel(channel)
-        logger.info(f"Pump {device_id} CH{channel}: start result={result}")
-        return result
-
-    def _start_pump_time_speed(self, pump, device_id, channel, flow_rate, flow_unit,
-                               run_time, time_unit, repeat_count, interval_time,
-                               interval_time_unit, abort_event) -> bool:
-        """Configure in mode 2, then verify the final configuration before/after START."""
+        LabSmart manual p7: mode 1 derives speed from volume/time and may adjust
+        time when volume changes. Modes 2/3 accept time/volume plus flow respectively.
+        """
         from src.protocols.pump_params import PumpRunMode
 
         stage = "配置"
         start_attempted = False
         flow_label = ("uL/min", "mL/min", "L/min", "RPM")[int(flow_unit)]
         time_labels = ("秒", "分钟", "小时")
-        mode_check = (6, 2, False, "模式（定时定速=2）")
+        mode_check = (6, int(mode), False, f"模式（{mode.name}={int(mode)}）")
         flow_checks = [(110, flow_rate, True, f"流量（{flow_label}）"),
                        (112, int(flow_unit), False, "流量单位（0=uL/min,1=mL/min,2=L/min,3=RPM）")]
-        checks = [mode_check,
-                  (107, run_time, True, f"运行时间（{time_labels[int(time_unit)]}）"),
-                  (109, int(time_unit), False, "时间单位（0=秒,1=分钟,2=小时）"),
-                  (100, repeat_count, False, "重复次数")]
-        operations = [
-            ("模式", pump.set_run_mode, (channel, PumpRunMode.TIME_SPEED)),
-            ("运行时间及单位", pump.set_run_time, (channel, run_time, time_unit)),
-            ("重复次数", pump.set_repeat_count, (channel, repeat_count)),
-        ]
-        if interval_time is not None:
-            operations.append(("间隔及单位", pump.set_interval_time,
-                               (channel, interval_time, interval_time_unit)))
-            checks.extend([(101, interval_time, True, f"间隔（{time_labels[int(interval_time_unit)]}）"),
-                           (103, int(interval_time_unit), False, "间隔单位（0=秒,1=分钟,2=小时）")])
-        operations.append(("流量及单位", pump.set_flow_rate, (channel, flow_rate, flow_unit)))
-        checks.extend(flow_checks)
+        checks = [mode_check]
+        operations = [("模式", pump.set_run_mode, (channel, mode))]
+        if mode in (PumpRunMode.TIME_QUANTITY, PumpRunMode.QUANTITY_SPEED):
+            operations.append(("分装液量及单位", pump.set_dispense_volume,
+                               (channel, dispense_volume, volume_unit)))
+            checks.extend([(104, dispense_volume, True, "分装液量"),
+                           (106, int(volume_unit), False, "液量单位（0=uL,1=mL,2=L）")])
+        if mode in (PumpRunMode.TIME_QUANTITY, PumpRunMode.TIME_SPEED):
+            operations.append(("运行时间及单位", pump.set_run_time, (channel, run_time, time_unit)))
+            checks.extend([(107, run_time, True, f"运行时间（{time_labels[int(time_unit)]}）"),
+                           (109, int(time_unit), False, "时间单位（0=秒,1=分钟,2=小时）")])
+        if mode != PumpRunMode.FLOW_MODE:
+            operations.append(("重复次数", pump.set_repeat_count, (channel, repeat_count)))
+            checks.append((100, repeat_count, False, "重复次数"))
+            if interval_time is not None:
+                operations.append(("间隔及单位", pump.set_interval_time,
+                                   (channel, interval_time, interval_time_unit)))
+                checks.extend([(101, interval_time, True, f"间隔（{time_labels[int(interval_time_unit)]}）"),
+                               (103, int(interval_time_unit), False, "间隔单位（0=秒,1=分钟,2=小时）")])
+        if mode != PumpRunMode.TIME_QUANTITY:
+            operations.append(("流量及单位", pump.set_flow_rate, (channel, flow_rate, flow_unit)))
 
         def cancelled():
             return abort_event is not None and abort_event.is_set()
@@ -1607,6 +1576,22 @@ class DeviceManager:
                     return fail(pump.last_command_error)
             return True
 
+        def verify_flow():
+            if mode != PumpRunMode.TIME_QUANTITY:
+                return verify(flow_checks)
+            # Mode 1 has no independent flow input. Compare the derived readback
+            # in its reported volumetric unit; RPM cannot prove volumetric flow.
+            if cancelled():
+                return fail("收到停止请求，启动已取消")
+            unit = pump.read_register_value(get_channel_address(112, channel))
+            if unit not in (0, 1, 2):
+                return fail(f"计算流量单位 expected=体积流量单位0/1/2 readback={unit}")
+            volume_ml = dispense_volume * (0.001, 1, 1000)[int(volume_unit)]
+            minutes = run_time * (1 / 60, 1, 60)[int(time_unit)]
+            expected = volume_ml / minutes / (0.001, 1, 1000)[unit]
+            return verify([(110, expected, True, "体积/时间计算流量"),
+                           (112, unit, False, "计算流量读回单位")])
+
         try:
             for label, setter, args in operations:
                 stage = f"配置{label}"
@@ -1621,7 +1606,7 @@ class DeviceManager:
                     return False
 
             stage = "启动前最终核验"
-            if not verify(checks):
+            if not verify(checks) or not verify_flow():
                 return False
             if cancelled():
                 return fail("收到停止请求，启动已取消")
@@ -1631,11 +1616,11 @@ class DeviceManager:
                 return fail(pump.last_command_error or "启动命令返回失败")
             stage = "启动后核验"
             # Time may already be counting down; verify only stable mode/flow parameters.
-            if not verify([mode_check, *flow_checks]):
+            if not verify([mode_check]) or not verify_flow():
                 return False
             if cancelled():
                 return fail("收到停止请求，启动已取消")
-            logger.info("Pump %s CH%s: TIME_SPEED final verification passed", device_id, channel)
+            logger.info("Pump %s CH%s: %s final verification passed", device_id, channel, mode.name)
             return True
         except Exception as exc:
             return fail(str(exc))
@@ -1853,86 +1838,6 @@ class DeviceManager:
         if repeat_count is not None and repeat_count != 1 and (interval_time is None or interval_time == 0):
             logger.error(f"Pump {device_id} CH{channel}: repeat_count={repeat_count} (0=infinite) requires interval_time > 0")
             return False
-
-        return True
-
-    def _set_pump_flow_and_mode(self, pump: LabSmartPumpDevice, device_id: str, channel: int,
-                                  flow_rate: float, flow_unit, mode) -> bool:
-        from src.protocols.pump_params import PumpRunMode
-
-        if not pump.set_run_mode(channel, PumpRunMode.FLOW_MODE):
-            logger.warning(f"Pump {device_id} CH{channel} set_run_mode(FLOW_MODE) for flow_rate failed")
-            return False
-        if not pump.wait_for_register_value(
-            get_channel_address(6, channel), int(PumpRunMode.FLOW_MODE),
-            label=f"Pump {device_id} CH{channel} flow setup mode",
-        ):
-            return False
-
-        if not pump.set_flow_rate(channel, flow_rate, flow_unit):
-            logger.warning(f"Pump {device_id} CH{channel} set_flow_rate({flow_rate} {flow_unit}) failed")
-            return False
-        if not pump.wait_for_float_value(
-            get_channel_address(110, channel), flow_rate,
-            label=f"Pump {device_id} CH{channel} flow_rate",
-        ):
-            return False
-        if not pump.wait_for_register_value(
-            get_channel_address(112, channel), int(flow_unit),
-            label=f"Pump {device_id} CH{channel} flow_unit",
-        ):
-            return False
-
-        if mode != PumpRunMode.FLOW_MODE:
-            if not pump.set_run_mode(channel, mode):
-                logger.warning(f"Pump {device_id} CH{channel} set_run_mode({mode}) failed")
-                return False
-            if not pump.wait_for_register_value(
-                get_channel_address(6, channel), int(mode),
-                label=f"Pump {device_id} CH{channel} run_mode",
-            ):
-                return False
-
-        return True
-
-    def _set_pump_mode_params(self, pump: LabSmartPumpDevice, device_id: str, channel: int,
-                               mode, run_time, dispense_volume, time_unit, volume_unit) -> bool:
-        from src.protocols.pump_params import PumpRunMode
-
-        if mode == PumpRunMode.FLOW_MODE:
-            return True
-
-        if mode in (PumpRunMode.TIME_QUANTITY, PumpRunMode.TIME_SPEED):
-            if run_time is not None:
-                if not pump.set_run_time(channel, run_time, time_unit):
-                    logger.warning(f"Pump {device_id} CH{channel} set_run_time failed")
-                    return False
-                if not pump.wait_for_float_value(
-                    get_channel_address(107, channel), run_time,
-                    label=f"Pump {device_id} CH{channel} run_time",
-                ):
-                    return False
-                if not pump.wait_for_register_value(
-                    get_channel_address(109, channel), int(time_unit),
-                    label=f"Pump {device_id} CH{channel} run_time_unit",
-                ):
-                    return False
-
-        if mode in (PumpRunMode.TIME_QUANTITY, PumpRunMode.QUANTITY_SPEED):
-            if dispense_volume is not None:
-                if not pump.set_dispense_volume(channel, dispense_volume, volume_unit):
-                    logger.warning(f"Pump {device_id} CH{channel} set_dispense_volume failed")
-                    return False
-                if not pump.wait_for_float_value(
-                    get_channel_address(104, channel), dispense_volume,
-                    label=f"Pump {device_id} CH{channel} dispense_volume",
-                ):
-                    return False
-                if not pump.wait_for_register_value(
-                    get_channel_address(106, channel), int(volume_unit),
-                    label=f"Pump {device_id} CH{channel} volume_unit",
-                ):
-                    return False
 
         return True
 
