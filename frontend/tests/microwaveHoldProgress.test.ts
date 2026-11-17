@@ -17,6 +17,22 @@ const activity = { state: 'waiting', qualified_seconds: 12, duration_seconds: 60
   elapsed_seconds: 30, hold_timeout_seconds: 660,
   readings: [{ device_id: 'microwave1', read_ok: true, value: 65.625, target: 60, tolerance: 3 }] }
 
+test('host display uses the supplied unified reading in each phase and labels history', async () => {
+  for (const phase of [activity,
+    { ...activity, wait_type: 'microwave_temperature_reached', stable_required_seconds: 15 },
+    { ...activity, wait_type: 'microwave_temperature_reached', ramp_remaining_seconds: 30 }]) {
+    for (const text of ['61.1℃', '温度已过期', '温度未知']) {
+      const html = await renderToString(vue.createSSRApp(component, { activity: phase,
+        temperatureDisplay: { device_id: 'microwave1', label: '实际', text } }))
+      assert.ok(html.includes(`实际 ${text}`))
+      assert.doesNotMatch(html, /65.6℃/)
+    }
+    const html = await renderToString(vue.createSSRApp(component, { activity: phase,
+      temperatureDisplay: { device_id: 'microwave1', label: '最后采样温度', text: '61.1℃' } }))
+    assert.match(html, /最后采样温度 61.1℃/)
+  }
+})
+
 test('renders actual qualified time, excursion and limits without a browser timer', async () => {
   const html = await renderToString(vue.createSSRApp(component, { activity }))
   assert.match(html, /温度越界，暂停累计/)

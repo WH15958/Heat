@@ -24,7 +24,7 @@
     <div class="realtime-grid">
       <div class="metric">
         <span class="metric-label">物料温度</span>
-        <span class="metric-value">{{ formatNumber(realtime?.material_temperature, 1, '°C') }}</span>
+        <span class="metric-value">{{ temperatureDisplay.top }}</span>
       </div>
       <div class="metric">
         <span class="metric-label">当前功率</span>
@@ -48,7 +48,10 @@
     </div>
       <div v-if="hostProgram && (hostProgram.state !== 'idle' || hostProgram.status_error || hostProgram.recovery_required)" class="program-notice">
         <p>托管状态：{{ hostStateLabel }} · 逻辑段 {{ hostProgram.current_stage || 0 }}/{{ hostProgram.total_stages || 0 }} · {{ phaseLabel }}</p>
-        <MicrowaveHoldProgress :activity="hostProgram.activity" />
+        <details v-if="hostProgram.activity" class="device-details">
+          <summary>温度与计时详情</summary>
+          <MicrowaveHoldProgress :activity="hostProgram.activity" :temperature-display="temperatureDisplay.reading" />
+        </details>
         <el-alert v-if="hostProgram.error || hostProgram.status_error" :title="hostProgram.error || hostProgram.status_error" type="error" :closable="false" />
         <el-button v-if="hostProgram.recovery_required" type="warning" @click="$emit('recover', microwaveId)">现场确认停止后解除锁定</el-button>
       </div>
@@ -183,7 +186,8 @@
 import MicrowaveHoldProgress from './MicrowaveHoldProgress.vue'
 import DeviceConnectionControls from './DeviceConnectionControls.vue'
 import deviceArtwork from '../assets/theme/microwave.webp'
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { microwaveTemperatureDisplay } from '../utils/microwaveTemperature'
 import { MICROWAVE_MODES, type MicrowaveMode } from '../api/devices'
 import type { MicrowaveRealtimeData } from '../composables/useWebSocket'
 import { microwaveProgramConfigured, type MicrowaveProgram } from '../utils/microwaveProgram'
@@ -227,6 +231,16 @@ defineEmits<{
   stop: [id: string]
   recover: [id: string]
 }>()
+
+// Expire the original executor sample even if status polling stalls or repeats it.
+const temperatureNow = ref(Date.now())
+let temperatureTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => { temperatureTimer = setInterval(() => { temperatureNow.value = Date.now() }, 1000) })
+onUnmounted(() => { clearInterval(temperatureTimer) })
+const temperatureDisplay = computed(() => microwaveTemperatureDisplay(
+  props.microwaveId, props.hostProgram, props.realtime?.material_temperature,
+  props.microwave.connected, temperatureNow.value,
+))
 
 const activeSegments = computed(() => Array.from({ length: props.microwave.usedSegments }, (_, index) => props.microwave.segments[index + 1]!))
 const programConfigured = computed(() => microwaveProgramConfigured(props.microwave))
