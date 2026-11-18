@@ -107,7 +107,15 @@
           <small>用量为理论值；启动前一次备齐空瓶，批内不重复使用。</small>
         </details>
       </template>
-      <div v-else class="batch-placeholder"><strong>待完成设置</strong><p>校验参数后显示组数与用量。</p></div>
+      <div v-else class="batch-placeholder" aria-live="polite">
+        <strong v-if="estimate.total!==null">预计 {{ estimate.total }} 次实验</strong>
+        <strong v-else-if="estimate.count!==null">已选条件组合：{{ estimate.count }} 组</strong>
+        <strong v-else>实验次数待估算</strong>
+        <p v-if="estimate.pending.length">待完善：{{ estimate.pending.join('、') }}</p>
+        <p v-if="estimate.total!==null">{{ estimate.count }} 组条件 × 每组 {{ repeats }} 次</p>
+        <p v-else-if="estimate.count!==null && !(Number.isInteger(repeats) && numeric(repeats)>0)">重复次数待填写（正整数）</p>
+        <p v-if="bottleCount && (estimate.total ?? estimate.count ?? 0)>bottleCount">已超过本批 {{ bottleCount }} 个产物瓶的容量</p>
+      </div>
       <div v-if="stage===6" class="preflight-summary">
         <h4>执行前确认</h4>
         <p>请先连接设备，再逐项核对。启动时系统会检查设备就绪状态。</p>
@@ -139,7 +147,7 @@ import {usePendingConfirmation} from '../composables/pendingConfirmation'
 import {guidedHistoryDraft,hasGuidedAxes,microwaveModeLabel} from '../experiment/guidedHistory'
 const confirmations=usePendingConfirmation()
 import {collectionCapacity,collectionConfigError,collectionLocationLabel} from '../experiment/guidedCollection'
-import {combinations,valuesFor as axisValues,microwaveHoldSeconds,microwaveRampSeconds,microwavePowerPercent,type Axis} from '../experiment/batch'
+import {combinations,estimateRuns,valuesFor as axisValues,microwaveHoldSeconds,microwaveRampSeconds,microwavePowerPercent,type Axis} from '../experiment/batch'
 import {estimateDrainSeconds} from '../experiment/drainEstimate'
 import {primingDrainForDisplay} from '../experiment/priming'
 import {activeStage,stageState,stageNames,stagePaths,staleStatus,batchExport,formatTemperature,temperatureReadingStatus,batchCompletionConfirmed,collectionStatusLabel,batchElapsedLabel} from '../experiment/guidedProgress'
@@ -167,6 +175,7 @@ const bottleCount=computed(()=>collectionCapacity(turntableConfig.value))
 const turntableConfigError=computed(()=>collectionConfigError(registry.value.turntables||{}))
 const turntableDripSeconds=ref<InputNumber>(null),bottlesConfirmed=ref(false)
 const repeats=ref<InputNumber>(null),speedA=ref<InputNumber>(null),speedB=ref<InputNumber>(null),cleanChannel=ref(3),drainChannel=ref(4)
+const estimate=computed(()=>estimateRuns(activeAxes.value.map(completeAxis),numeric(repeats.value)))
 type NumberField={key:string;label:string;unit:string;value:InputNumber}
 const fixed=ref<NumberField[]>([
  {key:'drainFlow',label:'排液流量',unit:'mL/min',value:null},

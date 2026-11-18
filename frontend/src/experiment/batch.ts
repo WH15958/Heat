@@ -68,6 +68,20 @@ export function combinations(axes: Axis[]): number[][] {
   return rows
 }
 
+export function estimateRuns(axes: Axis[], repeats: number) {
+  let count = 1, filled = 0
+  const pending: string[] = []
+  for (const axis of axes) {
+    try {
+      count *= valuesFor(axis).length
+      filled++
+    } catch { pending.push(axis.label) }
+  }
+  const total = count * repeats
+  return { count: filled ? count : null, pending,
+    total: filled && !pending.length && Number.isSafeInteger(total) && Number.isInteger(repeats) && repeats > 0 ? total : null }
+}
+
 export function generateSource(source: string, axes: Axis[], values: number[], batch: string, index: number): string {
   if (!/^[A-Za-z0-9_-]{1,60}$/.test(batch)) throw new Error('批次名称限 1–60 位字母、数字、下划线或短横线')
   if (axes.length !== values.length || values.some(v => !Number.isFinite(v))) throw new Error('条件与变量不匹配')

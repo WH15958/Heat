@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
-import { combinations, generateSource, valuesFor, variablesFrom, microwaveHoldSeconds, type Axis } from '../src/experiment/batch.ts'
+import { combinations, estimateRuns, generateSource, valuesFor, variablesFrom, microwaveHoldSeconds, type Axis } from '../src/experiment/batch.ts'
 
 test('microwave minutes must represent whole seconds without truncation', () => {
   assert.equal(microwaveHoldSeconds(10), 600)
@@ -14,6 +14,19 @@ test('microwave minutes must represent whole seconds without truncation', () => 
 
 const source = readFileSync(new URL('../../experiments/syringe_dual_water.yaml', import.meta.url), 'utf8')
 const axes = (): Axis[] => variablesFrom(source).map(v => ({ ...v, mode: 'fixed', start: v.value, end: v.value, interval: 1, list: String(v.value) }))
+
+test('live estimate tracks distinct values, active axes and repeats without counting missing conditions', () => {
+  const a = axes()
+  Object.assign(a[0]!, { mode: 'list', list: '20,30,30,40' })
+  Object.assign(a[1]!, { mode: 'range', start: 1, end: 2, interval: 1 })
+  assert.deepEqual(estimateRuns(a, NaN), { count: 6, pending: [], total: null })
+  assert.equal(estimateRuns(a, 2).total, combinations(a).length * 2)
+  a[0]!.list = '20,30'
+  const ramp: Axis = { ...a[2]!, label: '升温时间', start: NaN }
+  assert.deepEqual(estimateRuns([...a, ramp], 1), { count: 4, pending: ['升温时间'], total: null })
+  assert.equal(estimateRuns(a, 1).total, 4)
+  assert.equal(estimateRuns([ramp], 1).count, null)
+})
 
 test('batch generation accepts omitted or null optional metadata', () => {
   for (const metadata of ['', 'metadata: null\n']) {
