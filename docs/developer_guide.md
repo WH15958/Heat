@@ -368,6 +368,7 @@ Heat 现在把“设备身份解析”和“驱动按端口连接”分开处理
 - `protect_guided_devices` 同样保护普通 `ExperimentEngine`，在共享注册锁内拒绝运行、暂停及清理未确认期间的手动写入；只读请求不占锁，停止请求先设置活动引擎停止标志。函数名为兼容现有阀和注射泵路由引用而保留。
 
 - 普通 Web YAML 使用 `PersistentExperimentEngine`（`src/experiment/yaml_recovery.py`），沿用同步执行器和原引擎。`output/yaml_runs/yaml_<uuid>.json` 保存启动意图、源文SHA256、步骤位置、run_id/sample_id和清理/恢复状态；同目录原子替换前flush/fsync。首次保存失败不执行动作，每步前保存失败请求停止并清理；完成清理和日志持久化后才能释放运行占用。`save_log=false` 不关闭恢复记录。引导/托管仍使用各自持久记录，未改它们的引擎语义。
+- 人工解锁的 `acknowledged_at` 仅表示确认停止。记录保留原 `persistence_status` 和错误；日志或样品记录保存失败时，`persistence_errors` 保存具体原因。已确认且无需清理的停止记录不会仅因历史保存错误在重启后重新上锁。
 - 新增 `GET /api/experiments/recovery/pending` 与 `POST /api/experiments/recovery/{recovery_id}/acknowledge`；后者严格接受 `{"devices_stopped_confirmed":true}`。重启后非终态/待清理/存储失败记录成为中断锁，不续跑；所有实验启动及手动写控制受共享恢复检查约束，读取、连接及停止入口保留（当前live占用仍遵守原连接保护）。人工解除在注册锁内执行；live任务未结束或停止未确认返回409，记录损坏/不可读或解除保存失败返回503，不清除锁。正常日志/样品和恢复记录分开保存；删除历史不会解除恢复锁。旧版本未保存过的启动意图不能追溯补造。
 - `GET /api/devices` 的加热器条目新增 `min_temperature`、`max_temperature`，后者为配置最大温度与安全限值的较小值，供输入校验使用；设备端校验仍为最终约束。
 - 泵整机错误、缺失设备或缺失通道的采样为已有通道追加未知点，避免历史积分跨过已知的读取空窗；完全没有采样事件的时间不能还原真实流量。

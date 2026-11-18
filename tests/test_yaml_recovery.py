@@ -35,6 +35,44 @@ def engine(monkeypatch, cleanup=True):
     return run, executor
 
 
+def test_cancelled_start_leaves_visible_lock(monkeypatch):
+    from src.experiment import yaml_recovery as recovery
+    run, executor = engine(monkeypatch)
+    monkeypatch.setattr(api, '_engines', {'test.yaml': run})
+    monkeypatch.setattr(recovery.ExperimentEngine, 'start', AsyncMock(side_effect=asyncio.CancelledError))
+    async def scenario():
+        with pytest.raises(asyncio.CancelledError):
+            await run.start()
+        with pytest.raises(api.HTTPException) as blocked:
+            api.require_yaml_recovered()
+        assert blocked.value.status_code == 409
+        assert (await api.pending_recovery())[0]['recovery_id'] == run.record['recovery_id']
+        assert recovery.records({})[0]['recovery_required']
+    asyncio.run(scenario())
+    executor.execute.assert_not_called()
+
+
+def test_ack_preserves_log_failure_without_relocking_after_restart(monkeypatch):
+    from src.experiment import yaml_recovery as recovery
+    run, _ = engine(monkeypatch)
+    monkeypatch.setattr(run.exp_logger, '_write_sample_record', lambda status: False)
+    monkeypatch.setattr(api, '_engines', {'test.yaml': run})
+    monkeypatch.setattr(api, '_source_lock', asyncio.Lock())
+    async def scenario():
+        await run.start()
+        await run.wait_finished()
+        error = run.record['error']
+        assert error
+        await api.acknowledge_recovery(run.record['recovery_id'], api.YamlRecoveryConfirmation(devices_stopped_confirmed=True))
+        assert not api._engines
+        api.require_yaml_recovered()
+        stored = recovery.records({})[0]
+        assert stored['persistence_status'] == 'error'
+        assert stored['error'] == error
+        assert stored['persistence_errors'] == ['sample_record_not_saved']
+    asyncio.run(scenario())
+
+
 def test_intent_precedes_action_and_clean_finish_releases_record(monkeypatch):
     from src.experiment import yaml_recovery as recovery
     run, executor = engine(monkeypatch)

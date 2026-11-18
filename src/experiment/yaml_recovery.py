@@ -1,4 +1,5 @@
 """Durable ownership for Web-started ordinary YAML; never replay an interrupted run."""
+import asyncio
 import hashlib
 import json
 import os
@@ -57,7 +58,10 @@ def records(engines):
                 or type(record.get('recovery_required')) is not bool
                 or record.get('persistence_status') not in {'ok', 'error'}):
             raise ValueError('Invalid YAML recovery record: ' + path.name)
-        if record['state'] not in TERMINAL or record['cleanup_required'] or record['persistence_status'] == 'error':
+        acknowledged = (record['state'] == 'stopped' and not record['recovery_required']
+                        and bool(record.get('acknowledged_at')))
+        if (record['state'] not in TERMINAL or record['cleanup_required']
+                or (record['persistence_status'] == 'error' and not acknowledged)):
             record.update(state='interrupted', recovery_required=True)
         stored[path.stem] = record
     for engine in engines.values():
@@ -89,7 +93,7 @@ class PersistentExperimentEngine(ExperimentEngine):
         self._save()  # Mandatory even when the user disables detailed run logs.
         try:
             await super().start()
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             self.record.update(recovery_required=True, state='failed')
             try:
                 self._save()
@@ -119,6 +123,8 @@ class PersistentExperimentEngine(ExperimentEngine):
         self.record.update(state=self.state.value, cleanup_required=self._cleanup_result is not True,
                            recovery_required=bool(failed))
         if run and run.persistence_status == 'error':
+            self.record['persistence_status'] = 'error'
+            self.record['persistence_errors'] = list(run.persistence_errors)
             self.record['error'] = '运行记录保存失败'
         try:
             self._save()

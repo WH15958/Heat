@@ -134,9 +134,8 @@ async def acknowledge_recovery(recovery_id: str, body: YamlRecoveryConfirmation)
             if not await live.stop() and live._cleanup_result is not True:
                 raise HTTPException(409, '设备停止未确认，不能解除锁定')
             record = dict(live.record)
-        record.update(recovery_required=False, cleanup_required=False, persistence_status='ok',
-                      state='stopped', acknowledged_at=datetime.now(timezone.utc).isoformat(),
-                      error='人工确认停止，未恢复或重放实验')
+        record.update(recovery_required=False, cleanup_required=False,
+                      state='stopped', acknowledged_at=datetime.now(timezone.utc).isoformat())
         try:
             yaml_recovery.write_record(record)
         except (OSError, ValueError) as exc:
