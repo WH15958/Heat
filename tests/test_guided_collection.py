@@ -83,6 +83,34 @@ async def established(rig, bottle):
     await c.verify(bottle)
 
 
+@pytest.mark.parametrize('case', ['stale', 'reset', 'timeout', 'moving', 'stop'])
+def test_fresh_guided_claim_after_slow_preparation(rig, clock, monkeypatch, case):
+    _, r, p, c, writes, *_ = rig
+    clock.advance(8)
+    with pytest.raises(RuntimeError, match='过期'):
+        r.require_idle()
+    if case == 'reset':
+        r.device.work_state = 0
+    elif case == 'timeout':
+        p.device.reads.extend([TimeoutError('timeout')] * 2)
+    elif case == 'moving':
+        p.device.work_state = 1
+    elif case == 'stop':
+        read = p.read
+        def stop_during_read(**kwargs):
+            r.invalidate_pending()
+            return read(**kwargs)
+        monkeypatch.setattr(p, 'read', stop_during_read)
+    if case in ('stale', 'reset'):
+        asyncio.run(c.claim(refresh_start=True))
+        assert r.owner is p.owner is c.owner
+    else:
+        with pytest.raises((RuntimeError, OSError)):
+            asyncio.run(c.claim(refresh_start=True))
+        assert r.owner is p.owner is None
+    assert not writes
+
+
 def test_mapping_and_capacity(rig):
     _, r, _, _, _, _, config = rig
     plan = collection_plan(config, 72)

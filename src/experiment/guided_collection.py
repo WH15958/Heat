@@ -35,14 +35,30 @@ class GuidedCollection(TurntableSequence):
         if self.claimed and self.platform is not None:
             self.platform.invalidate_pending()
 
-    async def claim(self, **kwargs):
+    async def claim(self, *, refresh_start=False, **kwargs):
         def reserve():
             self._check_running()
             from src.utils.config import SystemConfig
             collection_plan(SystemConfig(turntables=[self.control.config, self.platform.config]), 1)
-            self.control.claim_guided_pair(self.owner)
-            self.generations = [self.control.generation, self.platform.generation]
-            self.claimed = True
+            with self.control.lock:
+                axes = (self.control, self.platform)
+                generations = [axis.generation for axis in axes]
+                if refresh_start:
+                    from src.web.turntable_control import is_startup_reset
+                    for axis in axes:
+                        self._check_running()
+                        state = axis.read(force=True)
+                        self._check_read(state)
+                        reset = axis is self.control and is_startup_reset(state)
+                        if (state['busy'] is not False or state['speed_raw'] != 0 or state['motion_blocked']
+                                or not (reset or (state['work_state'] == 0x20 and state['stop_confirmed']))):
+                            raise RuntimeError(f'{axis.config.device_id} 未确认稳定停止')
+                self._check_running()
+                if generations != [axis.generation for axis in axes]:
+                    raise RuntimeError('停止请求已取消接样阶段')
+                self.control.claim_guided_pair(self.owner)
+                self.generations = generations
+                self.claimed = True
         await self._call(reserve)
 
     def _read_pair(self, *, allow_reset=False, stable=True):

@@ -805,7 +805,10 @@ class GuidedBatch:
         try:
             await self.executor.reserve_valves(all_steps)
             await self.executor.reserve_syringes(all_steps)
-            await self.turntable.claim()
+            if isinstance(self.turntable, GuidedCollection):
+                await self.turntable.claim(refresh_start=True)
+            else:
+                await self.turntable.claim()
         except BaseException:
             self.executor.release_resources_on_cleanup = True
             self.executor.release_unused_syringes()
